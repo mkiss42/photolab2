@@ -1,12 +1,9 @@
 // AppDelegate.swift
-// Phase 0: one window that shows the brain's state, plus Help > Run Self-Test / Save Report.
+// Starts the brain and the first browser window; owns the menu bar.
 
 import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var window: NSWindow!
-    private let statusLabel = NSTextField(labelWithString: "Brain: not started")
-    private let versionLabel = NSTextField(labelWithString: "")
     private var brain: BrainClient!
 
     static var appVersion: String {
@@ -16,11 +13,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppFiles.ensureDirectories()
         Log.info("PhotoLab \(AppDelegate.appVersion) starting, \(SystemInfo.summary)")
+        FreezeWatchdog.start()
+        Volumes.refresh()
         buildMenu()
-        buildWindow()
+
+        let ws = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification, NSWorkspace.didRenameVolumeNotification] {
+            ws.addObserver(self, selector: #selector(volumesChanged(_:)), name: name, object: nil)
+        }
+
+        let last = UserDefaults.standard.string(forKey: "lastFolder")
+        openFirstWindow(preferred: last)
+
         brain = BrainClient(socketPath: AppFiles.brainSocketPath)
-        brain.onStateChange = { [weak self] s in self?.statusLabel.stringValue = s.text }
+        brain.onStateChange = { s in
+            BrowserWindowController.brainText = s.text
+            NotificationCenter.default.post(name: .brainStateChanged, object: nil)
+        }
         brain.start()
+    }
+
+    /// Last folder if it still exists (checked off the main thread: it may be on a dead share).
+    private func openFirstWindow(preferred: String?) {
+        guard let p = preferred, p != NSHomeDirectory() else {
+            BrowserWindowController.openWindow(at: NSHomeDirectory())
+            return
+        }
+        var answered = false
+        let timeout = DispatchWorkItem {
+            if answered { return }
+            answered = true
+            Log.info("last folder did not answer within 1 s, opening home: \(p)")
+            BrowserWindowController.openWindow(at: NSHomeDirectory())
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: timeout)
+        DispatchQueue.global(qos: .userInitiated).async {
+            var isDir: ObjCBool = false
+            let ok = FileManager.default.fileExists(atPath: p, isDirectory: &isDir) && isDir.boolValue
+            DispatchQueue.main.async {
+                if answered { return }
+                answered = true
+                timeout.cancel()
+                BrowserWindowController.openWindow(at: ok ? p : NSHomeDirectory())
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -33,78 +69,102 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
-    // MARK: UI
-
-    private func buildWindow() {
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 160),
-                          styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                          backing: .buffered, defer: false)
-        window.title = "PhotoLab 2"
-        let content = NSView()
-        window.contentView = content
-        let title = NSTextField(labelWithString: "PhotoLab 2 - Phase 0 skeleton")
-        title.font = NSFont.boldSystemFont(ofSize: 15)
-        versionLabel.stringValue = "Version \(AppDelegate.appVersion) - \(BrainClient.archName)"
-        versionLabel.textColor = NSColor.secondaryLabelColor
-        for v in [title, versionLabel, statusLabel] {
-            v.translatesAutoresizingMaskIntoConstraints = false
-            content.addSubview(v)
+    @objc private func volumesChanged(_ n: Notification) {
+        Log.info("volumes changed: \(n.name.rawValue)")
+        DispatchQueue.global(qos: .userInitiated).async {
+            Volumes.refresh()
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .volumesChanged, object: nil)
+            }
         }
-        NSLayoutConstraint.activate([
-            title.topAnchor.constraint(equalTo: content.topAnchor, constant: 24),
-            title.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
-            versionLabel.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 8),
-            versionLabel.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            statusLabel.topAnchor.constraint(equalTo: versionLabel.bottomAnchor, constant: 16),
-            statusLabel.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -24),
-        ])
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // MARK: Menu
+
+    private func item(_ menu: NSMenu, _ title: String, _ action: Selector?, _ key: String = "",
+                      _ mods: NSEvent.ModifierFlags = [.command], target: AnyObject? = nil) {
+        let i = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        i.keyEquivalentModifierMask = mods
+        i.target = target
+        menu.addItem(i)
+    }
+
+    private func submenu(_ main: NSMenu, _ title: String) -> NSMenu {
+        let holder = NSMenuItem()
+        main.addItem(holder)
+        let m = NSMenu(title: title)
+        holder.submenu = m
+        return m
     }
 
     private func buildMenu() {
         let main = NSMenu()
+        let up = String(Character(UnicodeScalar(UInt32(NSUpArrowFunctionKey))!))
+        let down = String(Character(UnicodeScalar(UInt32(NSDownArrowFunctionKey))!))
 
-        let appItem = NSMenuItem()
-        main.addItem(appItem)
-        let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "About PhotoLab 2", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
-        appMenu.addItem(NSMenuItem.separator())
-        appMenu.addItem(withTitle: "Quit PhotoLab 2", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        appItem.submenu = appMenu
+        let app = submenu(main, "PhotoLab")
+        item(app, "About PhotoLab 2", #selector(NSApplication.orderFrontStandardAboutPanel(_:)))
+        app.addItem(NSMenuItem.separator())
+        item(app, "Hide PhotoLab", #selector(NSApplication.hide(_:)), "h")
+        item(app, "Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option])
+        item(app, "Show All", #selector(NSApplication.unhideAllApplications(_:)))
+        app.addItem(NSMenuItem.separator())
+        item(app, "Quit PhotoLab 2", #selector(NSApplication.terminate(_:)), "q")
 
-        let windowItem = NSMenuItem()
-        main.addItem(windowItem)
-        let windowMenu = NSMenu(title: "Window")
-        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
-        windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
-        windowItem.submenu = windowMenu
+        let file = submenu(main, "File")
+        item(file, "New Window", #selector(newWindow(_:)), "n", [.command], target: self)
+        item(file, "Open", #selector(BrowserWindowController.openSelected(_:)), down)
+        file.addItem(NSMenuItem.separator())
+        item(file, "Close Window", #selector(NSWindow.performClose(_:)), "w")
 
-        let helpItem = NSMenuItem()
-        main.addItem(helpItem)
-        let helpMenu = NSMenu(title: "Help")
-        let run = helpMenu.addItem(withTitle: "Run Self-Test", action: #selector(runSelfTest(_:)), keyEquivalent: "")
-        run.target = self
-        let report = helpMenu.addItem(withTitle: "Save Report...", action: #selector(saveReport(_:)), keyEquivalent: "")
-        report.target = self
-        let logs = helpMenu.addItem(withTitle: "Show Logs Folder", action: #selector(showLogs(_:)), keyEquivalent: "")
-        logs.target = self
-        helpItem.submenu = helpMenu
+        let edit = submenu(main, "Edit")
+        item(edit, "Copy", #selector(NSText.copy(_:)), "c")
+        item(edit, "Paste", #selector(NSText.paste(_:)), "v")
+        item(edit, "Select All", #selector(NSText.selectAll(_:)), "a")
+
+        let view = submenu(main, "View")
+        item(view, "Show Hidden Files", #selector(BrowserWindowController.toggleHidden(_:)), ".", [.command, .shift])
+        item(view, "Keep Folders on Top", #selector(BrowserWindowController.toggleFoldersFirst(_:)))
+        view.addItem(NSMenuItem.separator())
+        item(view, "Refresh", #selector(BrowserWindowController.refresh(_:)), "r")
+
+        let go = submenu(main, "Go")
+        item(go, "Back", #selector(BrowserWindowController.goBack(_:)), "[")
+        item(go, "Forward", #selector(BrowserWindowController.goForward(_:)), "]")
+        item(go, "Enclosing Folder", #selector(BrowserWindowController.goEnclosingFolder(_:)), up)
+        go.addItem(NSMenuItem.separator())
+        item(go, "Computer", #selector(BrowserWindowController.goComputer(_:)), "c", [.command, .shift])
+        item(go, "Home", #selector(BrowserWindowController.goHome(_:)), "h", [.command, .shift])
+        item(go, "Volumes", #selector(BrowserWindowController.goVolumes(_:)), "v", [.command, .shift])
+        go.addItem(NSMenuItem.separator())
+        item(go, "Go to Folder...", #selector(BrowserWindowController.goToFolder(_:)), "g", [.command, .shift])
+
+        let window = submenu(main, "Window")
+        item(window, "Minimize", #selector(NSWindow.performMiniaturize(_:)), "m")
+        item(window, "Zoom", #selector(NSWindow.performZoom(_:)))
+        NSApp.windowsMenu = window
+
+        let help = submenu(main, "Help")
+        item(help, "Run Self-Test", #selector(runSelfTest(_:)), "", [], target: self)
+        item(help, "Save Report...", #selector(saveReport(_:)), "", [], target: self)
+        item(help, "Show Logs Folder", #selector(showLogs(_:)), "", [], target: self)
 
         NSApp.mainMenu = main
+    }
+
+    @objc private func newWindow(_ sender: Any?) {
+        let start = (NSApp.keyWindow?.windowController as? BrowserWindowController)?.currentPath ?? NSHomeDirectory()
+        BrowserWindowController.openWindow(at: start)
     }
 
     // MARK: Help actions
 
     @objc private func runSelfTest(_ sender: Any?) {
-        statusLabel.stringValue = "Running self-test..."
+        Log.info("self-test started from the Help menu")
         DispatchQueue.global(qos: .userInitiated).async {
             let results = SelfTestRunner.runAll()
             for r in results { Log.info(r.line) }
             DispatchQueue.main.async {
-                self.statusLabel.stringValue = self.brain.state.text
                 let alert = NSAlert()
                 let failed = results.filter { $0.status == .fail }.count
                 alert.messageText = failed == 0 ? "Self-test passed" : "Self-test: \(failed) failed"

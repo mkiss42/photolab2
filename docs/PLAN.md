@@ -170,8 +170,9 @@ Each phase ends in something the lab can use. Exit criteria are tested on all th
    Swift runtime embedded for 10.13, bundled python-build-standalone 3.11 per architecture,
    brain connected on the user's 10.13 Mac; CI self-tests pass on Apple Silicon, under
    Rosetta, on a native Intel runner, and with the modern profile.
-1. **Browser core** — volumes + sidebar, list view, navigation, bulk listing, watching,
-   listing cache, Trash/rename/new folder/undo, logs, freeze watchdog, recovery journal.
+1. **Browser core** — 1a (0.1.0): volumes + sidebar, list view, navigation, bulk listing,
+   watching, listing cache, logs, freeze watchdog — read-only. 1b (0.2.0): Trash, rename, new
+   folder, undo, recovery journal.
 2. **Contact sheet & preview** — thumbnail grid, embedded RAW previews, fast preview, Quick
    Look, ratings/labels/color classes with safe writes, filter bar, raw+jpg grouping.
 3. **Brain & shared cache** — brain process, protocol, exif cache, thumbnail sharing,

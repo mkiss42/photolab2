@@ -54,6 +54,41 @@ enum AppFiles {
         }
     }
 
+    // MARK: Self-test fixtures (inside the caches folder only)
+
+    static var selfTestDir: String { return cachesDir + "/selftest" }
+
+    /// A fresh folder with known contents for the listing self-test:
+    ///   a.txt (5 bytes), .hidden (1 byte), Folder/ (with inner.txt), "IMG 10.JPG", "IMG 9.JPG", "caf\u{e9}.txt"
+    /// Returns its path, or nil when it could not be made.
+    static func makeListingFixture() -> String? {
+        let base = selfTestDir
+        let dir = base + "/listing-\(ProcessInfo.processInfo.processIdentifier)"
+        let fm = FileManager.default
+        // Only ever remove our own fixture folders.
+        if let old = try? fm.contentsOfDirectory(atPath: base) {
+            for n in old where n.hasPrefix("listing-") {
+                try? fm.removeItem(atPath: base + "/" + n)
+            }
+        }
+        do {
+            try fm.createDirectory(atPath: dir + "/Folder", withIntermediateDirectories: true, attributes: nil)
+            let files: [(String, String)] = [("a.txt", "hello"), (".hidden", "h"), ("Folder/inner.txt", "x"),
+                                             ("IMG 10.JPG", "jpg10"), ("IMG 9.JPG", "jpg9"), ("caf\u{e9}.txt", "")]
+            for (name, body) in files {
+                guard fm.createFile(atPath: dir + "/" + name, contents: Data(body.utf8), attributes: nil) else { return nil }
+            }
+        } catch {
+            return nil
+        }
+        return dir
+    }
+
+    static func removeListingFixture(_ dir: String) {
+        guard dir.hasPrefix(selfTestDir + "/listing-") else { return }
+        try? FileManager.default.removeItem(atPath: dir)
+    }
+
     // MARK: Report
 
     /// Zip the logs folder to `dest` (a path the user picked). Returns an error text or nil.

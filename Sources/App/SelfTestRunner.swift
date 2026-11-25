@@ -9,6 +9,7 @@ enum SelfTestRunner {
     /// Never call on the main thread when the brain test is included.
     static func runAll() -> [SelfTestResult] {
         var results = CoreSelfTest.run()
+        results += ListingSelfTest.run()
         results.append(brainPing())
         results.append(architecture())
         return results
