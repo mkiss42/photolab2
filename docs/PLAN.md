@@ -46,7 +46,7 @@ default to `build-modern.sh`; no code changes expected.
 │   • UI for everything the brain does                          │
 │                    ▲  JSON lines over a Unix socket  │        │
 │                    │  (requests + pushed events)     ▼        │
-│  Contents/Helpers/photolab-brain  (Python 3.11, headless)     │
+│  Resources/python-<arch> + brain/  (Python 3.11, headless)    │
 │   • shared cache + peer sync (exif results, embeddings,       │
 │     thumbnails, folder listings)                              │
 │   • metadata cache DB, metadata search                        │

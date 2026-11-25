@@ -31,7 +31,7 @@ RAW="$BUILD/build-raw.txt"
 : > "$LOG"; : > "$RAW"
 N=0
 note() { N=$((N+1)); printf 'B%04d %s\n' "$N" "$*" | tee -a "$LOG"; }
-fail() { note "$1 FAILED: $2"; note "BUILD FAILED ($1) - full compiler output in build/build-raw.txt"; tail -n 60 "$RAW" >> "$LOG"; exit 1; }
+fail() { note "$1 FAILED: $2"; note "BUILD FAILED ($1) - last lines of build/build-raw.txt follow"; tail -n 40 "$RAW" | sed 's/^/RAW /' | tee -a "$LOG"; exit 1; }
 
 PROFILE_FILE="$ROOT/profiles/$PROFILE.env"
 [ -f "$PROFILE_FILE" ] || { echo "usage: tools/build.sh <legacy|modern>"; exit 64; }
@@ -89,7 +89,7 @@ done
 # ---- App bundle ----------------------------------------------------------------------------
 APP="$BUILD/PhotoLab.app"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks" "$APP/Contents/Helpers"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 lipo -create "$OBJ/PhotoLab-x86_64" "$OBJ/PhotoLab-arm64" -output "$APP/Contents/MacOS/PhotoLab" >> "$RAW" 2>&1 \
   || fail "E-BUILD-3" "lipo could not make the universal binary"
 note "universal binary: $(lipo -archs "$APP/Contents/MacOS/PhotoLab")"
@@ -138,7 +138,7 @@ note "brain: $(find "$APP/Contents/Resources/brain" -name '*.py' | wc -l | tr -d
 # Python runtimes
 if [ "$WITH_PYTHON" = 1 ]; then
   for ARCH in x86_64 arm64; do
-    DEST="$APP/Contents/Helpers/python-$ARCH"
+    DEST="$APP/Contents/Resources/python-$ARCH"
     if bash tools/fetch_python.sh "$ARCH" "$DEST" >> "$RAW" 2>&1; then
       note "python-$ARCH: $("$DEST/bin/python3" -c 'import platform;print(platform.python_version())' 2>/dev/null || echo 'bundled (other architecture, not runnable here)')"
     else
@@ -150,10 +150,19 @@ else
 fi
 
 # ---- Sign ----------------------------------------------------------------------------------
-if codesign --force --deep --sign - "$APP" >> "$RAW" 2>&1; then
-  note "codesign (ad-hoc): ok"
+# Inside out: every Mach-O file (Python runtimes, extension modules, Swift runtime) on its own,
+# then the app itself. No --deep: it only understands nested bundles.
+SIGNED=0
+while IFS= read -r -d '' f; do
+  if file -b "$f" | grep -q 'Mach-O'; then
+    codesign --force --sign - "$f" >> "$RAW" 2>&1 || fail "E-BUILD-5" "codesign failed on ${f#$APP/}"
+    SIGNED=$((SIGNED+1))
+  fi
+done < <(find "$APP/Contents/Resources" "$APP/Contents/Frameworks" -type f -print0)
+if codesign --force --sign - "$APP" >> "$RAW" 2>&1 && codesign --verify --strict "$APP" >> "$RAW" 2>&1; then
+  note "codesign (ad-hoc): ok, $SIGNED nested binaries signed, app verified"
 else
-  fail "E-BUILD-5" "codesign failed"
+  fail "E-BUILD-5" "codesign failed on the app bundle"
 fi
 
 # ---- Self-test -----------------------------------------------------------------------------

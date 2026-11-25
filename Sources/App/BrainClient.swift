@@ -1,5 +1,5 @@
 // BrainClient.swift
-// Starts the Python brain (Contents/Helpers/python-<arch>/bin/python3 running
+// Starts the Python brain (Contents/Resources/python-<arch>/bin/python3 running
 // Contents/Resources/brain/run_brain.py) and talks to it over a Unix socket.
 //
 // Phase 0: one request at a time on a private serial queue. Phase 3 replaces this with a
@@ -58,7 +58,7 @@ final class BrainClient {
             FileManager.default.isExecutableFile(atPath: env) {
             return env
         }
-        let p = Bundle.main.bundlePath + "/Contents/Helpers/python-\(archName)/bin/python3"
+        let p = (Bundle.main.resourcePath ?? "") + "/python-\(archName)/bin/python3"
         return FileManager.default.isExecutableFile(atPath: p) ? p : nil
     }
 
