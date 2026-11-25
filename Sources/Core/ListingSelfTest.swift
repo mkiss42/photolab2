@@ -19,6 +19,7 @@ enum ListingSelfTest {
             if FileManager.default.fileExists(atPath: d, isDirectory: &isDir), isDir.boolValue { compared.append(d) }
         }
         out.append(bulkMatchesClassic(compared))
+        out.append(networkShares())
         return out
     }
 
@@ -100,18 +101,40 @@ enum ListingSelfTest {
     /// Both methods must agree on every entry (names, kind, size, dates, ids, flags, permissions).
     static func bulkMatchesClassic(_ dirs: [String]) -> SelfTestResult {
         let n = "listing-bulk-vs-readdir"
-        var total = 0
+        if let why = compare(dirs) { return fail(n, why) }
+        return ok(n, "\(dirs.count) folders identical")
+    }
+
+    /// The top folder of every mounted network share, both ways (read-only, one folder each).
+    /// SMB may legitimately report some details differently, so differences are WARN, not FAIL.
+    static func networkShares() -> SelfTestResult {
+        let n = "listing-network-shares"
+        let shares = Volumes.browsable.filter { $0.isNetwork }.map { $0.mountPoint }
+        if shares.isEmpty { return SelfTestResult(name: n, status: .skip, detail: "no network share mounted") }
+        var notes: [String] = []
+        for sh in shares {
+            if let why = compare([sh]) {
+                let fs = Volumes.volume(for: sh)?.fsType ?? "?"
+                notes.append("\(fs) " + why)
+            }
+        }
+        if notes.isEmpty { return ok(n, "\(shares.count) share(s) identical") }
+        return SelfTestResult(name: n, status: .warn, detail: notes.joined(separator: " | "))
+    }
+
+    /// nil when bulk and readdir agree on every folder, else the first difference.
+    static func compare(_ dirs: [String]) -> String? {
         for d in dirs {
             let bulk = DirectoryReader.read(d, method: .bulk)
             let classic = DirectoryReader.read(d, method: .classic)
-            if bulk.method != "bulk" { return fail(n, "bulk not used for \(d)") }
-            if bulk.error != classic.error { return fail(n, "\(d): error \(bulk.error) vs \(classic.error)") }
+            if bulk.method != "bulk" { return "\(d): \(bulk.method): \(DirectoryReader.lastOddity(d))" }
+            if bulk.error != classic.error { return "\(d): error \(bulk.error) vs \(classic.error)" }
             let b = Dictionary(bulk.entries.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
             let c = Dictionary(classic.entries.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
             if Set(b.keys) != Set(c.keys) {
                 let extra = Set(b.keys).subtracting(c.keys).sorted().prefix(3)
                 let missing = Set(c.keys).subtracting(b.keys).sorted().prefix(3)
-                return fail(n, "\(d): extra \(Array(extra)) missing \(Array(missing))")
+                return "\(d): extra \(Array(extra)) missing \(Array(missing))"
             }
             for (name, ce) in c {
                 guard let be = b[name] else { continue }
@@ -124,10 +147,9 @@ enum ListingSelfTest {
                 if be.device != ce.device { why.append("device \(be.device)/\(ce.device)") }
                 if be.flags != ce.flags { why.append("flags") }
                 if be.permissions != ce.permissions { why.append("perm") }
-                if !why.isEmpty { return fail(n, "\(d)/\(name): " + why.joined(separator: ",")) }
+                if !why.isEmpty { return "\(d)/\(name): " + why.joined(separator: ",") }
             }
-            total += c.count
         }
-        return ok(n, "\(dirs.count) folders, \(total) entries identical")
+        return nil
     }
 }

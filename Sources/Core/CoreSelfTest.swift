@@ -4,7 +4,7 @@
 import Foundation
 
 struct SelfTestResult {
-    enum Status: String { case ok = "OK", fail = "FAIL", skip = "SKIP" }
+    enum Status: String { case ok = "OK", fail = "FAIL", skip = "SKIP", warn = "WARN" }
     let name: String
     let status: Status
     let detail: String

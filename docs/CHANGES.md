@@ -1,5 +1,25 @@
 # Changes
 
+## 0.1.1 — bulk listing on shares
+
+- A broken bulk-listing record no longer switches fast listing off for the whole session. An odd
+  field in one record now only means that one item is looked up on its own; a broken record
+  structure re-reads that folder the slow way; only 3 broken folders on the SAME volume switch
+  bulk off for that volume (this session). Local disks are never affected by a share.
+- The first odd record per volume is logged in full (W-LIST-2: reason, file system, raw bytes).
+- Self-test forces bulk for real, and now also compares both methods on the top folder of each
+  mounted network share (differences there are WARN, not FAIL).
+- The status line says how a folder was listed: "bulk", "bulk+2" (2 items looked up on their own),
+  or "readdir (bulk record broken)".
+- Logs and self-test show the real macOS version instead of "10.16".
+
+Test checklist (3 minutes, the same two Intel Macs):
+[ ] 1  Browse the same SMB folders as last time. Status line: does it say "bulk", "bulk+N" or
+       "readdir (bulk record broken)"?
+[ ] 2  Browse a local folder afterwards: it must still say "bulk".
+[ ] 3  With your shares mounted: Help -> Run Self-Test. Send me the listing-network-shares line.
+[ ] 4  Help -> Save Report..., attach it (the W-LIST-2 lines tell me exactly what the server sends).
+
 ## 0.1.0 — Phase 1a: read-only browser
 
 A Finder-like browser that only reads: it cannot change, move or delete anything yet.

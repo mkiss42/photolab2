@@ -25,30 +25,69 @@ struct FolderListing {
 
 enum DirectoryReader {
     private static let lock = NSLock()
-    private static var bulkDisabled = false
+    /// Volumes (mount points) where bulk listing produced broken records 3 times this session.
+    private static var brokenCount: [String: Int] = [:]
+    private static var reported: Set<String> = []
+    private static var lastOdd: [String: String] = [:]
 
-    /// Self-test switch: force one method.
+    /// The most recent odd-record description for the volume holding `dir` (self-test detail).
+    static func lastOddity(_ dir: String) -> String {
+        lock.lock(); defer { lock.unlock() }
+        return lastOdd[volumeKey(dir)] ?? "no detail"
+    }
+    static let brokenLimit = 3
+
+    /// Self-test switch: force one method. `.bulk` ignores the per-volume switch-off.
     enum Method { case auto, bulk, classic }
+
+    static func volumeKey(_ dir: String) -> String {
+        return Volumes.volume(for: dir)?.mountPoint ?? "/"
+    }
+
+    static func bulkSkipped(for dir: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return (brokenCount[volumeKey(dir)] ?? 0) >= brokenLimit
+    }
+
+    /// Log the first odd record per volume in full (reason, fs type, raw bytes).
+    static func report(_ dir: String, _ what: String) {
+        let key = volumeKey(dir)
+        lock.lock()
+        let first = reported.insert(key).inserted
+        lastOdd[key] = what
+        lock.unlock()
+        let fs = Volumes.volume(for: dir)?.fsType ?? "?"
+        if first {
+            Log.warn("W-LIST-2 odd bulk record on \(key) (\(fs)) in \(dir): \(what)")
+        }
+    }
 
     static func read(_ dir: String, method: Method = .auto, isCancelled: () -> Bool = { false }) -> FolderListing {
         let t0 = Date()
         var result: FolderListing
-        lock.lock(); let off = bulkDisabled; lock.unlock()
-        if method != .classic && !off {
+        let useBulk = method == .bulk || (method == .auto && !bulkSkipped(for: dir))
+        if useBulk {
             switch BulkLister.list(dir, isCancelled: isCancelled) {
-            case .ok(let entries):
-                result = FolderListing(entries: entries, error: 0, problems: [], method: "bulk", milliseconds: 0, cancelled: false)
+            case .ok(let entries, let oddities):
+                result = FolderListing(entries: entries, error: 0, problems: [], method: oddities > 0 ? "bulk+\(oddities)" : "bulk",
+                                       milliseconds: 0, cancelled: false)
             case .cancelled:
                 result = FolderListing(); result.cancelled = true
-            case .failed(let err):
-                // Folder-level errors (permission, gone, server down) are real answers.
-                result = FolderListing(); result.error = err; result.method = "bulk"
+            case .failed:
+                // Let the classic listing give the real answer (it reports folder errors itself).
+                result = classic(dir, isCancelled: isCancelled)
             case .invalidRecord(let why):
-                if method == .auto {
-                    lock.lock(); bulkDisabled = true; lock.unlock()
-                    Log.warn("W-LIST-1 fast listing switched off for this session (\(why) in \(dir)); using readdir + lstat")
+                report(dir, why)
+                let key = volumeKey(dir)
+                lock.lock()
+                let n = (brokenCount[key] ?? 0) + 1
+                brokenCount[key] = n
+                lock.unlock()
+                if n == brokenLimit {
+                    Log.warn("W-LIST-1 bulk listing gave broken records \(n) times on \(key); that volume uses readdir + lstat for this session")
                 }
                 result = classic(dir, isCancelled: isCancelled)
+                result.method = "readdir (bulk record broken)"
             }
         } else {
             result = classic(dir, isCancelled: isCancelled)
@@ -102,7 +141,7 @@ enum DirectoryReader {
 
 enum BulkLister {
     enum Outcome {
-        case ok([FileEntry])
+        case ok([FileEntry], oddities: Int)
         case cancelled
         case failed(Int32)
         case invalidRecord(String)
@@ -143,6 +182,7 @@ enum BulkLister {
         let buf = UnsafeMutableRawPointer.allocate(byteCount: bufferSize, alignment: 16)
         defer { buf.deallocate() }
         var out: [FileEntry] = []
+        var oddities = 0
         while true {
             if isCancelled() { return .cancelled }
             let n = getattrlistbulk(fd, &al, buf, bufferSize, packInvalAttrs)
@@ -152,19 +192,42 @@ enum BulkLister {
             for i in 0..<Int(n) {
                 switch parse(buf, at: offset, limit: bufferSize, dir: dir) {
                 case .bad(let why):
-                    return .invalidRecord("record \(out.count + i): \(why)")
+                    return .invalidRecord("record \(out.count + i): \(why); bytes: " + hex(buf + offset, max(0, min(160, bufferSize - offset))))
                 case .record(let length, let entry):
                     offset += length
                     if let e = entry { out.append(e) }
+                case .odd(let length, let name, let why):
+                    // Record structure is fine, one field is not: look this item up on its own.
+                    DirectoryReader.report(dir, "\(why) for \"\(name)\"; bytes: " + hex(buf + offset, min(length, 160)))
+                    offset += length
+                    oddities += 1
+                    if let e = lstatEntry(name, dir) { out.append(e) }
                 }
             }
         }
-        return .ok(out)
+        return .ok(out, oddities: oddities)
     }
 
     private enum Parsed {
         case record(length: Int, entry: FileEntry?)
+        case odd(length: Int, name: String, why: String)
         case bad(String)
+    }
+
+    static func hex(_ p: UnsafeMutableRawPointer, _ n: Int) -> String {
+        var s = ""
+        for i in 0..<n { s += String(format: "%02x", p.load(fromByteOffset: i, as: UInt8.self)); if i % 4 == 3 { s += " " } }
+        return s
+    }
+
+    static func lstatEntry(_ name: String, _ dir: String) -> FileEntry? {
+        var st = stat()
+        if lstat(Paths.join(dir, name), &st) != 0 { return nil }
+        return FileEntry.make(name: name, dir: dir, mode: UInt32(st.st_mode), size: Int64(st.st_size),
+                              modified: DirectoryReader.seconds(st.st_mtimespec),
+                              created: DirectoryReader.seconds(st.st_birthtimespec), added: 0,
+                              flags: st.st_flags, device: UInt64(UInt32(bitPattern: st.st_dev)),
+                              inode: UInt64(st.st_ino))
     }
 
     private static func u32(_ b: UnsafeMutableRawPointer, _ o: Int) -> UInt32 {
@@ -203,14 +266,7 @@ enum BulkLister {
 
         if entryError != 0 || (retCommon & cmnObjType) == 0 {
             // macOS could not give this one in bulk: ask for it on its own.
-            var st = stat()
-            if lstat(Paths.join(dir, name), &st) != 0 { return .record(length: len, entry: nil) }
-            let e = FileEntry.make(name: name, dir: dir, mode: UInt32(st.st_mode), size: Int64(st.st_size),
-                                   modified: DirectoryReader.seconds(st.st_mtimespec),
-                                   created: DirectoryReader.seconds(st.st_birthtimespec), added: 0,
-                                   flags: st.st_flags, device: UInt64(UInt32(bitPattern: st.st_dev)),
-                                   inode: UInt64(st.st_ino))
-            return .record(length: len, entry: e)
+            return .record(length: len, entry: lstatEntry(name, dir))
         }
 
         let typeBits: UInt32
@@ -222,10 +278,10 @@ enum BulkLister {
         case 4: typeBits = UInt32(S_IFCHR)
         case 6: typeBits = UInt32(S_IFSOCK)
         case 7: typeBits = UInt32(S_IFIFO)
-        default: return .bad("object type \(u32(r, 40))")
+        default: return .odd(length: len, name: name, why: "object type \(u32(r, 40))")
         }
         let size = (retFile & fileDataLength) != 0 ? Int64(bitPattern: u64(r, 108)) : 0
-        guard size >= 0 else { return .bad("negative size") }
+        guard size >= 0 else { return .odd(length: len, name: name, why: "negative size") }
         let added = (retCommon & cmnAddedTime) != 0 ? time(r, 92) : 0
         let e = FileEntry.make(name: name, dir: dir, mode: typeBits | (u32(r, 76) & 0o7777), size: size,
                                modified: time(r, 60),
