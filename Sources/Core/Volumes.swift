@@ -21,6 +21,9 @@ struct VolumeInfo {
     }
 }
 
+/// The statfs struct (the name alone is ambiguous with the statfs() function in expressions).
+typealias StatFS = statfs
+
 enum Volumes {
     private static let lock = NSLock()
     private static var cached: [VolumeInfo] = []
@@ -70,9 +73,9 @@ enum Volumes {
     static func readMountTable() -> [VolumeInfo] {
         let count = getfsstat(nil, 0, MNT_NOWAIT)
         guard count > 0 else { return [] }
-        var buf = [statfs](repeating: statfs(), count: Int(count) + 8)
+        var buf = [StatFS](repeating: StatFS(), count: Int(count) + 8)
         let got = buf.withUnsafeMutableBufferPointer { p -> Int32 in
-            return getfsstat(p.baseAddress, Int32(p.count * MemoryLayout<statfs>.stride), MNT_NOWAIT)
+            return getfsstat(p.baseAddress, Int32(p.count * MemoryLayout<StatFS>.stride), MNT_NOWAIT)
         }
         guard got > 0 else { return [] }
         var out: [VolumeInfo] = []
