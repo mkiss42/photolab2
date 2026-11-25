@@ -44,13 +44,7 @@ final class BrainClient {
 
     // MARK: Locating the runtime
 
-    static var archName: String {
-        #if arch(arm64)
-        return "arm64"
-        #else
-        return "x86_64"
-        #endif
-    }
+    static var archName: String { return SystemInfo.archName }
 
     /// PHOTOLAB_PYTHON (CI, development) or the bundled runtime for this architecture.
     static func pythonPath() -> String? {

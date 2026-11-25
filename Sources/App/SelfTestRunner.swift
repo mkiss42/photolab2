@@ -15,9 +15,7 @@ enum SelfTestRunner {
     }
 
     static func architecture() -> SelfTestResult {
-        let os = ProcessInfo.processInfo.operatingSystemVersion
-        let detail = "\(BrainClient.archName) macOS \(os.majorVersion).\(os.minorVersion).\(os.patchVersion)"
-        return SelfTestResult(name: "architecture", status: .ok, detail: detail)
+        return SelfTestResult(name: "architecture", status: .ok, detail: SystemInfo.summary)
     }
 
     static func brainPing() -> SelfTestResult {

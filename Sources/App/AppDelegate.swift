@@ -15,8 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppFiles.ensureDirectories()
-        let os = ProcessInfo.processInfo.operatingSystemVersion
-        Log.info("PhotoLab \(AppDelegate.appVersion) starting, \(BrainClient.archName), macOS \(os.majorVersion).\(os.minorVersion).\(os.patchVersion)")
+        Log.info("PhotoLab \(AppDelegate.appVersion) starting, \(SystemInfo.summary)")
         buildMenu()
         buildWindow()
         brain = BrainClient(socketPath: AppFiles.brainSocketPath)

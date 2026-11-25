@@ -166,10 +166,10 @@ it back and says so.
 
 Each phase ends in something the lab can use. Exit criteria are tested on all three Mac kinds.
 
-0. **Toolchain proof** — skeleton app + brain ping, universal, both build profiles, CI green,
-   runs on 10.13 / Intel 11+ / Apple Silicon. Decides Python packaging. *Biggest risk:
-   whether Xcode 26 still embeds the Swift runtime for 10.13; fallback is building the x86_64
-   slice on a 10.13–10.15 Mac with an older Xcode.*
+0. **Toolchain proof** — DONE 2026-11-25 (0.0.1). Universal app built by Xcode 26 in CI,
+   Swift runtime embedded for 10.13, bundled python-build-standalone 3.11 per architecture,
+   brain connected on the user's 10.13 Mac; CI self-tests pass on Apple Silicon, under
+   Rosetta, on a native Intel runner, and with the modern profile.
 1. **Browser core** — volumes + sidebar, list view, navigation, bulk listing, watching,
    listing cache, Trash/rename/new folder/undo, logs, freeze watchdog, recovery journal.
 2. **Contact sheet & preview** — thumbnail grid, embedded RAW previews, fast preview, Quick
@@ -183,8 +183,8 @@ Each phase ends in something the lab can use. Exit criteria are tested on all th
 
 ## 10. Open questions
 
-- Q1 (Phase 0): Python packaging for the brain — py2app helper (as PhotoLab 1 does today?)
-  vs a standalone Python runtime. Needs: universal or two arch builds, runs on 10.13.
+- ~~Q1~~ Resolved: python-build-standalone 3.11, one runtime per architecture in
+  `Contents/Resources/python-<arch>`, fetched by `tools/fetch_python.sh`.
 - Q2 (Phase 5): onnxruntime availability on 10.13–10.14.
 - Q3: code signing / notarization — ad-hoc signing for internal use (as Find does) unless
   IT requires more.
@@ -197,3 +197,4 @@ Each phase ends in something the lab can use. Exit criteria are tested on all th
 - 2026-11-25 — Universal build; x86_64 ≥ 10.13, arm64 ≥ 11.0; legacy/modern build profiles.
 - 2026-11-25 — Shared cache keyed by (volume_id, rel_path, size, mtime) covers thumbnails/previews, exif results, embeddings, listings; listings used for search only, never shown as current.
 - 2026-11-25 — GitHub repo + GitHub Actions macOS CI is the build loop.
+- 2026-11-25 — Phase 0 done. Brain runtime = python-build-standalone 3.11 per architecture (x86_64 runs on 10.13, verified on the lab's 10.13 Mac). Nested binaries are signed one by one (codesign --deep rejects non-bundle folders).
