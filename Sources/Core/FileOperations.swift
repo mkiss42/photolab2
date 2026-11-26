@@ -661,4 +661,30 @@ enum FileOperations {
         }
         return removed > 0 && !quiet ? "PhotoLab was stopped in the middle of a copy. \(removed) unfinished item(s) were removed, so no half-copied files are left. The originals were not touched: copy them again to finish." : nil
     }
+
+    // MARK: Finder tags
+
+    /// Add or remove one colour tag on items (the caller expands sets). Other tags stay. Returns
+    /// each changed item's tags before and after (for undo and the display) and the failures.
+    static func changeTag(_ paths: [String], color: Int, add: Bool) -> (changed: [(path: String, before: [FinderTag], after: [FinderTag])], failed: [String]) {
+        var changed: [(String, [FinderTag], [FinderTag])] = []
+        var failed: [String] = []
+        for p in paths {
+            guard let before = FinderTags.read(p) else { failed.append(Paths.name(p)); continue }
+            var after = before.filter { $0.color != color }
+            if add { after.append(FinderTags.colorTag(color)) }
+            if after == before { continue }
+            if setTags(p, after) { changed.append((p, before, after)) } else { failed.append(Paths.name(p)) }
+        }
+        if !changed.isEmpty { Log.info("tags: \(add ? "added" : "removed") \(FinderTags.colorNames[color]) on \(changed.count) item(s)") }
+        return (changed, failed)
+    }
+
+    /// Write an item's whole tag list (undo uses this).
+    @discardableResult
+    static func setTags(_ path: String, _ tags: [FinderTag]) -> Bool {
+        let e = Platform.setAttribute(path, FinderTags.xattrName, tags.isEmpty ? Data() : FinderTags.encode(tags))
+        if e != 0 { Log.error("E-TAG-1 tags not written: \(path): \(String(cString: strerror(e)))") }
+        return e == 0
+    }
 }

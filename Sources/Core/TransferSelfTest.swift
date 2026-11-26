@@ -27,7 +27,7 @@ enum TransferSelfTest {
             && AppFiles.makeTestSymlink(src + "/Shoot/link", to: "x.jpg")
         guard made else { return [SelfTestResult(name: "xfer-fixture", status: .fail, detail: "could not fill fixture")] }
         return [names(), copySet(src, dst), keepBothAndSkip(src, dst), copyFolder(src, dst), duplicate(src),
-                intoItself(src), moveSameVolume(dst), moveCrossVolume(src, base), stop(src, base), recovery(dst)]
+                intoItself(src), moveSameVolume(dst), moveCrossVolume(src, base), stop(src, base), recovery(dst), tags(src)]
     }
 
     // MARK: Helpers
@@ -178,6 +178,27 @@ enum TransferSelfTest {
         FileOperations.runTransfer(j)
         return j.progress.state == .stopped && list(dest).isEmpty && j.created.isEmpty ? ok(n)
             : fail(n, "state \(j.progress.state.rawValue), left " + list(dest).sorted().joined(separator: "|"))
+    }
+
+    /// Finder tags: add Red and Blue, keep a non-colour tag, remove Red, clear; and tags travel
+    /// with a copy (copyfile carries extended attributes).
+    static func tags(_ src: String) -> SelfTestResult {
+        let n = "tags-finder"
+        let f = src + "/B.tif"
+        guard FileOperations.setTags(f, [FinderTag(name: "Client", color: 0)]) else { return fail(n, "write refused") }
+        _ = FileOperations.changeTag([f], color: 6, add: true)
+        _ = FileOperations.changeTag([f], color: 4, add: true)
+        guard let t1 = FinderTags.read(f), t1.map({ $0.name }) == ["Client", "Red", "Blue"] else {
+            return fail(n, "after add: " + (FinderTags.read(f) ?? []).map { "\($0.name)/\($0.color)" }.joined(separator: ","))
+        }
+        let copy = FileOperations.planTransfer([f], to: src, kind: .copy, sets: true)
+        let j = job(copy, .copy, src, forceCross: true)
+        FileOperations.runTransfer(j)
+        guard let c = j.created.first, FinderTags.read(c)?.count == 3 else { return fail(n, "tags not copied") }
+        _ = FileOperations.changeTag([f], color: 6, add: false)
+        guard FinderTags.read(f)?.map({ $0.color }) == [0, 4] else { return fail(n, "after remove") }
+        FileOperations.setTags(f, [])
+        return FinderTags.read(f) == [] ? ok(n) : fail(n, "not cleared")
     }
 
     /// A partial copy left by a crash is removed at launch.

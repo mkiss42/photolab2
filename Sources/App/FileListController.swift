@@ -216,6 +216,10 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = true
         scroll.autohidesScrollers = true
+        scroll.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main) { [weak self] _ in
+            self?.scheduleTagRequest()
+        }
 
         message.alignment = .center
         message.textColor = NSColor.secondaryLabelColor
@@ -329,6 +333,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         if let first = rows.first { table.scrollRowToVisible(first) }
         else if select != nil { table.scrollRowToVisible(0) }
         onExpandedChange?(Set(expandedFolderPaths))
+        scheduleTagRequest()
         if let p = pendingEdit, rows.count == 1, let n = table.item(atRow: rows.first!) as? FileNode, n.entry.path == p {
             pendingEdit = nil
             DispatchQueue.main.async { [weak self] in self?.beginRename() }
@@ -408,6 +413,10 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         if !sel.isEmpty {
             add("Duplicate", "duplicate:")
             m.addItem(NSMenuItem.separator())
+            let tagsItem = NSMenuItem(title: "Tags", action: nil, keyEquivalent: "")
+            tagsItem.submenu = tagMenu()
+            m.addItem(tagsItem)
+            m.addItem(NSMenuItem.separator())
             add("Copy Path", "copyPaths:")
             m.addItem(NSMenuItem.separator())
         }
@@ -433,6 +442,102 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         quietly { table.reloadItem(n, reloadChildren: true) }
         reexpand(wasExpanded)
         onExpandedChange?(Set(expandedFolderPaths))
+        scheduleTagRequest()
+    }
+
+    // MARK: Finder tags (rows on screen only, read in the background)
+
+    private var tagRequestPending = false
+
+    /// After a reload or a scroll: ask for the tags of the rows on screen (and a screen ahead).
+    func scheduleTagRequest() {
+        if tagRequestPending { return }
+        tagRequestPending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard let me = self else { return }
+            me.tagRequestPending = false
+            let visible = me.table.rows(in: me.table.visibleRect)
+            guard visible.length > 0 else { return }
+            let end = min(me.table.numberOfRows, visible.location + visible.length * 2)
+            var paths: [String] = []
+            for r in visible.location..<end {
+                if let n = me.table.item(atRow: r) as? FileNode, !n.isPlaceholder { paths.append(n.entry.path) }
+            }
+            TagLoader.shared.request(paths, owner: me) { [weak me] read in me?.tagsArrived(read) }
+        }
+    }
+
+    func tagsArrived(_ paths: [String]) {
+        let set = Set(paths)
+        var rows = IndexSet()
+        for r in 0..<table.numberOfRows {
+            if let n = table.item(atRow: r) as? FileNode, set.contains(n.entry.path) { rows.insert(r) }
+        }
+        guard !rows.isEmpty, editing == nil else { return }
+        let col = table.column(withIdentifier: NSUserInterfaceItemIdentifier("name"))
+        if col >= 0 { quietly { table.reloadData(forRowIndexes: rows, columnIndexes: IndexSet(integer: col)) } }
+    }
+
+    private static var dotCache: [Int: NSImage] = [:]
+
+    static func tagColor(_ c: Int) -> NSColor {
+        switch c {
+        case 1: return NSColor.systemGray
+        case 2: return NSColor.systemGreen
+        case 3: return NSColor.systemPurple
+        case 4: return NSColor.systemBlue
+        case 5: return NSColor.systemYellow
+        case 6: return NSColor.systemRed
+        case 7: return NSColor.systemOrange
+        default: return NSColor.clear
+        }
+    }
+
+    /// A small coloured dot (menus, tag menu).
+    static func tagDot(_ c: Int) -> NSImage {
+        if let i = dotCache[c] { return i }
+        let i = NSImage(size: NSSize(width: 12, height: 12))
+        i.lockFocus()
+        tagColor(c).setFill()
+        NSBezierPath(ovalIn: NSRect(x: 1, y: 1, width: 10, height: 10)).fill()
+        i.unlockFocus()
+        dotCache[c] = i
+        return i
+    }
+
+    /// Name followed by its tag colours as dots, like Finder.
+    private func nameWithTags(_ text: String, _ path: String, color: NSColor) -> NSAttributedString {
+        let s = NSMutableAttributedString(string: text, attributes: [.foregroundColor: color])
+        let colors = (TagLoader.shared.cached(path) ?? []).map { $0.color }.filter { $0 > 0 }
+        if colors.isEmpty { return s }
+        s.append(NSAttributedString(string: " "))
+        for c in colors {
+            s.append(NSAttributedString(string: "\u{25CF}", attributes: [.foregroundColor: FileListController.tagColor(c),
+                                                                       .font: NSFont.systemFont(ofSize: 10)]))
+        }
+        return s
+    }
+
+    /// The seven Finder colours; a tick when every selected file has it, a dash when some do
+    /// (as far as already read - tags of rows never on screen count as unknown).
+    func tagMenu() -> NSMenu {
+        let m = NSMenu(title: "Tags")
+        let targets = tagTargets()
+        let known = targets.map { TagLoader.shared.cached($0) ?? [] }
+        for c in FinderTags.menuOrder {
+            let item = NSMenuItem(title: FinderTags.colorNames[c], action: Selector(("toggleTag:")), keyEquivalent: "")
+            item.tag = c
+            item.image = FileListController.tagDot(c)
+            let have = known.filter { $0.contains { $0.color == c } }.count
+            item.state = have == 0 ? .off : (have == known.count ? .on : .mixed)
+            m.addItem(item)
+        }
+        return m
+    }
+
+    /// Paths whose tags a menu should show / change: the selection with its sets.
+    func tagTargets() -> [String] {
+        return withSetMembers(selectedEntries())
     }
 
     /// Re-list an expanded folder (watcher event, refresh).
@@ -461,14 +566,15 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     var selectionCount: Int { return selectedEntries().count }
 
     /// Rows on screen (expanded folders included) and how many of them are sets.
-    var shownCounts: (rows: Int, sets: Int) {
-        var rows = 0, sets = 0
+    var shownCounts: (rows: Int, sets: Int, total: Int) {
+        var rows = 0, sets = 0, total = 0
         for r in 0..<table.numberOfRows {
             guard let n = table.item(atRow: r) as? FileNode, !n.isPlaceholder else { continue }
             rows += 1
+            total += max(1, n.members.count)
             if n.isSet { sets += 1 }
         }
-        return (rows, sets)
+        return (rows, sets, total)
     }
 
     // MARK: Columns (right-click the header; hidden columns are remembered)
@@ -678,11 +784,19 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         cell.spinning = false
         switch id.rawValue {
         case "name":
-            if let err = n.error { cell.textField?.stringValue = "\(e.name)  (\(err))" }
-            else { cell.textField?.stringValue = n.displayName }
+            let color = e.isHidden ? NSColor.secondaryLabelColor : NSColor.labelColor
+            if let err = n.error { cell.textField?.stringValue = "\(e.name)  (\(err))"; cell.textField?.textColor = color }
+            else { cell.textField?.attributedStringValue = nameWithTags(n.displayName, e.path, color: color) }
             cell.imageView?.image = FileIcons.icon(for: e)
-            cell.textField?.textColor = e.isHidden ? NSColor.secondaryLabelColor : NSColor.labelColor
-            cell.toolTip = n.isSet ? n.members.map { $0.name }.joined(separator: "\n") : e.path
+            if n.isSet {
+                cell.toolTip = n.members.map { $0.name }.joined(separator: "\n")
+            } else if n.isExpandableFolder {
+                // From memory only: a folder already listed (expanded, or visited recently).
+                let count = n.allChildren?.count ?? ListingCache.shared.peek(e.path)?.entries.count
+                cell.toolTip = e.path + (count.map { "\n\($0) item\($0 == 1 ? "" : "s")" } ?? "")
+            } else {
+                cell.toolTip = e.path
+            }
         case "ext":
             cell.textField?.stringValue = e.isDirectory && !e.isPackage ? "" : (n.isSet ? FileSets.extLabel(n.members) : e.ext.uppercased())
         case "modified":
@@ -733,6 +847,39 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         tf.stringValue = editShown           // the reload after the rename shows the new name
         endRename()
         if !editCancelled && newName != entry.name { onRenameCommit?(entry, newName) }
+    }
+
+    /// Type-select, with PhotoLab 1's cycling: pressing the same letter again goes to the next
+    /// name starting with it ("ccc" = third "c..."), instead of looking for "ccc".
+    func outlineView(_ outlineView: NSOutlineView, nextTypeSelectMatchFromItem startItem: Any, toItem endItem: Any, for searchString: String) -> Any? {
+        let count = outlineView.numberOfRows
+        guard count > 0 else { return nil }
+        func name(_ r: Int) -> String? {
+            guard let n = outlineView.item(atRow: r) as? FileNode, !n.isPlaceholder else { return nil }
+            return n.displayName
+        }
+        func starts(_ r: Int, _ s: String) -> Bool {
+            return name(r)?.range(of: s, options: [.caseInsensitive, .diacriticInsensitive, .anchored]) != nil
+        }
+        let chars = Array(searchString)
+        if chars.count > 1, Set(chars).count == 1 {
+            let letter = String(chars[0])
+            let from = outlineView.selectedRow
+            for i in 1...count {
+                let r = ((from < 0 ? -1 : from) + i) % count
+                if starts(r, letter) { return outlineView.item(atRow: r) }
+            }
+            return nil
+        }
+        var r = outlineView.row(forItem: startItem)
+        let end = outlineView.row(forItem: endItem)
+        if r < 0 { r = 0 }
+        for _ in 0..<count {
+            if starts(r, searchString) { return outlineView.item(atRow: r) }
+            r = (r + 1) % count
+            if r == end { break }
+        }
+        return nil
     }
 
     func outlineView(_ outlineView: NSOutlineView, typeSelectStringFor tableColumn: NSTableColumn?, item: Any) -> String? {

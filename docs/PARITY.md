@@ -18,10 +18,10 @@ Status: **done** · **part** (exists, something missing) · **todo** (phase in b
 | One row per set (raw+jpg+xmp as one row) while Settings > Files sets are on; an Ext column right after Name shows "CR3+JPG+XMP" | done (0.4.0) | decided 2026-11-25 |
 | Display modes: folders only / current folder's files / expanded folders' files / all | part (0.4.1) | folders only done; the two mixed modes on request |
 | Quick mode (name only), icon style Pretty/Generic/None, show ext / modified columns | part (0.4.1) | columns show/hide via header menu; icons are always by type (no file reads) |
-| Finder colour tag dots on rows | todo (1c) | |
-| Context menu tag swatches: add/remove Finder tags (multi-select, partial state) | todo (1c) | |
+| Finder colour tag dots on rows | done (0.5.0) | xattr tags, rows on screen only |
+| Context menu tag swatches: add/remove Finder tags (multi-select, partial state) | done (0.5.0) | Tags submenu, sets whole, undo |
 | Filter bar (Cmd-F), filters the visible tree incl. expanded folders, Esc clears | done (0.4.2) | |
-| Type-to-select, same letter cycles | part | AppKit type-select; same-letter cycling missing |
+| Type-to-select, same letter cycles | done (0.5.0) | |
 | Return renames; multi-select Return -> batch rename | part | single rename done (also M); batch renamer was a TODO in PL1 too -> todo (4) |
 | New Folder (Cmd-Shift-N) | done | PL1 asked for a name in a dialog; PL2 renames in place |
 | Delete / Backspace | done | Trash + undo; shares: confirmed delete |
@@ -38,7 +38,7 @@ Status: **done** · **part** (exists, something missing) · **todo** (phase in b
 | Open in Contact Sheet (+ New Tab, + Recursive) | todo (2) | |
 | Apply Metadata Template (stationery) | todo (4) | |
 | Status line: files / folders / selected, counting expanded folders | done (0.4.1) | rows on screen incl. expanded, sets counted |
-| Tooltip: folder's asset count, file path | part (0.4.1) | path / set members done; folder count needs a listing per hover (later, from the cache) |
+| Tooltip: folder's asset count, file path | done (0.5.0) | folder count when listed (memory only, no extra reads) |
 | Eject from /Volumes (PL1 TODO: Cmd-E ejects there) | done (0.4.1) | menu / context menu (Cmd-E stays Open) |
 | Dock-icon drops / Finder "Open With PhotoLab": open folders, select dropped files | todo (2) | in contact sheet tabs, as PL1 |
 | Window geometry remembered | done | |

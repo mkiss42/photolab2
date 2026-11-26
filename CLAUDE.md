@@ -29,7 +29,10 @@ verdicts, the phases and the Decision Log. `docs/PROTOCOL.md` is the app↔brain
 8. **Self-tests** live in the app (`--self-test`) and run in CI. New core logic comes with a
    self-test case.
 9. **Decisions:** any new architectural choice → entry in the Decision Log in PLAN.md.
-10. **PhotoLab 1 source** is in the Claude project docs (Python). Port logic from it where
+10. **The repo is public.** Never put real paths, share/server/host names, user names, IP
+    addresses, file names from the lab or anything retyped from the lab Macs into code, docs,
+    test vectors or commit messages. Use invented examples (`/Volumes/Share/Job`).
+11. **PhotoLab 1 source** is in the Claude project docs (Python). Port logic from it where
     PLAN.md says "Python"; read it for behaviour where it says "Swift". Do not port its
     workarounds for Qt/GIL.
 

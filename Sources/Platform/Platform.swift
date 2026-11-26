@@ -130,4 +130,14 @@ enum Platform {
     static func removeEmptyFolder(_ path: String) -> Int32 {
         return rmdir(path) == 0 ? 0 : errno
     }
+
+    /// Set (or, with empty data, remove) one extended attribute of one item, not following links.
+    static func setAttribute(_ path: String, _ name: String, _ data: Data) -> Int32 {
+        if data.isEmpty {
+            let r = removexattr(path, name, XATTR_NOFOLLOW)
+            return r == 0 || errno == ENOATTR ? 0 : errno
+        }
+        let r = data.withUnsafeBytes { p in setxattr(path, name, p.baseAddress, data.count, 0, XATTR_NOFOLLOW) }
+        return r == 0 ? 0 : errno
+    }
 }

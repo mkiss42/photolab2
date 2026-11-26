@@ -322,6 +322,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             }
             DispatchQueue.main.async {
                 guard me.generation.current == gen else { return }
+                if !cached { TagLoader.shared.forgetFolder(path) }     // re-read from disk: tags too
                 me.apply(listing, path: path, cached: cached, select: select)
             }
         }
@@ -362,7 +363,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         if l.error != 0 { statusLabel.stringValue = "Not readable: \(l.errorText)"; return }
         let hidden = l.entries.filter { $0.isHidden }.count
         let c = list.shownCounts                       // expanded folders included, a set is one
-        var parts = ["\(c.rows) item\(c.rows == 1 ? "" : "s")" + (c.sets > 0 ? " (\(c.sets) set\(c.sets == 1 ? "" : "s"))" : "")]
+        var parts = ["\(c.rows) item\(c.rows == 1 ? "" : "s")" + (c.sets > 0 ? " (\(c.sets) set\(c.sets == 1 ? "" : "s"), \(c.total) total)" : "")]
         if hidden > 0 && !BrowserWindowController.showHidden { parts.append("\(hidden) hidden") }
         let sel = list.selectionCount
         if sel > 0 { parts.append("\(sel) selected") }
@@ -793,6 +794,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             let result = listing
             DispatchQueue.main.async {
                 guard let me = self, me.folderGeneration.current == gen else { return }
+                TagLoader.shared.forgetFolder(path)
                 me.list.setChildren(path: path, entries: result.entries,
                                     error: result.error != 0 ? result.errorText : nil)
             }
@@ -857,6 +859,45 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     @objc func toggleFoldersOnly(_ sender: Any?) {
         BrowserWindowController.foldersOnly = !BrowserWindowController.foldersOnly
         for c in BrowserWindowController.open { c.reapply() }
+    }
+
+    // MARK: Finder tags
+
+    /// Tags submenu: add the colour to every selected file (sets whole), or remove it when all have it.
+    @objc func toggleTag(_ sender: NSMenuItem) {
+        let color = sender.tag
+        let paths = list.tagTargets()
+        guard !paths.isEmpty else { return }
+        let add = sender.state != .on
+        opsQueue.async { [weak self] in
+            let r = FileOperations.changeTag(paths, color: color, add: add)
+            DispatchQueue.main.async { self?.tagsChanged(r.changed, failed: r.failed, undoName: (add ? "Add Tag " : "Remove Tag ") + FinderTags.colorNames[color]) }
+        }
+    }
+
+    private func tagsChanged(_ changed: [(path: String, before: [FinderTag], after: [FinderTag])], failed: [String], undoName: String) {
+        for c in changed { TagLoader.shared.store(c.path, c.after) }
+        for w in BrowserWindowController.open { w.list.tagsArrived(changed.map { $0.path }) }
+        if !failed.isEmpty {
+            showProblem("Tags not changed on \(failed.count) item\(failed.count == 1 ? "" : "s")",
+                        failed.prefix(10).joined(separator: "\n") + "\n\nThe files themselves are untouched.")
+        }
+        guard !changed.isEmpty, let um = window?.undoManager else { return }
+        let back = changed.map { ($0.path, $0.before, $0.after) }
+        um.registerUndo(withTarget: self) { me in me.restoreTags(back.map { ($0.0, $0.1, $0.2) }, name: undoName) }
+        um.setActionName(undoName)
+    }
+
+    /// Undo / redo of a tag change: every item gets its earlier tag list back.
+    private func restoreTags(_ items: [(String, [FinderTag], [FinderTag])], name: String) {
+        opsQueue.async { [weak self] in
+            var changed: [(path: String, before: [FinderTag], after: [FinderTag])] = []
+            var failed: [String] = []
+            for (p, before, after) in items {
+                if FileOperations.setTags(p, before) { changed.append((p, after, before)) } else { failed.append(Paths.name(p)) }
+            }
+            DispatchQueue.main.async { self?.tagsChanged(changed, failed: failed, undoName: name) }
+        }
     }
 
     // MARK: Finder actions

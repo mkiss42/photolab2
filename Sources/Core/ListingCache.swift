@@ -40,6 +40,13 @@ final class ListingCache {
         return it.listing
     }
 
+    /// Memory only, no disk check (for tooltips): a recent listing of `path`, if any.
+    func peek(_ path: String) -> FolderListing? {
+        lock.lock(); defer { lock.unlock() }
+        guard let it = items[path], Date().timeIntervalSince(it.storedAt) < maxAge else { return nil }
+        return it.listing
+    }
+
     func store(_ path: String, listing: FolderListing, folderMtime: Double?, now: Date = Date()) {
         // Empty listings are not kept: they are cheap to re-read and an empty answer from a busy
         // server must not stick.

@@ -1,5 +1,27 @@
 # Changes
 
+## 0.5.0 — Finder tags, totals, type-select cycling
+
+- Finder tags in the list: coloured dots after the name, like Finder. Read in the background,
+  only for rows on screen (one small request per file on a share), so big folders stay fast.
+  Re-read when the folder is (Cmd-R, or a change is seen).
+- Right-click > Tags: the seven Finder colours; a tick when every selected file has it, a dash
+  when some do. Choosing one adds it to all selected files (whole sets), or removes it when all
+  have it. Other tags (names without colour) are kept. Cmd-Z undoes, Cmd-Shift-Z redoes.
+  Copies keep their tags.
+- Status bar: "7 items (1 set, 9 total)" - rows, sets, and files counting every set member.
+- Type-select cycles: pressing the same letter again goes to the next name starting with it.
+- Tooltip on a folder shows its item count when it has been listed (expanded or visited).
+- (XMP colour labels are separate and come with the contact sheet.)
+
+Test checklist (3 minutes):
+[ ] 1  A folder with Finder-tagged files: dots after the names (compare with Finder).
+[ ] 2  Right-click a set row > Tags > Red: Finder shows Red on all three files. Cmd-Z: gone.
+[ ] 3  Select two files, one red: Tags menu shows a dash at Red; choose Red: both red.
+[ ] 4  Press "c" three times: the third name starting with c is selected.
+[ ] 5  Status bar on a folder with sets: "N items (S sets, T total)".
+
+
 ## 0.4.3 — path bar: Paste Into, Open in New Window
 
 - Right-click any folder in the path bar: Paste Into (copies the clipboard's files there),
