@@ -18,7 +18,7 @@ extension Notification.Name {
     static let layoutSettingsChanged = Notification.Name("PhotoLabLayoutSettingsChanged")
 }
 
-final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation, NSSplitViewDelegate {
+final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation, NSSplitViewDelegate, NSSearchFieldDelegate {
     static var open: [BrowserWindowController] = []
     static var brainText = "Brain: not started"
 
@@ -98,6 +98,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private let statusBar = NSStackView()
     private let sidebarButton = NSButton()
     private let pathRow = NSStackView()
+    private let filterRow = NSStackView()
+    private let filterField = NSSearchField()
 
     static let defaultSidebarWidth: CGFloat = 160
     static var sidebarVisible: Bool {
@@ -166,6 +168,16 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         list.showHidden = BrowserWindowController.showHidden
         list.foldersOnly = BrowserWindowController.foldersOnly
 
+        filterField.placeholderString = "Filter names (Esc clears)"
+        filterField.target = self
+        filterField.action = #selector(filterChanged(_:))
+        filterField.delegate = self
+        filterField.sendsSearchStringImmediately = true
+        filterRow.orientation = .horizontal
+        filterRow.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 6, right: 8)
+        filterRow.addArrangedSubview(filterField)
+        filterRow.isHidden = true
+
         statusLabel.textColor = NSColor.secondaryLabelColor
         statusLabel.font = NSFont.systemFont(ofSize: 11)
         statusLabel.lineBreakMode = .byTruncatingTail
@@ -206,10 +218,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         let order: [NSView]
         if BrowserWindowController.pathBarAtBottom {
             pathRow.setViews([pathBar], in: .leading)
-            order = [navBar, list.view, pathRow, statusBar]
+            order = [navBar, filterRow, list.view, pathRow, statusBar]
         } else {
             navBar.addArrangedSubview(pathBar)
-            order = [navBar, list.view, statusBar]
+            order = [navBar, filterRow, list.view, statusBar]
         }
         for v in order {
             rightStack.addArrangedSubview(v)
@@ -249,6 +261,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             forwardStack.removeAll()
         }
         currentPath = path
+        if !list.filterText.isEmpty { closeFilter(focusList: false) }      // a filter belongs to one folder
         _ = folderGeneration.next()
         UserDefaults.standard.set(path, forKey: "lastFolder")
         let vol = Volumes.volume(for: path)
@@ -337,6 +350,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         } else {
             list.showMessage(nil)
         }
+        if listing.error == 0 && !list.filterText.isEmpty && list.shownCounts.rows == 0 {
+            list.showMessage("Nothing here matches \"\(list.filterText)\"")
+        }
         updateStatus()
         Activity.set("idle")
     }
@@ -352,6 +368,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         if sel > 0 { parts.append("\(sel) selected") }
         parts.append(fromCache ? "from memory" : String(format: "%@ %.0f ms", l.method, l.milliseconds))
         if !l.problems.isEmpty { parts.append("\(l.problems.count) unreadable") }
+        if !list.filterText.isEmpty { parts.insert("filter \"\(list.filterText)\"", at: 1) }
         statusLabel.stringValue = parts.joined(separator: "  \u{00B7}  ")
     }
 
@@ -779,6 +796,39 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     @objc func toggleHidden(_ sender: Any?) {
         BrowserWindowController.showHidden = !BrowserWindowController.showHidden
         for c in BrowserWindowController.open { c.reapply() }
+    }
+
+    // MARK: Filter bar (Cmd-F)
+
+    @objc func showFilter(_ sender: Any?) {
+        filterRow.isHidden = false
+        window?.makeFirstResponder(filterField)
+    }
+
+    @objc private func filterChanged(_ sender: Any?) {
+        let text = filterField.stringValue.trimmingCharacters(in: .whitespaces)
+        if text == list.filterText { return }
+        list.filterText = text
+        reapply()
+    }
+
+    private func closeFilter(focusList: Bool) {
+        filterField.stringValue = ""
+        filterRow.isHidden = true
+        if !list.filterText.isEmpty { list.filterText = ""; reapply() }
+        if focusList { window?.makeFirstResponder(list.table) }
+    }
+
+    /// Esc in the filter field clears and hides it; Down arrow / Return go to the list.
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard control === filterField else { return false }
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) { closeFilter(focusList: true); return true }
+        if commandSelector == #selector(NSResponder.moveDown(_:)) || commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            window?.makeFirstResponder(list.table)
+            if list.table.selectedRow < 0 && list.table.numberOfRows > 0 { list.table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false) }
+            return true
+        }
+        return false
     }
 
     @objc func toggleFoldersOnly(_ sender: Any?) {

@@ -132,6 +132,19 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     var showHidden = false
     /// View > Show Folders Only.
     var foldersOnly = false
+    /// Filter bar (Cmd-F): rows whose name contains this (any case). Expanded folders stay, so
+    /// their matching contents show; empty = no filter.
+    var filterText = ""
+
+    private func matches(_ n: FileNode) -> Bool {
+        if n.entry.name.localizedCaseInsensitiveContains(filterText) { return true }
+        return n.members.contains { $0.name.localizedCaseInsensitiveContains(filterText) }
+    }
+
+    private func filtered(_ list: [FileNode]) -> [FileNode] {
+        if filterText.isEmpty { return list }
+        return list.filter { n in n.isPlaceholder || matches(n) || (n.isExpandableFolder && table.isItemExpanded(n)) }
+    }
 
     /// Double-click, Cmd-E, Cmd-Down.
     var onOpen: (([FileEntry]) -> Void)?
@@ -254,7 +267,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     private func refreshShown(_ n: FileNode) {
         let ph = n.showPlaceholder ? [placeholder(for: n)] : []
         guard let all = n.allChildren else { n.shown = ph; return }
-        n.shown = nodes(for: all) + ph
+        n.shown = filtered(nodes(for: all)) + ph
         for c in n.shown where c.isExpandableFolder { refreshShown(c) }
     }
 
@@ -303,7 +316,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
             keep = Set(selectedEntries().map { $0.path })
         }
         rootEntries = entries
-        roots = nodes(for: entries)
+        roots = filtered(nodes(for: entries))
         for n in roots where n.isExpandableFolder { refreshShown(n) }
         rebuildIndex()
         quietly { table.reloadData() }

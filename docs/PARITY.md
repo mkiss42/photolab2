@@ -20,7 +20,7 @@ Status: **done** · **part** (exists, something missing) · **todo** (phase in b
 | Quick mode (name only), icon style Pretty/Generic/None, show ext / modified columns | part (0.4.1) | columns show/hide via header menu; icons are always by type (no file reads) |
 | Finder colour tag dots on rows | todo (1c) | |
 | Context menu tag swatches: add/remove Finder tags (multi-select, partial state) | todo (1c) | |
-| Filter bar (Cmd-F), filters the visible tree incl. expanded folders, Esc clears | todo (1c) | |
+| Filter bar (Cmd-F), filters the visible tree incl. expanded folders, Esc clears | done (0.4.2) | |
 | Type-to-select, same letter cycles | part | AppKit type-select; same-letter cycling missing |
 | Return renames; multi-select Return -> batch rename | part | single rename done (also M); batch renamer was a TODO in PL1 too -> todo (4) |
 | New Folder (Cmd-Shift-N) | done | PL1 asked for a name in a dialog; PL2 renames in place |

@@ -1,5 +1,17 @@
 # Changes
 
+## 0.4.2 — filter bar
+
+- Cmd-F (Edit > Filter...) opens a filter field above the list. Typing keeps only rows whose
+  name contains the text (any case; a set matches by any of its files). Expanded folders stay
+  open and are filtered too. Down arrow or Return jumps to the list; Esc clears and closes it.
+  Going to another folder clears the filter. The status bar shows the active filter.
+
+Test checklist (1 minute):
+[ ] 1  Cmd-F, type part of a file name: only matching rows; expanded folders filtered too.
+[ ] 2  Down arrow: into the list. Cmd-F, Esc: everything back, expansion unchanged.
+
+
 ## 0.4.1 — Finder actions, columns, folders only
 
 - Right-click: Open With (default app first, Other...), Open in New Window (folders), Show in

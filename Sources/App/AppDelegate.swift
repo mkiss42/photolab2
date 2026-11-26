@@ -166,6 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         item(edit, "Paste", #selector(NSText.paste(_:)), "v")
         item(edit, "Move Items Here", #selector(BrowserWindowController.pasteMoving(_:)), "v", [.command, .option])
         item(edit, "Select All", #selector(NSText.selectAll(_:)), "a")
+        item(edit, "Filter...", #selector(BrowserWindowController.showFilter(_:)), "f")
         edit.addItem(NSMenuItem.separator())
         item(edit, "Copy Path", #selector(BrowserWindowController.copyPaths(_:)), "c", [.command, .option])
 
