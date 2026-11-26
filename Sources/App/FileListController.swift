@@ -53,7 +53,10 @@ enum FileIcons {
         i.size = NSSize(width: 16, height: 16)
         byExt[key] = i
         let ms = Date().timeIntervalSince(t0) * 1000
-        if ms > 50 { Log.info(String(format: "slow icon: .%@ took %.0f ms", key, ms)) }
+        if ms > 50 {
+            Stats.noteSlowIcon(ms)
+            Log.info(String(format: "slow icon: .%@ took %.0f ms", key, ms))
+        }
         return i
     }
 
@@ -74,9 +77,13 @@ enum FileIcons {
 }
 
 final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate {
+    /// What the window lays out: the scroll view plus an overlay (message + spinner) on top of it.
+    /// The overlay must be a sibling above the scroll view: views added inside a scroll view are
+    /// drawn over by the list (0.1.3-0.1.5 showed neither message nor spinner).
+    let view = OverlayContainer()
     let scroll = NSScrollView()
     let table = FileOutlineView()
-    private let message = NSTextField(labelWithString: "")
+    private let message = PassThroughLabel(labelWithString: "")
     private let spinner = NSProgressIndicator()
     private var roots: [FileNode] = []
     private var rootEntries: [FileEntry] = []
@@ -151,18 +158,24 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         message.textColor = NSColor.secondaryLabelColor
         message.translatesAutoresizingMaskIntoConstraints = false
         message.isHidden = true
-        scroll.addSubview(message)
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(scroll)
+        NSLayoutConstraint.activate([
+            scroll.topAnchor.constraint(equalTo: view.topAnchor), scroll.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor), scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        ])
+        view.addSubview(message)
         spinner.style = .spinning
         spinner.controlSize = .regular
         spinner.isDisplayedWhenStopped = false
         spinner.translatesAutoresizingMaskIntoConstraints = false
-        scroll.addSubview(spinner)
+        view.addSubview(spinner)
         NSLayoutConstraint.activate([
-            spinner.centerXAnchor.constraint(equalTo: scroll.centerXAnchor),
+            spinner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             spinner.bottomAnchor.constraint(equalTo: message.topAnchor, constant: -10),
-            message.centerXAnchor.constraint(equalTo: scroll.centerXAnchor),
-            message.centerYAnchor.constraint(equalTo: scroll.centerYAnchor),
-            message.widthAnchor.constraint(lessThanOrEqualTo: scroll.widthAnchor, constant: -40),
+            message.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            message.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            message.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, constant: -40),
         ])
     }
 
@@ -394,6 +407,14 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         guard tableColumn?.identifier.rawValue == "name", let n = item as? FileNode, !n.isPlaceholder else { return nil }
         return n.entry.name
     }
+}
+
+/// Holds the scroll view and, above it, the overlay message + spinner.
+final class OverlayContainer: NSView {}
+
+/// A label that never takes clicks (overlay over the list).
+final class PassThroughLabel: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { return nil }
 }
 
 /// Table cell with icon, text and an optional small spinner (for the "Loading..." row).

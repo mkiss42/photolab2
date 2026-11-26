@@ -1,5 +1,27 @@
 # Changes
 
+## 0.1.6 — spinner on enter, Computer, copy paths
+
+- Fixed: no spinner (and no "Empty folder" text) in the list - they were inside the list's scroll
+  view and got drawn over. They now float above the list, centred.
+- Fixed: Cmd-Option-S toggles the sidebar (caught before the menu).
+- Path bar below the list moves only the path; the Back/Forward/Up/Sidebar buttons stay on top.
+- Sidebar button is an icon.
+- "/" is called Computer; in the path bar it is the computer icon alone.
+- Edit > Copy Path (Cmd-Shift-C): paths of the selected items, one per line (the folder itself
+  when nothing is selected). Go > Computer no longer has that shortcut.
+- Right-click a path bar item: Copy Path (up to that item) / Copy Full Path.
+- Short Report is longer: what the app was doing during freezes, folders served from memory,
+  watcher events, slow icon loads.
+
+Test checklist (4 minutes):
+[ ] 1  Enter a slow share folder: spinner + "Reading..." in the middle of the list.
+[ ] 2  Cmd-Option-S toggles the sidebar.
+[ ] 3  Settings: path bar below -> buttons stay on top, path moves under the list.
+[ ] 4  Cmd-Shift-C on two selected files, paste into a text editor: two paths.
+       Right-click a path bar item: both copy options.
+[ ] 5  Help -> Short Report (now ~13 lines).
+
 ## 0.1.5 — expand loop fixed, sidebar and path bar options
 
 - Fixed: expanding a folder could flicker endlessly and rows slid over each other (0.1.4). Cause:

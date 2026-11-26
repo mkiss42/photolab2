@@ -24,3 +24,9 @@ early even if its feature comes late, so nothing has to be rebuilt.
 | 10 | Setting: path (crumb) bar on top or bottom - needs the Settings window | user 2026-11-25 | UI | done 0.1.5 |
 | 11 | Name column always takes all free width, other columns fixed; user-resized widths kept for that window until it closes, new windows start with defaults | user 2026-11-25 | UI | done 0.1.5 |
 | 12 | Path bar reaches / (Macintosh HD > Volumes > ...) | user 2026-11-25 | UI | done 0.1.5 |
+| 13 | Path bar below moves only the path; nav buttons stay on top | user 2026-11-25 | UI | done 0.1.6 |
+| 14 | Spinner in the centre when entering a folder (overlay fix) | user 2026-11-25 | bug | done 0.1.6 |
+| 15 | Cmd-Option-S sidebar toggle did not work | user 2026-11-25 | bug | done 0.1.6 |
+| 16 | Sidebar button as an icon | user 2026-11-25 | UI | done 0.1.6 |
+| 17 | "/" shown as Computer; computer icon only in the path bar | user 2026-11-25 | UI | done 0.1.6 |
+| 18 | Cmd-Shift-C copies selected paths; path bar right-click: Copy Path / Copy Full Path | user 2026-11-25 | UI | done 0.1.6 |

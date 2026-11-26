@@ -16,7 +16,7 @@ struct VolumeInfo {
     var isNetwork: Bool { return !isLocal }
 
     var displayName: String {
-        if isRoot { return "/" }   // the real name, not an invented "Macintosh HD"
+        if isRoot { return "Computer" }   // "/" (shown as the computer icon in the path bar)
         return Paths.name(mountPoint)
     }
 }

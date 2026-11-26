@@ -64,7 +64,10 @@ final class SidebarController: NSObject, NSOutlineViewDataSource, NSOutlineViewD
                 let t0 = Date()
                 icon = NSWorkspace.shared.icon(forFile: v.mountPoint)   // local disk
                 let ms = Date().timeIntervalSince(t0) * 1000
-                if ms > 50 { Log.info(String(format: "slow volume icon: %@ took %.0f ms", v.displayName, ms)) }
+                if ms > 50 {
+                    Stats.noteSlowIcon(ms)
+                    Log.info(String(format: "slow volume icon: %@ took %.0f ms", v.displayName, ms))
+                }
             }
             vols.append(SidebarItem(title: v.displayName, path: v.mountPoint, icon: icon))
         }

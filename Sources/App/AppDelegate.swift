@@ -3,7 +3,7 @@
 
 import AppKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var brain: BrainClient!
 
     static var appVersion: String {
@@ -14,8 +14,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppFiles.ensureDirectories()
         Log.info("PhotoLab \(AppDelegate.appVersion) starting, \(SystemInfo.summary)")
         FreezeWatchdog.start()
+        Activity.set("launch: volumes")
         Volumes.refresh()
+        Activity.set("launch: menu")
         buildMenu()
+        installKeyMonitor()
 
         let ws = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification, NSWorkspace.didRenameVolumeNotification] {
@@ -23,7 +26,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let last = UserDefaults.standard.string(forKey: "lastFolder")
+        Activity.set("launch: window")
         openFirstWindow(preferred: last)
+        DispatchQueue.main.async { Activity.set("idle") }
 
         brain = BrainClient(socketPath: AppFiles.brainSocketPath)
         brain.onStateChange = { s in
@@ -123,9 +128,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item(edit, "Copy", #selector(NSText.copy(_:)), "c")
         item(edit, "Paste", #selector(NSText.paste(_:)), "v")
         item(edit, "Select All", #selector(NSText.selectAll(_:)), "a")
+        edit.addItem(NSMenuItem.separator())
+        item(edit, "Copy Path", #selector(BrowserWindowController.copyPaths(_:)), "c", [.command, .shift])
 
         let view = submenu(main, "View")
-        item(view, "Show Sidebar", #selector(BrowserWindowController.toggleSidebar(_:)), "s", [.command, .option])
+        item(view, "Show Sidebar", #selector(toggleSidebarMenu(_:)), "s", [.command, .option], target: self)
         view.addItem(NSMenuItem.separator())
         item(view, "Show Hidden Files", #selector(BrowserWindowController.toggleHidden(_:)), ".", [.command, .shift])
         item(view, "Keep Folders on Top", #selector(BrowserWindowController.toggleFoldersFirst(_:)))
@@ -137,7 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item(go, "Forward", #selector(BrowserWindowController.goForward(_:)), "]")
         item(go, "Enclosing Folder", #selector(BrowserWindowController.goEnclosingFolder(_:)), up)
         go.addItem(NSMenuItem.separator())
-        item(go, "Computer", #selector(BrowserWindowController.goComputer(_:)), "c", [.command, .shift])
+        item(go, "Computer", #selector(BrowserWindowController.goComputer(_:)))
         item(go, "Home", #selector(BrowserWindowController.goHome(_:)), "h", [.command, .shift])
         item(go, "Volumes", #selector(BrowserWindowController.goVolumes(_:)), "v", [.command, .shift])
         go.addItem(NSMenuItem.separator())
@@ -155,6 +162,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item(help, "Show Logs Folder", #selector(showLogs(_:)), "", [], target: self)
 
         NSApp.mainMenu = main
+    }
+
+    // MARK: Sidebar shortcut
+
+    private var keyMonitor: Any?
+
+    /// Cmd-Option-S is caught here, before the menu: the menu key equivalent alone did not fire on
+    /// the lab's Macs (0.1.5).
+    private func installKeyMonitor() {
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            let mods = e.modifierFlags.intersection([.command, .option, .control, .shift])
+            if e.keyCode == 1 && mods == [.command, .option] {     // kVK_ANSI_S
+                self?.toggleSidebarMenu(nil)
+                return nil
+            }
+            return e
+        }
+    }
+
+    private var keyBrowser: BrowserWindowController? {
+        return (NSApp.keyWindow?.windowController as? BrowserWindowController)
+            ?? (NSApp.mainWindow?.windowController as? BrowserWindowController)
+    }
+
+    @objc private func toggleSidebarMenu(_ sender: Any?) {
+        keyBrowser?.toggleSidebar(nil)
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(toggleSidebarMenu(_:)) {
+            guard let b = keyBrowser else { return false }
+            item.title = b.isSidebarShown ? "Hide Sidebar" : "Show Sidebar"
+        }
+        return true
     }
 
     @objc private func showSettings(_ sender: Any?) {

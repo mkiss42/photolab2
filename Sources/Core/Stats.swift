@@ -9,6 +9,11 @@ enum Stats {
     private static let lock = NSLock()
     private static var listings: [Bool: [(ms: Double, bulk: Bool, entries: Int)]] = [true: [], false: []]
     private static var freezes: [Double] = []
+    private static var freezeWhat: [String: Int] = [:]
+    private static var cacheHits = 0
+    private static var watchEvents = 0
+    private static var watchGone = 0
+    private static var slowIcons: [Double] = []
     private static var codes: [String: Int] = [:]
     private static var selfTest: [SelfTestResult] = []
     static let started = Date()
@@ -21,10 +26,17 @@ enum Stats {
         listings[network] = a
     }
 
-    static func noteFreeze(_ seconds: Double) {
+    /// `during` is the Activity text; only its kind ("list", "show", "launch"...) is kept, no path.
+    static func noteFreeze(_ seconds: Double, during: String = "") {
+        let kind = during.split(separator: ":", maxSplits: 1).first.map(String.init) ?? "?"
         lock.lock(); defer { lock.unlock() }
         freezes.append(seconds)
+        freezeWhat[kind, default: 0] += 1
     }
+
+    static func noteCacheHit() { lock.lock(); cacheHits += 1; lock.unlock() }
+    static func noteWatch(gone: Bool) { lock.lock(); watchEvents += 1; if gone { watchGone += 1 }; lock.unlock() }
+    static func noteSlowIcon(_ ms: Double) { lock.lock(); slowIcons.append(ms); lock.unlock() }
 
     /// Called by Log for every warning/error line: counts a leading code like "W-LIST-2".
     static func noteLogLine(_ text: String) {
@@ -73,8 +85,17 @@ enum Stats {
         if freezes.isEmpty {
             out.append("FREEZE none")
         } else {
-            out.append(String(format: "FREEZE %ld (longest %.2f s)", freezes.count, freezes.max() ?? 0))
+            let what = freezeWhat.sorted { $0.key < $1.key }.map { "\($0.key) x\($0.value)" }.joined(separator: ", ")
+            out.append(String(format: "FREEZE %ld (longest %.2f s) during: %@", freezes.count, freezes.max() ?? 0, what))
         }
+        let total = (listings[false]?.count ?? 0) + (listings[true]?.count ?? 0)
+        out.append("CACHE \(cacheHits) folder(s) from memory, \(total) read from disk")
+        out.append("WATCH \(watchEvents) change event(s), \(watchGone) folder(s) gone")
+        out.append(slowIcons.isEmpty ? "ICONS no slow loads"
+                   : String(format: "ICONS %ld slow load(s), longest %.0f ms", slowIcons.count, slowIcons.max() ?? 0))
+        let methods = Dictionary(grouping: (listings[false] ?? []) + (listings[true] ?? []), by: { $0.bulk ? "bulk" : "readdir" })
+            .map { "\($0.key) \($0.value.count)" }.sorted().joined(separator: ", ")
+        out.append("METHOD " + (methods.isEmpty ? "none" : methods))
         out.append(codes.isEmpty ? "CODES none"
                    : "CODES " + codes.sorted { $0.key < $1.key }.map { "\($0.key) x\($0.value)" }.joined(separator: ", "))
         out.append(brain.replacingOccurrences(of: "Brain: ", with: "BRAIN "))

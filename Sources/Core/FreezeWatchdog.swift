@@ -39,7 +39,7 @@ enum FreezeWatchdog {
                     let what = Activity.text
                     sem.wait()
                     let secs = Date().timeIntervalSince(t0) + threshold
-                    Stats.noteFreeze(secs)
+                    Stats.noteFreeze(secs, during: what)
                     Log.warn(String(format: "FREEZE %.2f s while: ", secs) + what)
                 }
             }

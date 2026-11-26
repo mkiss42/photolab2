@@ -93,6 +93,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private let navBar = NSStackView()
     private let statusBar = NSStackView()
     private let sidebarButton = NSButton()
+    private let pathRow = NSStackView()
 
     static let defaultSidebarWidth: CGFloat = 160
     static var sidebarVisible: Bool {
@@ -128,7 +129,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         upButton.action = #selector(goEnclosingFolder(_:))
         upButton.toolTip = "Enclosing folder (Cmd-Up)"
         sidebarButton.bezelStyle = .texturedRounded
-        sidebarButton.title = "Sidebar"
+        sidebarButton.image = Glyphs.sidebar
+        sidebarButton.imagePosition = .imageOnly
         sidebarButton.setButtonType(.pushOnPushOff)
         sidebarButton.target = self
         sidebarButton.action = #selector(toggleSidebar(_:))
@@ -138,7 +140,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         pathBar.spacing = 0
         pathBar.alignment = .centerY
         pathBar.setHuggingPriority(NSLayoutConstraint.Priority(rawValue: 100), for: .horizontal)
-        for v in [sidebarButton, backButton, forwardButton, upButton, pathBar] as [NSView] { navBar.addArrangedSubview(v) }
+        for v in [sidebarButton, backButton, forwardButton, upButton] as [NSView] { navBar.addArrangedSubview(v) }
+        pathRow.orientation = .horizontal
+        pathRow.edgeInsets = NSEdgeInsets(top: 4, left: 8, bottom: 2, right: 8)
         navBar.orientation = .horizontal
         navBar.spacing = 6
         navBar.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
@@ -168,7 +172,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         rightStack.spacing = 0
         rightStack.alignment = .leading
         rightStack.distribution = .fill
-        list.scroll.setContentHuggingPriority(NSLayoutConstraint.Priority(rawValue: 1), for: .vertical)
+        list.view.setContentHuggingPriority(NSLayoutConstraint.Priority(rawValue: 1), for: .vertical)
         arrangeRightStack()
 
         let side = sidebar.scroll
@@ -183,8 +187,18 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// Path bar above the list (default) or below it, from Settings.
     private func arrangeRightStack() {
         for v in rightStack.arrangedSubviews { rightStack.removeArrangedSubview(v); v.removeFromSuperview() }
-        let order: [NSView] = BrowserWindowController.pathBarAtBottom
-            ? [list.scroll, navBar, statusBar] : [navBar, list.scroll, statusBar]
+        // Path bar above: one row (nav buttons + path). Below: nav buttons stay on top, the path
+        // gets its own row under the list.
+        for v in navBar.arrangedSubviews where v === pathBar { navBar.removeArrangedSubview(v); v.removeFromSuperview() }
+        pathRow.removeFromSuperview()
+        let order: [NSView]
+        if BrowserWindowController.pathBarAtBottom {
+            pathRow.setViews([pathBar], in: .leading)
+            order = [navBar, list.view, pathRow, statusBar]
+        } else {
+            navBar.addArrangedSubview(pathBar)
+            order = [navBar, list.view, statusBar]
+        }
         for v in order {
             rightStack.addArrangedSubview(v)
             v.widthAnchor.constraint(equalTo: rightStack.widthAnchor).isActive = true
@@ -192,6 +206,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     private var sidebarShown = false
+    var isSidebarShown: Bool { return sidebarShown }
 
     private func setSidebar(visible: Bool) {
         sidebarShown = visible
@@ -264,6 +279,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             if useCache, let c = ListingCache.shared.lookup(path, currentMtime: mtime) {
                 listing = c
                 cached = true
+                Stats.noteCacheHit()
             } else {
                 listing = DirectoryReader.read(path, isCancelled: { [weak me] in me?.generation.current != gen })
                 if !listing.cancelled { ListingCache.shared.store(path, listing: listing, folderMtime: mtime) }
@@ -336,8 +352,23 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
                 sep.textColor = NSColor.tertiaryLabelColor
                 pathBar.addArrangedSubview(sep)
             }
-            let title = p == "/" ? "/" : (mounts[p] ?? Paths.name(p))
+            let title = p == "/" ? "" : (mounts[p] ?? Paths.name(p))
             let b = NSButton(title: title, target: self, action: #selector(pathClicked(_:)))
+            if p == "/" {
+                b.image = Glyphs.computer
+                b.imagePosition = .imageOnly
+                b.toolTip = "Computer"
+            }
+            let m = NSMenu()
+            let copyHere = NSMenuItem(title: "Copy Path", action: #selector(copyPathItem(_:)), keyEquivalent: "")
+            copyHere.representedObject = p
+            copyHere.target = self
+            let copyAll = NSMenuItem(title: "Copy Full Path", action: #selector(copyPathItem(_:)), keyEquivalent: "")
+            copyAll.representedObject = currentPath
+            copyAll.target = self
+            m.addItem(copyHere)
+            m.addItem(copyAll)
+            b.menu = m
             b.bezelStyle = .recessed
             b.isBordered = false
             b.identifier = NSUserInterfaceItemIdentifier(p)
@@ -348,6 +379,25 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
     }
 
+    @objc private func copyPathItem(_ sender: NSMenuItem) {
+        guard let p = sender.representedObject as? String else { return }
+        BrowserWindowController.putOnClipboard([p])
+    }
+
+    static func putOnClipboard(_ paths: [String]) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(paths.joined(separator: "\n"), forType: .string)
+        Log.info("copied \(paths.count) path(s) to the clipboard")
+    }
+
+    /// Edit > Copy Path (Cmd-Shift-C): the selected items' paths, one per line; the folder itself
+    /// when nothing is selected.
+    @objc func copyPaths(_ sender: Any?) {
+        let sel = list.selectedEntries().map { $0.path }
+        BrowserWindowController.putOnClipboard(sel.isEmpty ? [currentPath] : sel)
+    }
+
     @objc private func pathClicked(_ sender: NSButton) {
         guard let p = sender.identifier?.rawValue, p != currentPath else { return }
         let child = Paths.ancestry(currentPath).first { Paths.parent($0) == p && $0 != p }
@@ -356,6 +406,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     private func watchFired(_ change: FolderWatcher.Change, for path: String) {
         guard path == currentPath else { return }
+        Stats.noteWatch(gone: change == .gone)
         switch change {
         case .contents:
             ListingCache.shared.invalidate(path)
@@ -492,6 +543,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         for p in paths where childWatchers[p] == nil {
             childWatchers[p] = FolderWatcher(path: p) { [weak self] change in
                 guard let me = self else { return }
+                Stats.noteWatch(gone: change == .gone)
                 ListingCache.shared.invalidate(p)
                 if change == .contents { me.list.relist(path: p) }
                 // .gone: the parent's watcher sees it disappear and re-lists the parent.
