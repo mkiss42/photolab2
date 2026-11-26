@@ -155,6 +155,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         list.onTrashRequest = { [weak self] in self?.moveToTrash(nil) }
         list.onRenameCommit = { [weak self] e, name in self?.commitRename(e, name) }
         list.onExpandedChange = { [weak self] set in self?.watchExpanded(set) }
+        list.onDrop = { [weak self] paths, dest, kind in
+            TransferController.shared.start(paths, to: dest, kind: kind, from: self)
+        }
         list.showHidden = BrowserWindowController.showHidden
 
         statusLabel.textColor = NSColor.secondaryLabelColor
@@ -317,6 +320,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         let visible = showHidden ? listing.entries : listing.entries.filter { !$0.isHidden }
         list.foldersFirst = BrowserWindowController.foldersFirst
         list.showHidden = showHidden
+        list.rootPath = path
         list.setEntries(listing.entries, select: select)
         if listing.error != 0 {
             list.showMessage("Can't open this folder: \(listing.errorText) (E-LIST-\(listing.error))")
@@ -505,7 +509,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     private let opsQueue = DispatchQueue(label: "photolab.ops", qos: .userInitiated)
 
-    private func showProblem(_ title: String, _ text: String) {
+    func showProblem(_ title: String, _ text: String) {
         guard let w = window else { return }
         let a = NSAlert()
         a.messageText = title
@@ -514,7 +518,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     /// Re-read the folders an operation touched (the window's folder and any expanded ones).
-    private func reloadAfterOp(_ dirs: Set<String>, select: [String]? = nil) {
+    func reloadAfterOp(_ dirs: Set<String>, select: [String]? = nil) {
         for d in dirs { ListingCache.shared.invalidate(d) }
         if dirs.contains(currentPath) { load(select: select, useCache: false) }
         for d in dirs where d != currentPath { list.relist(path: d) }
@@ -545,7 +549,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     /// Undo of a rename is the reverse rename; registering it inside the undo handler makes AppKit
     /// file it as the redo.
-    private func registerUndoRename(_ pairs: [(String, String)], name: String) {
+    func registerUndoRename(_ pairs: [(String, String)], name: String) {
         guard let um = window?.undoManager, !pairs.isEmpty else { return }
         um.registerUndo(withTarget: self) { me in
             let back = Array(pairs.map { ($0.1, $0.0) }.reversed())
@@ -631,6 +635,55 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             }
         }
         um.setActionName("Move to Trash")
+    }
+
+    // MARK: Copy / paste / duplicate (the transfer engine: TransferController)
+
+    /// Cmd-C: the selected items (with their set members) go on the clipboard as files, so they
+    /// paste in PhotoLab and in Finder.
+    @objc func copy(_ sender: Any?) {
+        let paths = list.withSetMembers(list.selectedEntries())
+        guard !paths.isEmpty else { NSSound.beep(); return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.writeObjects(paths.map { NSURL(fileURLWithPath: $0) })
+        Log.info("clipboard: \(paths.count) item(s)")
+    }
+
+    @objc func paste(_ sender: Any?) { pasteFiles(kind: .copy) }
+
+    /// Cmd-Option-V (Finder's "Move Item Here").
+    @objc func pasteMoving(_ sender: Any?) { pasteFiles(kind: .move) }
+
+    private static var clipboardFiles: [String] {
+        let urls = NSPasteboard.general.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        return urls.map { $0.path }
+    }
+
+    /// Paste goes into the folder of the selection (an expanded subfolder's row pastes there), or
+    /// into the window's folder when nothing is selected.
+    private func pasteFiles(kind: TransferKind) {
+        let paths = BrowserWindowController.clipboardFiles
+        guard !paths.isEmpty else { NSSound.beep(); return }
+        let dest = list.selectedEntries().first.map { Paths.parent($0.path) } ?? currentPath
+        TransferController.shared.start(paths, to: dest, kind: kind, from: self)
+    }
+
+    /// Cmd-D: copies next to the originals ("IMG_1 copy.CR3"; a set stays a set).
+    @objc func duplicate(_ sender: Any?) {
+        let sel = list.selectedEntries()
+        guard let first = sel.first else { NSSound.beep(); return }
+        let dir = Paths.parent(first.path)
+        let paths = list.withSetMembers(sel.filter { Paths.parent($0.path) == dir })
+        TransferController.shared.start(paths, to: dir, kind: .copy, from: self)
+    }
+
+    /// Undo of a copy: the new copies go to the Trash (on a share without one, after the usual
+    /// confirmation). Redo puts them back.
+    func registerUndoCopy(_ created: [String], name: String) {
+        guard let um = window?.undoManager, !created.isEmpty else { return }
+        um.registerUndo(withTarget: self) { me in me.performTrash(created, sets: false) }
+        um.setActionName(name)
     }
 
     @objc func newFolder(_ sender: Any?) {
@@ -736,6 +789,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         case #selector(openSelected(_:))?: return list.selectionCount > 0
         case #selector(renameSelected(_:))?: return list.selectionCount == 1
         case #selector(moveToTrash(_:))?: return list.selectionCount > 0
+        case #selector(BrowserWindowController.copy(_:))?: return list.selectionCount > 0
+        case #selector(duplicate(_:))?: return list.selectionCount > 0
+        case #selector(paste(_:))?, #selector(pasteMoving(_:))?:
+            return NSPasteboard.general.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
         case #selector(toggleHidden(_:))?:
             item.state = BrowserWindowController.showHidden ? .on : .off
             return true

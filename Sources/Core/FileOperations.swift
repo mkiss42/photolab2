@@ -1,6 +1,7 @@
 // FileOperations.swift
 // User-file operations: rename (one file or a whole raw+jpg+xmp set), new folder, Trash, put
-// back, and the recovery journal. One of the three source files allowed to change files.
+// back, copy and move (the transfer engine), and the recovery journals. One of the three source
+// files allowed to change files.
 //
 // Contract (docs/PLAN.md section 7): nothing is deleted permanently (Trash only), nothing is
 // overwritten (exclusive renames), multi-step operations are journaled and all-or-nothing.
@@ -228,5 +229,436 @@ enum FileOperations {
         let text = "W-OPS-1 an interrupted \(j.op) was found at launch; \(restored) item(s) put back to their old names"
         if quiet { Log.info("self-test: journal recovery put back \(restored) item(s)") } else { Log.warn(text) }
         return restored > 0 ? "PhotoLab was stopped in the middle of a rename. \(restored) file(s) were given back their old names, so nothing is half-renamed." : nil
+    }
+
+    // MARK: Copy and move (docs/PLAN.md section 7)
+    //
+    // - Every top-level item is written under a hidden name (Transfers.partialPrefix) and renamed
+    //   to its real name only when complete and verified; the hidden name is journaled, so an
+    //   interrupted copy never shows up half-written and is removed at the next launch.
+    // - Never overwrites: a taken name means "keep both" (numbered name) or "skip".
+    // - Sets travel whole: members are skipped or renamed together.
+    // - Each file: same-volume clone when the volume can, else a byte copy; then the size of the
+    //   copy and the unchanged size+date of the source are checked.
+    // - Same-volume moves are renames (all-or-nothing, undoable). Cross-volume moves copy, verify,
+    //   then remove exactly the originals that were copied and did not change meanwhile.
+
+    struct TransferPlan {
+        var items: [TransferItem] = []
+        var clashes: [String] = []          // names already taken in the destination
+        var problem: String?                // refuse the whole job
+        var duplicate = false               // copy into the items' own folder
+    }
+
+    private static func why(_ e: Int32) -> String { return String(cString: strerror(e)) }
+
+    private static func isFolder(_ st: stat) -> Bool {
+        return UInt32(st.st_mode) & UInt32(S_IFMT) == UInt32(S_IFDIR)
+    }
+
+    private static func kindOf(_ st: stat) -> FileEntry.Kind {
+        switch UInt32(st.st_mode) & UInt32(S_IFMT) {
+        case UInt32(S_IFDIR): return .directory
+        case UInt32(S_IFREG): return .file
+        case UInt32(S_IFLNK): return .symlink
+        default: return .other
+        }
+    }
+
+    private static func resolved(_ p: String) -> String {
+        guard let r = realpath(p, nil) else { return p }
+        defer { free(r) }
+        return String(cString: r)
+    }
+
+    /// Sources grouped into sets, each parent folder read once. A path already in a group is not
+    /// repeated (dragging the RAW and its JPG gives one set).
+    static func expandSets(_ paths: [String], sets: Bool = useSets) -> [[String]] {
+        var listings: [String: [FileEntry]] = [:]
+        var seen = Set<String>()
+        var groups: [[String]] = []
+        for p in paths where !seen.contains(p) {
+            var members = [p]
+            let (stem, ext) = split(Paths.name(p))
+            if sets && groupable.contains(ext.lowercased()) {
+                let dir = Paths.parent(p)
+                if listings[dir] == nil { listings[dir] = DirectoryReader.read(dir).entries }
+                let more = listings[dir]!.filter { e in
+                    !e.isDirectory && groupable.contains(e.ext) && split(e.name).stem == stem && e.path != p
+                }.map { $0.path }
+                members = ([p] + more).sorted()
+            }
+            let fresh = members.filter { !seen.contains($0) }
+            for m in fresh { seen.insert(m) }
+            if !fresh.isEmpty { groups.append(fresh) }
+        }
+        return groups
+    }
+
+    /// What a copy or move of `paths` into `dest` means. Background queue: reads the disk.
+    static func planTransfer(_ paths: [String], to dest: String, kind: TransferKind, sets: Bool = useSets) -> TransferPlan {
+        var plan = TransferPlan()
+        var ds = stat()
+        guard lstat(dest, &ds) == 0, isFolder(ds) else {
+            plan.problem = "\"\(Paths.name(dest))\" can't be reached as a folder right now. Nothing was changed."
+            return plan
+        }
+        let realDest = resolved(dest)
+        var group = 0
+        var allHere = true
+        for members in expandSets(paths, sets: sets) {
+            var added = false
+            for src in members {
+                var ss = stat()
+                guard lstat(src, &ss) == 0 else { continue }          // gone since it was picked
+                let folder = isFolder(ss)
+                if folder && Transfers.intoItself(source: resolved(src), destination: realDest) {
+                    let verb = kind == .copy ? "copied" : "moved"
+                    return TransferPlan(items: [], clashes: [], problem: "\"\(Paths.name(src))\" can't be \(verb) into itself. Nothing was changed.", duplicate: false)
+                }
+                let here = Paths.parent(src) == dest || resolved(Paths.parent(src)) == realDest
+                if !here { allHere = false }
+                if kind == .move && here { continue }                 // already there
+                plan.items.append(TransferItem(source: src, group: group, isFolder: folder, crossDevice: ss.st_dev != ds.st_dev))
+                added = true
+                var ts = stat()
+                if lstat(Paths.join(dest, Paths.name(src)), &ts) == 0 { plan.clashes.append(Paths.name(src)) }
+            }
+            if added { group += 1 }
+        }
+        plan.duplicate = kind == .copy && allHere && !plan.items.isEmpty
+        return plan
+    }
+
+    /// Run one job on the calling background queue: state, progress and results go into `job`.
+    static func runTransfer(_ job: TransferJob) {
+        let t0 = Date()
+        job.update { $0.started = t0; $0.state = .scanning }
+        if job.isCancelled { finish(job, t0); return }
+        Log.info("\(job.kind.rawValue) \(job.id) start: \(job.items.count) item(s) -> \(job.destination)")
+        let renames = job.kind == .move ? job.items.filter { !$0.crossDevice } : []
+        let copies = job.kind == .move ? job.items.filter { $0.crossDevice } : job.items
+        var reserved = Set<String>()
+        if !renames.isEmpty { moveByRenaming(renames, job, &reserved) }
+        if !copies.isEmpty && !job.isCancelled { copyItems(copies, job, &reserved) }
+        finish(job, t0)
+    }
+
+    private static func grouped(_ items: [TransferItem]) -> [[TransferItem]] {
+        var out: [[TransferItem]] = []
+        for it in items {
+            if let last = out.last?.last, last.group == it.group { out[out.count - 1].append(it) } else { out.append([it]) }
+        }
+        return out
+    }
+
+    /// Final names for one group, checked against the disk now, or nil to skip the group.
+    /// `reserved` holds names given to earlier groups of this job (lowercased: most volumes ignore case).
+    private static func targetNames(_ group: [TransferItem], _ job: TransferJob, _ reserved: inout Set<String>) -> [String]? {
+        let dest = job.destination
+        let names = group.map { Paths.name($0.source) }
+        func free(_ ns: [String]) -> Bool {
+            return ns.allSatisfy { n in
+                var s = stat()
+                return !reserved.contains(n.lowercased()) && lstat(Paths.join(dest, n), &s) != 0
+            }
+        }
+        var chosen: [String]?
+        if free(names) {
+            chosen = names
+        } else if job.clash == .keepBoth || job.duplicate {
+            for n in (job.duplicate ? 1 : 2)...9999 {
+                let ns = zip(group, names).map { Transfers.numberedName($0.1, n, duplicate: job.duplicate, isFolder: $0.0.isFolder) }
+                if free(ns) { chosen = ns; break }
+            }
+        }
+        if let c = chosen { for n in c { reserved.insert(n.lowercased()) } }
+        return chosen
+    }
+
+    private static func moveByRenaming(_ items: [TransferItem], _ job: TransferJob, _ reserved: inout Set<String>) {
+        job.update { $0.state = .running; $0.totalFiles += items.count }
+        var pairs: [(String, String)] = []
+        for g in grouped(items) {
+            guard let names = targetNames(g, job, &reserved) else {
+                job.update { $0.skipped += g.count; $0.totalFiles -= g.count }
+                continue
+            }
+            for (it, n) in zip(g, names) { pairs.append((it.source, Paths.join(job.destination, n))) }
+        }
+        switch applyRenames(pairs, what: "move") {
+        case .success(let done):
+            job.moved = done
+            job.update { $0.doneFiles += done.count }
+        case .failure(let f):
+            job.update { $0.failures.append(f.message) }
+        }
+    }
+
+    private struct ScanNode {
+        let rel: String          // "" for the item itself
+        let kind: FileEntry.Kind
+        let size: Int64
+        let modified: Double
+        let created: Double
+    }
+
+    /// AppleDouble files ("._x") carry the metadata copyfile writes for the main file; copying
+    /// them as files races the OS (PhotoLab 1 lesson). Our own partial copies never travel.
+    private static func skipInCopy(_ name: String) -> Bool {
+        return name.hasPrefix("._") || name.hasPrefix(Transfers.partialPrefix)
+    }
+
+    /// Everything inside one item, parents before children; one (bulk) listing per folder.
+    private static func scan(_ path: String, _ job: TransferJob) -> (nodes: [ScanNode], error: String?) {
+        var st = stat()
+        if lstat(path, &st) != 0 { return ([], "it is no longer there") }
+        let kind = kindOf(st)
+        var nodes = [ScanNode(rel: "", kind: kind, size: kind == .file ? Int64(st.st_size) : 0,
+                              modified: DirectoryReader.seconds(st.st_mtimespec), created: DirectoryReader.seconds(st.st_birthtimespec))]
+        if kind == .other { return ([], "it is not a file or folder") }
+        guard kind == .directory else { return (nodes, nil) }
+        var stack = [""]
+        while let rel = stack.popLast() {
+            if job.isCancelled { return (nodes, nil) }
+            let dir = rel.isEmpty ? path : path + "/" + rel
+            let l = DirectoryReader.read(dir)
+            if l.error != 0 { return (nodes, "the folder \"\(Paths.name(dir))\" could not be read (\(l.errorText))") }
+            for e in l.entries where !skipInCopy(e.name) && e.kind != .other {
+                let r = rel.isEmpty ? e.name : rel + "/" + e.name
+                nodes.append(ScanNode(rel: r, kind: e.kind, size: e.size, modified: e.modified, created: e.created))
+                if e.kind == .directory { stack.append(r) }
+            }
+        }
+        return (nodes, nil)
+    }
+
+    private static func files(_ nodes: [ScanNode]) -> (count: Int, bytes: Int64) {
+        let f = nodes.filter { $0.kind != .directory }
+        return (f.count, f.reduce(Int64(0)) { $0 + $1.size })
+    }
+
+    private static func copyItems(_ items: [TransferItem], _ job: TransferJob, _ reserved: inout Set<String>) {
+        // 1. Scan first: totals for the progress bar, and the exact list of what is copied.
+        var scans: [String: [ScanNode]] = [:]
+        var scanErrors: [String: String] = [:]
+        for it in items {
+            if job.isCancelled { return }
+            job.update { $0.current = Paths.name(it.source) }
+            let r = scan(it.source, job)
+            if let e = r.error { scanErrors[it.source] = e; continue }
+            scans[it.source] = r.nodes
+            let f = files(r.nodes)
+            job.update { $0.totalFiles += f.count; $0.totalBytes += f.bytes }
+        }
+        job.testHookAfterScan?(job)
+        if job.isCancelled { return }
+        job.update { $0.state = .running }
+
+        // 2. Copy, a set at a time.
+        var metaWarned = false
+        var k = 0
+        for g in grouped(items) {
+            if job.isCancelled { break }
+            if let bad = g.first(where: { scanErrors[$0.source] != nil }) {
+                let text = "\(Paths.name(bad.source)): \(scanErrors[bad.source]!)" + (g.count > 1 ? " (its set was not \(job.kind == .copy ? "copied" : "moved"))" : "")
+                job.update { $0.failures.append(text) }
+                Log.error("E-OPS-6 \(job.kind.rawValue) \(job.id): \(bad.source): \(scanErrors[bad.source]!)")
+                for it in g { if let n = scans[it.source] { let f = files(n); job.update { $0.totalFiles -= f.count; $0.totalBytes -= f.bytes } } }
+                continue
+            }
+            guard let names = targetNames(g, job, &reserved) else {
+                for it in g { let f = files(scans[it.source]!); job.update { $0.skipped += 1; $0.totalFiles -= f.count; $0.totalBytes -= f.bytes } }
+                Log.info("\(job.kind.rawValue) \(job.id): skipped \(g.count) item(s), name taken: \(Paths.name(g[0].source))")
+                continue
+            }
+            var groupOK = true
+            var finals: [String] = []
+            for (it, name) in zip(g, names) {
+                if job.isCancelled { groupOK = false; break }
+                let final = Paths.join(job.destination, name)
+                let temp = Paths.join(job.destination, Transfers.partialPrefix + job.id + "-\(k)")
+                k += 1
+                AppFiles.notePartial(temp, active: true)
+                var problem = copyTree(it, scans[it.source]!, to: temp, job, &metaWarned)
+                if problem == nil && !job.isCancelled {
+                    let e = Platform.renameExclusive(temp, final)
+                    if e != 0 { problem = e == EEXIST ? "\"\(name)\" appeared in the destination meanwhile" : why(e) }
+                }
+                if problem != nil || job.isCancelled { _ = removePartial(temp) }
+                AppFiles.notePartial(temp, active: false)
+                if job.isCancelled { groupOK = false; break }
+                if let p = problem {
+                    groupOK = false
+                    job.update { $0.failures.append("\(Paths.name(it.source)): \(p)") }
+                    Log.error("E-OPS-6 \(job.kind.rawValue) \(job.id): \(it.source): \(p)")
+                    continue
+                }
+                job.created.append(final)
+                finals.append(final)
+            }
+            // A move removes the originals only when the whole set arrived and was verified.
+            if job.kind == .move && groupOK && !job.isCancelled {
+                var left = 0
+                for it in g { left += removeOriginals(it, scans[it.source]!) }
+                job.removedOriginals += g.count
+                if left > 0 {
+                    let note = "\(left) item(s) stayed in the original folder because they changed during the move."
+                    job.update { $0.notes.append(note) }
+                    Log.warn("W-OPS-4 move \(job.id): \(left) original(s) kept, changed during the move: \(g[0].source)")
+                }
+            }
+            if !finals.isEmpty { Log.info("\(job.kind.rawValue) \(job.id): " + finals.map { Paths.name($0) }.joined(separator: ", ")) }
+        }
+    }
+
+    /// Copy one scanned item to `temp`. Returns nil or the reason it failed.
+    private static func copyTree(_ item: TransferItem, _ nodes: [ScanNode], to temp: String, _ job: TransferJob, _ metaWarned: inout Bool) -> String? {
+        let src = item.source
+        for n in nodes {
+            if job.isCancelled { return "stopped" }
+            let from = n.rel.isEmpty ? src : src + "/" + n.rel
+            let to = n.rel.isEmpty ? temp : temp + "/" + n.rel
+            let shown = n.rel.isEmpty ? Paths.name(src) : n.rel
+            switch n.kind {
+            case .directory:
+                let e = Platform.makeFolder(to)
+                if e != 0 { return "the folder \"\(shown)\" could not be created (\(why(e)))" }
+            case .symlink:
+                let e = Platform.copySymlink(from, to)
+                if e != 0 { return "the link \"\(shown)\" could not be copied (\(why(e)))" }
+                job.update { $0.doneFiles += 1 }
+            case .file:
+                if let p = copyFile(from, to, n, sameDevice: !item.crossDevice, job, &metaWarned) {
+                    return n.rel.isEmpty ? p : "\"\(shown)\": \(p)"
+                }
+            case .other:
+                continue
+            }
+        }
+        // Folder dates last: adding the contents changed them.
+        for n in nodes.reversed() where n.kind == .directory {
+            let from = n.rel.isEmpty ? src : src + "/" + n.rel
+            let to = n.rel.isEmpty ? temp : temp + "/" + n.rel
+            if Platform.copyMetadata(from, to) != 0 && !metaWarned {
+                metaWarned = true
+                Log.warn("W-OPS-5 \(job.kind.rawValue) \(job.id): tags/permissions not copied for some items (first: \(from))")
+            }
+            _ = Platform.setDates(to, created: n.created, modified: n.modified)
+        }
+        return nil
+    }
+
+    private static func copyFile(_ from: String, _ to: String, _ n: ScanNode, sameDevice: Bool, _ job: TransferJob, _ metaWarned: inout Bool) -> String? {
+        job.update { $0.current = Paths.name(from) }
+        var cloned = false
+        if sameDevice {
+            if Platform.cloneFile(from, to) == 0 {
+                cloned = true
+                job.update { $0.doneBytes += n.size }
+            } else {
+                var s = stat()
+                if lstat(to, &s) == 0 { _ = Platform.removeFile(to) }     // our own half clone, if any
+            }
+        }
+        var copied: Int64 = 0
+        if !cloned {
+            let e = Platform.copyData(from, to) { bytes in
+                copied += bytes
+                job.update { $0.doneBytes += bytes }
+                return !job.isCancelled
+            }
+            if e != 0 {
+                job.update { $0.doneBytes -= copied }
+                return e == ECANCELED ? "stopped" : "could not be copied (\(why(e)))"
+            }
+        }
+        // Verify: the copy has the size the source had, and the source did not change meanwhile.
+        var d = stat(), s = stat()
+        let haveCopy = lstat(to, &d) == 0
+        let sourceSame = lstat(from, &s) == 0 && Int64(s.st_size) == n.size
+            && abs(DirectoryReader.seconds(s.st_mtimespec) - n.modified) < 1.0
+        if !haveCopy || Int64(d.st_size) != n.size || !sourceSame {
+            if haveCopy { _ = Platform.removeFile(to) }
+            job.update { $0.doneBytes -= cloned ? n.size : copied }
+            if !sourceSame { return "it changed while it was being copied" }
+            return haveCopy ? "the copy came out at the wrong size (\(d.st_size) of \(n.size) bytes)" : "the copy is missing after writing"
+        }
+        if !cloned && Platform.copyMetadata(from, to) != 0 && !metaWarned {
+            metaWarned = true
+            Log.warn("W-OPS-5 \(job.kind.rawValue) \(job.id): tags/permissions not copied for some items (first: \(from))")
+        }
+        _ = Platform.setDates(to, created: n.created, modified: n.modified)
+        job.update { $0.doneFiles += 1 }
+        return nil
+    }
+
+    /// Remove one of PhotoLab's own hidden partial copies (stopped, failed or interrupted).
+    @discardableResult
+    private static func removePartial(_ path: String) -> Bool {
+        guard Paths.name(path).hasPrefix(Transfers.partialPrefix) else { return false }
+        do { try FileManager.default.removeItem(atPath: path); return true } catch {
+            Log.error("E-OPS-7 partial copy not removed: \(path): \((error as NSError).localizedDescription)")
+            return false
+        }
+    }
+
+    /// Cross-volume move, after the copy is in place and verified: remove exactly the originals
+    /// that were copied, children first, and only if unchanged since the scan. Folders go only
+    /// when empty. Returns how many originals were kept.
+    private static func removeOriginals(_ item: TransferItem, _ nodes: [ScanNode]) -> Int {
+        var kept = 0
+        for n in nodes.reversed() {
+            let p = n.rel.isEmpty ? item.source : item.source + "/" + n.rel
+            var s = stat()
+            guard lstat(p, &s) == 0 else { continue }
+            switch n.kind {
+            case .directory:
+                _ = Platform.removeEmptyFolder(p)
+            case .file:
+                if Int64(s.st_size) != n.size || abs(DirectoryReader.seconds(s.st_mtimespec) - n.modified) >= 1.0 { kept += 1; continue }
+                if Platform.removeFile(p) != 0 { kept += 1 }
+            default:
+                if Platform.removeFile(p) != 0 { kept += 1 }
+            }
+        }
+        var s = stat()
+        if kept == 0 && lstat(item.source, &s) == 0 { kept = 1 }   // something new appeared inside
+        return kept
+    }
+
+    private static func finish(_ job: TransferJob, _ t0: Date) {
+        let state: TransferJob.State = job.isCancelled ? .stopped : (job.progress.failures.isEmpty ? .done : .failed)
+        job.update { $0.state = state; $0.finished = Date(); $0.current = "" }
+        let p = job.progress
+        let secs = Date().timeIntervalSince(t0)
+        let mb = Double(p.doneBytes) / 1_000_000
+        Log.info(String(format: "%@ %@ %@: %ld file(s), %.1f MB in %.1f s (%.1f MB/s), %ld skipped, %ld failed",
+                        job.kind.rawValue, job.id, state.rawValue, p.doneFiles, mb, secs, secs > 0 ? mb / secs : 0,
+                        p.skipped, p.failures.count))
+        if state == .stopped {
+            Log.warn("W-OPS-3 \(job.kind.rawValue) \(job.id) stopped by the user after \(p.doneFiles) file(s); the unfinished item was removed")
+        }
+        Stats.noteTransfer(files: p.doneFiles, bytes: p.doneBytes, seconds: secs,
+                           network: Volumes.isNetwork(job.destination), failed: p.failures.count)
+    }
+
+    /// At launch: hidden partial copies left by a stop in the middle of a copy are removed.
+    /// The originals were never touched (a move removes them only after the copy is complete).
+    static func recoverTransfers(quiet: Bool = false) -> String? {
+        let temps = AppFiles.readTransferJournal()
+        if temps.isEmpty { return nil }
+        var removed = 0
+        for t in temps {
+            var s = stat()
+            if lstat(t, &s) == 0 && removePartial(t) { removed += 1 }
+            AppFiles.notePartial(t, active: false)
+        }
+        if quiet {
+            Log.info("self-test: transfer recovery removed \(removed) partial copy(ies)")
+        } else {
+            Log.warn("W-OPS-6 an interrupted copy was found at launch; \(removed) unfinished item(s) removed")
+        }
+        return removed > 0 && !quiet ? "PhotoLab was stopped in the middle of a copy. \(removed) unfinished item(s) were removed, so no half-copied files are left. The originals were not touched: copy them again to finish." : nil
     }
 }

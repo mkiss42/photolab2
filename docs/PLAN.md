@@ -144,7 +144,15 @@ cache dir, volume marker).
 Nothing is deleted permanently (Trash only) - with one exception (lab decision 2026-11-25): on
 shares without a Trash (all of the lab's SMB shares), Move to Trash asks first, Finder-style
 ("deleted immediately, can't be undone"; Return does not confirm), and only then deletes. Nothing is overwritten (exclusive renames).
-Copies land under hidden temp names, are verified, then renamed. Metadata writes go to a
+Copies (0.3.0) land under a hidden, journaled name (`.photolab-partial-<job>-<n>`, a whole
+folder tree under one hidden name), every file is size-checked against the source and the
+source must be unchanged (size + date), then the item is renamed to its real name - never onto
+an existing one (Keep Both numbers it, Skip leaves it out; there is no Replace). A launch after
+an interruption removes the hidden partial copies. Sets travel whole. Moves on one volume are
+renames (journaled, all-or-nothing, undoable). Cross-volume moves (Cmd-drag, Cmd-Option-V) are
+the second exception to "Trash only": after the whole set's copy is in place and verified, the
+originals that were copied are removed, one by one, only if unchanged since the scan; anything
+added or changed meanwhile stays (W-OPS-4). Metadata writes go to a
 copy, are verified (requested values present, image data identical), then swapped.
 
 RAW files (lab decision 2026-11-25): metadata is written into RAWs as well as into sidecars
@@ -235,3 +243,4 @@ Each phase ends in something the lab can use. Exit criteria are tested on all th
 - 2026-11-25 — 0.2.0 file operations: sets = PhotoLab 1's GROUPABLE_EXTENSIONS (raws + jpg/jpeg/heic/heif + xmp/acr), a Settings switch, default on. Keys: Return/M rename, Cmd-E/Cmd-Down open, Backspace/Delete/Cmd-Backspace trash at once with undo. Shares without a Trash: items stay, never deleted.
 - 2026-11-25 — Shares without a Trash: permanent delete after an explicit Finder-style confirmation (W-OPS-2 logged per item). Local volumes keep Trash + undo.
 - 2026-11-25 — List shows one row per set while sets are on (Ext column after Name). Next work: copy/move engine, then browser parity, then contact sheet.
+- 2026-11-25 — 0.3.0 copy/move engine in Swift (FileOperations + Platform), not the brain: the user waits on it. Hidden journaled temp name per top-level item, size + unchanged-source check per file, APFS clone on one volume, 8 MB byte copy otherwise (close() checked for SMB errors), xattrs/mode via copyfile, creation date via setattrlist. One serial queue per destination volume. No Replace on name clashes: Keep Both / Skip / Stop. Cross-volume moves remove verified, unchanged originals (exception 2 to "Trash only"); no undo for those. Copy undo = copies to Trash.

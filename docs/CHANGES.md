@@ -1,5 +1,38 @@
 # Changes
 
+## 0.3.0 — copy, paste, drag and drop, duplicate
+
+- Cmd-C copies the selected files (with their whole set) to the clipboard; they paste in PhotoLab
+  and in Finder. Cmd-V pastes (copies) into the folder of the selection, or into the window's
+  folder. Cmd-Option-V moves them there instead (Finder's "Move Items Here"). Cmd-D duplicates
+  ("IMG_1 copy.CR3", a set stays a set). Also in the right-click menu and the Edit / File menus.
+- Drag and drop: drag rows to another folder, window or Finder; drop on a folder row (into it) or
+  anywhere else (into the folder shown). Like Finder: moves on the same volume, copies to another
+  one; hold Option to copy, Command to move. Drops from Finder work too.
+- Sets travel whole: dropping or pasting a RAW brings its JPG and XMP.
+- Never overwrites. A taken name asks once: Keep Both ("IMG_1 2.CR3", the whole set gets the same
+  number), Skip, or Stop. There is no Replace.
+- Safe copies: each item is written under a hidden name and only gets its real name when every
+  file in it is complete and the same size as the original, and the original did not change
+  meanwhile. Stop, a crash or a pulled cable never leave half-copied files under real names;
+  the next launch removes the hidden leftovers and says so.
+- Moves on one volume are instant renames. Moves to another volume copy, verify, and only then
+  remove the originals - and only the ones that did not change during the move.
+- Progress window (appears for copies longer than 0.6 s): bar, files, bytes, MB/s, Stop.
+- Undo: copy (the copies go to the Trash; on a share, after the delete warning), move on one
+  volume (moved back). A move to another volume can't be undone.
+- Short Report: new COPY line (jobs, files, MB, MB/s per local/share, failures).
+
+Test checklist (5 minutes; scratch folders, one local, one on a share):
+[ ] 1  Select a RAW with JPG+XMP, Cmd-C, click into another folder, Cmd-V: all three copied.
+[ ] 2  Cmd-V again: the Keep Both / Skip / Stop question. Keep Both: "... 2" for all three.
+[ ] 3  Cmd-Z: the copies go away (on a share: the delete warning first).
+[ ] 4  Drag a folder of a few GB from local to a share: progress window, MB/s. Press Stop:
+       nothing named like the folder is left on the share.
+[ ] 5  Drag a file within one share to a subfolder: moved at once. Cmd-Z: back.
+[ ] 6  Option-drag: copies instead. Cmd-D on a file: "name copy".
+[ ] 7  Short Report: COPY line shows the share MB/s; CODES has no E-OPS.
+
 ## 0.2.1 — delete on shares without a Trash
 
 - On a share with no Trash, Move to Trash now asks, like Finder: "This share has no Trash. The items

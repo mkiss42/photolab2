@@ -16,6 +16,8 @@ enum Stats {
     private static var slowIcons: [Double] = []
     private static var codes: [String: Int] = [:]
     private static var selfTest: [SelfTestResult] = []
+    private static var transfers: [Bool: (jobs: Int, files: Int, bytes: Int64, seconds: Double)] = [:]
+    private static var transferFailures = 0
     static let started = Date()
 
     static func noteListing(network: Bool, ms: Double, method: String, entries: Int) {
@@ -32,6 +34,14 @@ enum Stats {
         lock.lock(); defer { lock.unlock() }
         freezes.append(seconds)
         freezeWhat[kind, default: 0] += 1
+    }
+
+    static func noteTransfer(files: Int, bytes: Int64, seconds: Double, network: Bool, failed: Int) {
+        lock.lock(); defer { lock.unlock() }
+        var t = transfers[network] ?? (0, 0, 0, 0)
+        t.jobs += 1; t.files += files; t.bytes += bytes; t.seconds += seconds
+        transfers[network] = t
+        transferFailures += failed
     }
 
     static func noteCacheHit() { lock.lock(); cacheHits += 1; lock.unlock() }
@@ -96,6 +106,17 @@ enum Stats {
         let methods = Dictionary(grouping: (listings[false] ?? []) + (listings[true] ?? []), by: { $0.bulk ? "bulk" : "readdir" })
             .map { "\($0.key) \($0.value.count)" }.sorted().joined(separator: ", ")
         out.append("METHOD " + (methods.isEmpty ? "none" : methods))
+        if transfers.isEmpty {
+            out.append("COPY none")
+        } else {
+            let parts = [(false, "local"), (true, "share")].compactMap { (net, label) -> String? in
+                guard let t = transfers[net] else { return nil }
+                let mb = Double(t.bytes) / 1_000_000
+                return String(format: "%@ %ld job(s) %ld file(s) %.0f MB %.0f MB/s", label, t.jobs, t.files, mb,
+                              t.seconds > 0 ? mb / t.seconds : 0)
+            }
+            out.append("COPY " + parts.joined(separator: " | ") + " | \(transferFailures) failed")
+        }
         out.append(codes.isEmpty ? "CODES none"
                    : "CODES " + codes.sorted { $0.key < $1.key }.map { "\($0.key) x\($0.value)" }.joined(separator: ", "))
         out.append(brain.replacingOccurrences(of: "Brain: ", with: "BRAIN "))

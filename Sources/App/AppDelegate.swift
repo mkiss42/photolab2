@@ -7,15 +7,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var brain: BrainClient!
     private var napBlocker: NSObjectProtocol?
 
-    /// A rename interrupted by a crash or power loss is rolled back at launch.
+    /// A rename interrupted by a crash or power loss is rolled back at launch; hidden partial
+    /// copies left by an interrupted copy are removed.
     private func recoverInterruptedOperations() {
         DispatchQueue.global(qos: .userInitiated).async {
-            guard let text = FileOperations.recoverJournal() else { return }
-            DispatchQueue.main.async {
-                let a = NSAlert()
-                a.messageText = "An interrupted rename was undone"
-                a.informativeText = text
-                a.runModal()
+            let renamed = FileOperations.recoverJournal()
+            let copied = FileOperations.recoverTransfers()
+            for (title, text) in [("An interrupted rename was undone", renamed), ("An interrupted copy was cleaned up", copied)] {
+                guard let t = text else { continue }
+                DispatchQueue.main.async {
+                    let a = NSAlert()
+                    a.messageText = title
+                    a.informativeText = t
+                    a.runModal()
+                }
             }
         }
     }
@@ -141,6 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         item(file, "New Folder", #selector(BrowserWindowController.newFolder(_:)), "n", [.command, .shift])
         item(file, "Open", #selector(BrowserWindowController.openSelected(_:)), down)
         item(file, "Rename", #selector(BrowserWindowController.renameSelected(_:)), "", [])
+        item(file, "Duplicate", #selector(BrowserWindowController.duplicate(_:)), "d")
         file.addItem(NSMenuItem.separator())
         item(file, "Move to Trash", #selector(BrowserWindowController.moveToTrash(_:)), String(Character(UnicodeScalar(8))))
         file.addItem(NSMenuItem.separator())
@@ -152,6 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         edit.addItem(NSMenuItem.separator())
         item(edit, "Copy", #selector(NSText.copy(_:)), "c")
         item(edit, "Paste", #selector(NSText.paste(_:)), "v")
+        item(edit, "Move Items Here", #selector(BrowserWindowController.pasteMoving(_:)), "v", [.command, .option])
         item(edit, "Select All", #selector(NSText.selectAll(_:)), "a")
         edit.addItem(NSMenuItem.separator())
         item(edit, "Copy Path", #selector(BrowserWindowController.copyPaths(_:)), "c", [.command, .option])
@@ -203,6 +210,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             switch e.keyCode {
             case 1:  me.toggleSidebarMenu(nil); return nil                  // S
             case 8:  me.keyBrowser?.copyPaths(nil); return nil              // C
+            case 9:  me.keyBrowser?.pasteMoving(nil); return nil          // V
             default: return e
             }
         }

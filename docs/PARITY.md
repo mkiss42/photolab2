@@ -25,8 +25,8 @@ Status: **done** · **part** (exists, something missing) · **todo** (phase in b
 | Return renames; multi-select Return -> batch rename | part | single rename done (also M); batch renamer was a TODO in PL1 too -> todo (4) |
 | New Folder (Cmd-Shift-N) | done | PL1 asked for a name in a dialog; PL2 renames in place |
 | Delete / Backspace | done | Trash + undo; shares: confirmed delete |
-| Cmd-C copies files (set-expanded) to the clipboard; Cmd-V pastes (copies) into the folder | todo (1c) | needs the copy engine |
-| Drag out (set-expanded file URLs); drop into folders: move on same volume, copy across, Option = copy; drop highlight, autoscroll | todo (1c) | needs the copy engine |
+| Cmd-C copies files (set-expanded) to the clipboard; Cmd-V pastes (copies) into the folder | done (0.3.0) | + Cmd-Option-V moves, Cmd-D duplicates |
+| Drag out (set-expanded file URLs); drop into folders: move on same volume, copy across, Option = copy; drop highlight, autoscroll | done (0.3.0) | drags to Finder carry only the dragged rows until set rows arrive; drops in PhotoLab take the whole set |
 | Drop from the FTP browser | todo (6) | with FTP |
 | Cmd-/ force refresh (expanded folders too) | done | Cmd-R; add Cmd-/ alias (1c) |
 | Refresh Selected (re-read; nuke derived caches for files) | todo (3) | caches arrive with the brain |
@@ -90,9 +90,28 @@ Status: **done** · **part** (exists, something missing) · **todo** (phase in b
 | Subprocess preview pools, shared memory, deficiency engine, memo DB | drop | ImageIO in-process |
 | pipeline_telemetry | drop | logs + Short Report |
 
+## File operations (audited: fs_ops_manager.py, fs_ops_panel.py)
+
+| PhotoLab 1 | Status | Notes |
+|---|---|---|
+| Copy / move / rename / delete on background threads, progress per job | done (0.3.0) | one serial queue per destination volume |
+| Group expander: a set travels whole | done (0.3.0) | also skipped / numbered as one |
+| Safe mode: temp file + atomic rename, size verify | done (0.3.0) | temp is hidden + journaled; whole folder under one temp name; source must be unchanged |
+| Containment guard (no copy into itself), listing before mkdir, depth guard | done (0.3.0) | scan first, then write |
+| Skip AppleDouble `._` and own temps when copying | done (0.3.0) | |
+| Cross-device move: per source, originals deleted only if every file copied | done (0.3.0) | stricter: only unchanged originals, files one by one |
+| Failures recorded and continue; summary at the end | done (0.3.0) | E-OPS-6 per item, sheet at the end |
+| Mac metadata: copystat, xattrs, SetFile birthtime | done (0.3.0) | copyfile XATTR+STAT, setattrlist crtime (no SetFile binary) |
+| Conflicts: pause, "skip all" or cancel | done (0.3.0) | Keep Both / Skip / Stop; never Replace |
+| Undo (journal rollback) | done (0.3.0) | copy: to Trash; same-volume move: rename back; cross-volume move: none |
+| Panel: auto-show, row per job, cancel, auto-hide after 4 s | done (0.3.0) | shown only after 0.6 s |
+| Per-job settings (workers, chunk size) | drop | one tuned path: clone, else 8 MB chunks |
+| SQLite history of the last 100 operations | todo (later) | the log has every job line for now |
+| Folder merge on clash | todo (BACKLOG) | PhotoLab 1 merged silently (exist_ok); PL2 asks Keep Both / Skip |
+
 ## Not audited yet
 
-crumb_bar, sidebar_left, toolbar, fs_ops_manager, fs_ops_panel, dock_manager, combo_win,
+crumb_bar, sidebar_left, toolbar, dock_manager, combo_win,
 mainwindow, preview_3, metadata_editor, metadata_panel, metadata_fields, metadata_stationery,
 search_dialog, star_widget, color_widget, tag_menu, open_with, ftp_tree, ftp_client,
 ingest_dialog, server_config_dialog, app_prefs + settings_config.json, style, splash.

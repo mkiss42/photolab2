@@ -5,6 +5,9 @@
 // - Re-listing keeps expanded subfolders open and the selection (by path): folder nodes are
 //   reused by path, so NSOutlineView keeps their state.
 // - No disk access on the main thread: icons and kinds come from the file extension only.
+// - Drag and drop: rows drag out as file URLs; files dropped on a folder row go into it, dropped
+//   anywhere else into the folder the row is in (or the window's folder). Like Finder: move on
+//   the same volume, copy to another; Option copies, Command moves.
 
 import AppKit
 
@@ -137,6 +140,10 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     var onNeedChildren: ((String) -> Void)?
     /// The set of expanded folders changed (the window watches them).
     var onExpandedChange: ((Set<String>) -> Void)?
+    /// Files dropped: (paths, destination folder, copy or move).
+    var onDrop: (([String], String, TransferKind) -> Void)?
+    /// The folder the window shows (drops between top-level rows go here).
+    var rootPath = "/"
 
     private let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -177,6 +184,10 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         table.onTrash = { [weak self] in self?.onTrashRequest?() }
         table.contextMenu = { [weak self] in self?.contextMenu() }
         table.sortDescriptors = [NSSortDescriptor(key: EntrySort.Key.name.rawValue, ascending: true)]
+        table.registerForDraggedTypes([.fileURL])
+        table.setDraggingSourceOperationMask([.copy, .move], forLocal: true)
+        table.setDraggingSourceOperationMask([.copy, .move, .generic], forLocal: false)
+        table.draggingDestinationFeedbackStyle = .regular
 
         scroll.documentView = table
         scroll.hasVerticalScroller = true
@@ -349,6 +360,15 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
             add("Open", "openSelected:")
             if sel.count == 1 { add("Rename", "renameSelected:") }
             m.addItem(NSMenuItem.separator())
+            add("Copy", "copy:")
+        }
+        if NSPasteboard.general.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) {
+            add("Paste", "paste:")
+            add("Move Items Here", "pasteMoving:")
+        }
+        if !sel.isEmpty {
+            add("Duplicate", "duplicate:")
+            m.addItem(NSMenuItem.separator())
             add("Copy Path", "copyPaths:")
             m.addItem(NSMenuItem.separator())
         }
@@ -411,6 +431,84 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     func openSelection() {
         let sel = selectedEntries()
         if !sel.isEmpty { onOpen?(sel) }
+    }
+
+    /// Paths of `entries` plus the other files of their sets, from the listings in memory (no
+    /// disk access: safe on the main thread). Sets off: just the entries.
+    func withSetMembers(_ entries: [FileEntry]) -> [String] {
+        var out: [String] = []
+        var seen = Set<String>()
+        for e in entries {
+            var members = [e.path]
+            if FileOperations.useSets && !e.isDirectory && FileOperations.groupable.contains(e.ext) {
+                let dir = Paths.parent(e.path)
+                let siblings = dir == rootPath ? rootEntries : (nodesByPath[dir]?.allChildren ?? [])
+                let stem = FileOperations.split(e.name).stem
+                members += siblings.filter { s in
+                    !s.isDirectory && FileOperations.groupable.contains(s.ext) && FileOperations.split(s.name).stem == stem
+                }.map { $0.path }
+            }
+            for m in members where !seen.contains(m) { seen.insert(m); out.append(m) }
+        }
+        return out
+    }
+
+    // MARK: Drag and drop
+
+    func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
+        guard editing == nil, let n = item as? FileNode, !n.isPlaceholder else { return nil }
+        return NSURL(fileURLWithPath: n.entry.path)
+    }
+
+    private func droppedPaths(_ info: NSDraggingInfo) -> [String] {
+        let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        return urls.map { $0.path }
+    }
+
+    /// The folder a drop at (item, index) goes into: a folder row itself, otherwise the folder the
+    /// row is in. Re-targets the outline's highlight to match.
+    private func dropFolder(_ ov: NSOutlineView, _ item: Any?, _ index: Int) -> String {
+        if let n = item as? FileNode, !n.isPlaceholder {
+            if n.isExpandableFolder {
+                if index != NSOutlineViewDropOnItemIndex { ov.setDropItem(n, dropChildIndex: NSOutlineViewDropOnItemIndex) }
+                return n.entry.path
+            }
+            let parent = ov.parent(forItem: n)
+            ov.setDropItem(parent, dropChildIndex: NSOutlineViewDropOnItemIndex)
+            return (parent as? FileNode)?.entry.path ?? rootPath
+        }
+        if item != nil { ov.setDropItem(nil, dropChildIndex: NSOutlineViewDropOnItemIndex) }
+        if item == nil && index != NSOutlineViewDropOnItemIndex { ov.setDropItem(nil, dropChildIndex: NSOutlineViewDropOnItemIndex) }
+        return rootPath
+    }
+
+    private func dropKind(_ info: NSDraggingInfo, _ paths: [String], _ dest: String) -> TransferKind? {
+        let mods = NSEvent.modifierFlags
+        let same = paths.allSatisfy { Transfers.sameVolume($0, dest) }
+        var kind = Transfers.dropOperation(sameVolume: same, option: mods.contains(.option), command: mods.contains(.command))
+        let allowed = info.draggingSourceOperationMask
+        if kind == .move && !allowed.contains(.move) && !allowed.contains(.generic) { kind = .copy }
+        if kind == .copy && !allowed.contains(.copy) { return allowed.contains(.move) ? .move : nil }
+        return kind
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo, proposedItem item: Any?, proposedChildIndex index: Int) -> NSDragOperation {
+        let paths = droppedPaths(info)
+        guard !paths.isEmpty, editing == nil else { return [] }
+        let dest = dropFolder(outlineView, item, index)
+        if paths.contains(dest) { return [] }                                   // onto itself
+        guard let kind = dropKind(info, paths, dest) else { return [] }
+        if kind == .move && paths.allSatisfy({ Paths.parent($0) == dest }) { return [] }   // already there
+        return kind == .copy ? .copy : .move
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, acceptDrop info: NSDraggingInfo, item: Any?, childIndex index: Int) -> Bool {
+        let paths = droppedPaths(info)
+        let dest = (item as? FileNode)?.entry.path ?? rootPath
+        guard !paths.isEmpty, let kind = dropKind(info, paths, dest) else { return false }
+        Log.info("drop: \(paths.count) item(s), \(kind.rawValue) -> \(dest)")
+        onDrop?(paths, dest, kind)
+        return true
     }
 
     // MARK: Data source

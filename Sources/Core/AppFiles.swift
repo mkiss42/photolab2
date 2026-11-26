@@ -80,6 +80,36 @@ enum AppFiles {
         }
     }
 
+    // MARK: Transfer journal (partial copies in progress)
+
+    static var transferJournalPath: String { return supportDir + "/transfer-journal.json" }
+    private static let transferLock = NSLock()
+
+    /// Hidden partial copies being written right now. Kept on the local disk; written when an
+    /// item starts and when it is finished (not per file), so it costs nothing on a share.
+    static func readTransferJournal() -> [String] {
+        guard let d = FileManager.default.contents(atPath: transferJournalPath),
+            let obj = (try? JSONSerialization.jsonObject(with: d, options: [])) as? [String: Any],
+            let temps = obj["partial"] as? [String] else { return [] }
+        return temps
+    }
+
+    static func notePartial(_ path: String, active: Bool) {
+        transferLock.lock(); defer { transferLock.unlock() }
+        var temps = readTransferJournal()
+        if active { if !temps.contains(path) { temps.append(path) } } else { temps.removeAll { $0 == path } }
+        ensureDirectories()
+        if temps.isEmpty {
+            if FileManager.default.fileExists(atPath: transferJournalPath) {
+                try? FileManager.default.removeItem(atPath: transferJournalPath)
+            }
+            return
+        }
+        let obj: [String: Any] = ["partial": temps, "time": Date().timeIntervalSince1970]
+        guard let d = try? JSONSerialization.data(withJSONObject: obj, options: []) else { return }
+        try? d.write(to: URL(fileURLWithPath: transferJournalPath), options: .atomic)
+    }
+
     // MARK: Self-test fixtures (inside the caches folder only)
 
     /// A fresh folder for the file-operation self-test:
@@ -100,6 +130,22 @@ enum AppFiles {
             return nil
         }
         return dir
+    }
+
+    /// Self-test only: a file with `bytes` bytes and a known modification date, or a folder.
+    static func makeTestFile(_ path: String, bytes: Int, modified: Double) -> Bool {
+        let data = Data((0..<bytes).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ 7) })
+        guard FileManager.default.createFile(atPath: path, contents: data, attributes: nil) else { return false }
+        return (try? FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: modified)],
+                                                       ofItemAtPath: path)) != nil
+    }
+
+    static func makeTestFolder(_ path: String) -> Bool {
+        return (try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true, attributes: nil)) != nil
+    }
+
+    static func makeTestSymlink(_ path: String, to target: String) -> Bool {
+        return (try? FileManager.default.createSymbolicLink(atPath: path, withDestinationPath: target)) != nil
     }
 
     static func removeOpsFixture(_ dir: String) {
