@@ -156,7 +156,9 @@ it back and says so.
 - Releases are small: version bump, 5-minute test checklist in `docs/CHANGES.md`, a
   `PhotoLab2.dmg` artifact from CI.
 - Testing on real hardware every release: one 10.13 Intel Mac, one Intel Mac on 11+, one
-  Apple Silicon Mac. Help → "Save Report…" zips logs for the chat.
+  Apple Silicon Mac. **The lab Macs are air-gapped**: results come back retyped by hand, so
+  Help → Short Report gives ~8 lines with no paths or names, and every diagnostic that matters
+  must fit in it or in a single self-test line. Full logs only when really needed.
 - Logs: plain ASCII, one fact per line, stable error codes (`E-AREA-n`).
 - Self-tests built into the app (`--self-test`, also Help menu): safety, listing,
   thumbnails/embedded previews, metadata round trip, protocol.
@@ -199,3 +201,5 @@ Each phase ends in something the lab can use. Exit criteria are tested on all th
 - 2026-11-25 — Shared cache keyed by (volume_id, rel_path, size, mtime) covers thumbnails/previews, exif results, embeddings, listings; listings used for search only, never shown as current.
 - 2026-11-25 — GitHub repo + GitHub Actions macOS CI is the build loop.
 - 2026-11-25 — Phase 0 done. Brain runtime = python-build-standalone 3.11 per architecture (x86_64 runs on 10.13, verified on the lab's 10.13 Mac). Nested binaries are signed one by one (codesign --deep rejects non-bundle folders).
+- 2026-11-25 — Lab Macs are air-gapped; feedback is retyped. Short Report (no paths) is the primary channel; captured real-world data becomes self-test vectors.
+- 2026-11-25 — getattrlistbulk: fixed part is 108 bytes; the file-size field is present only for files (smbfs/HFS+ omit it for folders). Fallback is per item / per folder / per volume, never session-wide.
