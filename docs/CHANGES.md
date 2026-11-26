@@ -1,5 +1,33 @@
 # Changes
 
+## 0.2.0 — rename, new folder, Trash, undo (first release that changes files)
+
+- Rename: Return or M (M right after typing other letters is still type-to-select). The name
+  without its extension is selected; Esc cancels. Cmd-E, Cmd-Down and double-click open.
+- Sets (Settings > Files, on by default): raw + jpg/jpeg/heic + xmp/acr with the same name rename
+  and go to the Trash together, exactly PhotoLab 1's grouping (tif/psd/png never join a set).
+  Changing the extension while renaming renames only that one file.
+- Never overwrites: a name already in use refuses the whole rename and changes nothing. A set is
+  renamed all-or-nothing; if one file fails, the others are put back.
+- Move to Trash: Cmd-Backspace, Backspace or Delete, at once. Nothing is ever deleted permanently;
+  if a share has no Trash the items stay where they are and PhotoLab says so.
+- Undo / Redo (Cmd-Z / Cmd-Shift-Z): rename, Move to Trash (puts back), New Folder.
+- New Folder: Cmd-Shift-N, starts renaming it.
+- Right-click an item: Open, Rename, Copy Path, New Folder, Move to Trash.
+- Crash safety: a multi-file rename is journaled; if PhotoLab stops in the middle, the next launch
+  gives the files their old names back and says so.
+- App Nap is off for PhotoLab, so folder polling keeps its timing in the background (and the
+  occasional 0.26 s "idle" freeze was most likely the Mac napping the app).
+
+Test checklist (5 minutes) - please use a scratch folder first, then a share:
+[ ] 1  Rename a RAW that has a JPG and XMP: all three get the new name. Cmd-Z: all three back.
+[ ] 2  Rename onto a name that exists: refused, nothing changed.
+[ ] 3  Settings > Files off: rename the RAW alone. Turn it back on.
+[ ] 4  Backspace on a RAW of a set: the set goes to the Trash (the PSD stays). Cmd-Z: back.
+[ ] 5  On a share: Backspace. Moved to the share's Trash, or a message that it has none?
+[ ] 6  Cmd-Shift-N: "untitled folder" appears in rename mode. Type a name, Return.
+[ ] 7  Help -> Run Self-Test (new ops-* lines) and Short Report.
+
 ## 0.1.6 — spinner on enter, Computer, copy paths
 
 - Fixed: no spinner (and no "Empty folder" text) in the list - they were inside the list's scroll

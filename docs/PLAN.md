@@ -228,3 +228,4 @@ Each phase ends in something the lab can use. Exit criteria are tested on all th
 - 2026-11-25 — Tools/plugins live in the brain and return proposed changes; the app is the only writer.
 - 2026-11-25 — RAW writes default to ExifTool -overwrite_original without image-data verification (speed; years of clean use in the lab); "Verified RAW writes" is an opt-in setting. Conflicts: newest MetadataDate/mtime wins, sidecar on ties.
 - 2026-11-25 — Conflict rule: the winner is taken as a whole; emptied fields propagate (user: clearing a field is intentional).
+- 2026-11-25 — 0.2.0 file operations: sets = PhotoLab 1's GROUPABLE_EXTENSIONS (raws + jpg/jpeg/heic/heif + xmp/acr), a Settings switch, default on. Keys: Return/M rename, Cmd-E/Cmd-Down open, Backspace/Delete/Cmd-Backspace trash at once with undo. Shares without a Trash: items stay, never deleted.

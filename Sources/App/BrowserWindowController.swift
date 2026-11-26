@@ -151,6 +151,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         list.onOpen = { [weak self] sel in self?.open(sel) }
         list.onSelectionChange = { [weak self] in self?.updateStatus() }
         list.onNeedChildren = { [weak self] p in self?.loadChildren(p) }
+        list.onRenameRequest = { [weak self] in self?.renameSelected(nil) }
+        list.onTrashRequest = { [weak self] in self?.moveToTrash(nil) }
+        list.onRenameCommit = { [weak self] e, name in self?.commitRename(e, name) }
         list.onExpandedChange = { [weak self] set in self?.watchExpanded(set) }
         list.showHidden = BrowserWindowController.showHidden
 
@@ -498,6 +501,135 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
     }
 
+    // MARK: File operations (background queue; results and undo on the main thread)
+
+    private let opsQueue = DispatchQueue(label: "photolab.ops", qos: .userInitiated)
+
+    private func showProblem(_ title: String, _ text: String) {
+        guard let w = window else { return }
+        let a = NSAlert()
+        a.messageText = title
+        a.informativeText = text
+        a.beginSheetModal(for: w, completionHandler: nil)
+    }
+
+    /// Re-read the folders an operation touched (the window's folder and any expanded ones).
+    private func reloadAfterOp(_ dirs: Set<String>, select: [String]? = nil) {
+        for d in dirs { ListingCache.shared.invalidate(d) }
+        if dirs.contains(currentPath) { load(select: select, useCache: false) }
+        for d in dirs where d != currentPath { list.relist(path: d) }
+    }
+
+    @objc func renameSelected(_ sender: Any?) {
+        if !list.beginRename() { NSSound.beep() }
+    }
+
+    private func commitRename(_ entry: FileEntry, _ newName: String) {
+        let dir = Paths.parent(entry.path)
+        Activity.set("ops: rename")
+        opsQueue.async { [weak self] in
+            let r = FileOperations.rename(entry.path, to: newName)
+            Activity.set("idle")
+            DispatchQueue.main.async {
+                guard let me = self else { return }
+                switch r {
+                case .failure(let f):
+                    me.showProblem("Not renamed", f.message)
+                case .success(let pairs):
+                    me.registerUndoRename(pairs, name: pairs.count > 1 ? "Rename Set" : "Rename")
+                    me.reloadAfterOp([dir], select: dir == me.currentPath ? [newName] : nil)
+                }
+            }
+        }
+    }
+
+    /// Undo of a rename is the reverse rename; registering it inside the undo handler makes AppKit
+    /// file it as the redo.
+    private func registerUndoRename(_ pairs: [(String, String)], name: String) {
+        guard let um = window?.undoManager, !pairs.isEmpty else { return }
+        um.registerUndo(withTarget: self) { me in
+            let back = Array(pairs.map { ($0.1, $0.0) }.reversed())
+            me.registerUndoRename(back, name: name)
+            me.opsQueue.async {
+                let r = FileOperations.applyRenames(back, what: "undo rename")
+                DispatchQueue.main.async {
+                    if case .failure(let f) = r { me.showProblem("Could not undo the rename", f.message) }
+                    me.reloadAfterOp(Set(back.map { Paths.parent($0.0) }))
+                }
+            }
+        }
+        um.setActionName(name)
+    }
+
+    @objc func moveToTrash(_ sender: Any?) {
+        let sel = list.selectedEntries().map { $0.path }
+        guard !sel.isEmpty else { NSSound.beep(); return }
+        performTrash(sel, sets: FileOperations.useSets)
+    }
+
+    /// Trash; undo puts back, redo trashes the same items again.
+    private func performTrash(_ paths: [String], sets: Bool) {
+        Activity.set("ops: trash")
+        opsQueue.async { [weak self] in
+            let r = FileOperations.trash(paths, sets: sets)
+            Activity.set("idle")
+            DispatchQueue.main.async {
+                guard let me = self else { return }
+                if !r.done.isEmpty { me.registerUndoTrash(r.done) }
+                if !r.failures.isEmpty {
+                    me.showProblem("Some items were not moved to the Trash",
+                                   r.failures.joined(separator: "\n") + "\n\nThey are still where they were.")
+                }
+                me.reloadAfterOp(Set(paths.map { Paths.parent($0) }))
+            }
+        }
+    }
+
+    private func registerUndoTrash(_ items: [FileOperations.Trashed]) {
+        guard let um = window?.undoManager else { return }
+        um.registerUndo(withTarget: self) { me in
+            // Redo = trash exactly these items again (the set was already expanded).
+            um.registerUndo(withTarget: me) { me2 in me2.performTrash(items.map { $0.original }, sets: false) }
+            um.setActionName("Move to Trash")
+            me.opsQueue.async {
+                let failures = FileOperations.putBack(items)
+                DispatchQueue.main.async {
+                    if !failures.isEmpty { me.showProblem("Some items could not be put back", failures.joined(separator: "\n")) }
+                    me.reloadAfterOp(Set(items.map { Paths.parent($0.original) }), select: items.map { Paths.name($0.original) })
+                }
+            }
+        }
+        um.setActionName("Move to Trash")
+    }
+
+    @objc func newFolder(_ sender: Any?) {
+        let dir = currentPath
+        opsQueue.async { [weak self] in
+            let r = FileOperations.newFolder(in: dir)
+            DispatchQueue.main.async {
+                guard let me = self else { return }
+                switch r {
+                case .failure(let f): me.showProblem("No new folder", f.message)
+                case .success(let p):
+                    if let um = me.window?.undoManager {
+                        um.registerUndo(withTarget: me) { me2 in
+                            me2.opsQueue.async {
+                                let problem = FileOperations.removeNewFolder(p)
+                                DispatchQueue.main.async {
+                                    if let t = problem { me2.showProblem("The new folder was kept", t) }
+                                    me2.reloadAfterOp([dir])
+                                }
+                            }
+                        }
+                        um.setActionName("New Folder")
+                    }
+                    me.list.pendingEdit = p
+                    me.reloadAfterOp([dir], select: [Paths.name(p)])
+                }
+            }
+        }
+    }
+
     // MARK: Expanded subfolders
 
     /// List an expanded subfolder in the background (same cache and reader as the main listing).
@@ -571,6 +703,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         case #selector(goForward(_:))?: return !forwardStack.isEmpty
         case #selector(goEnclosingFolder(_:))?: return currentPath != "/"
         case #selector(openSelected(_:))?: return list.selectionCount > 0
+        case #selector(renameSelected(_:))?: return list.selectionCount == 1
+        case #selector(moveToTrash(_:))?: return list.selectionCount > 0
         case #selector(toggleHidden(_:))?:
             item.state = BrowserWindowController.showHidden ? .on : .off
             return true

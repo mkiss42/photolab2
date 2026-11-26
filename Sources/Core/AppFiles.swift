@@ -54,7 +54,63 @@ enum AppFiles {
         }
     }
 
+    // MARK: Operation journal (support folder)
+
+    static var journalPath: String { return supportDir + "/operation-journal.json" }
+
+    /// Written before a multi-step operation, removed when it finishes (see FileOperations).
+    static func writeJournal(op: String, pairs: [(String, String)]) {
+        ensureDirectories()
+        let obj: [String: Any] = ["op": op, "pairs": pairs.map { [$0.0, $0.1] }, "time": Date().timeIntervalSince1970]
+        guard let d = try? JSONSerialization.data(withJSONObject: obj, options: []) else { return }
+        try? d.write(to: URL(fileURLWithPath: journalPath), options: .atomic)
+    }
+
+    static func readJournal() -> (op: String, pairs: [(String, String)])? {
+        guard let d = FileManager.default.contents(atPath: journalPath),
+            let obj = (try? JSONSerialization.jsonObject(with: d, options: [])) as? [String: Any],
+            let op = obj["op"] as? String, let raw = obj["pairs"] as? [[String]] else { return nil }
+        let pairs = raw.compactMap { $0.count == 2 ? ($0[0], $0[1]) : nil }
+        return (op, pairs)
+    }
+
+    static func clearJournal() {
+        if FileManager.default.fileExists(atPath: journalPath) {
+            try? FileManager.default.removeItem(atPath: journalPath)
+        }
+    }
+
     // MARK: Self-test fixtures (inside the caches folder only)
+
+    /// A fresh folder for the file-operation self-test:
+    ///   IMG_1.CR3, IMG_1.JPG, IMG_1.xmp, IMG_1.psd (derivative: never part of the set), IMG_2.CR3
+    static func makeOpsFixture() -> String? {
+        let base = selfTestDir
+        let dir = base + "/ops-\(ProcessInfo.processInfo.processIdentifier)"
+        let fm = FileManager.default
+        if let old = try? fm.contentsOfDirectory(atPath: base) {
+            for n in old where n.hasPrefix("ops-") { try? fm.removeItem(atPath: base + "/" + n) }
+        }
+        do {
+            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: nil)
+            for name in ["IMG_1.CR3", "IMG_1.JPG", "IMG_1.xmp", "IMG_1.psd", "IMG_2.CR3"] {
+                guard fm.createFile(atPath: dir + "/" + name, contents: Data(name.utf8), attributes: nil) else { return nil }
+            }
+        } catch {
+            return nil
+        }
+        return dir
+    }
+
+    static func removeOpsFixture(_ dir: String) {
+        guard dir.hasPrefix(selfTestDir + "/ops-") else { return }
+        try? FileManager.default.removeItem(atPath: dir)
+    }
+
+    /// Self-test only: a journal describing a rename that was interrupted after its first step.
+    static func writeTestJournal(from: String, to: String) {
+        writeJournal(op: "rename", pairs: [(from, to)])
+    }
 
     static var selfTestDir: String { return cachesDir + "/selftest" }
 

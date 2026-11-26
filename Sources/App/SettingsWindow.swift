@@ -6,6 +6,7 @@ import AppKit
 final class SettingsWindow: NSWindowController {
     private static var shared: SettingsWindow?
     private let pathBarBottom = NSButton(checkboxWithTitle: "Path bar below the list (instead of above)", target: nil, action: nil)
+    private let fileSets = NSButton(checkboxWithTitle: "Treat raw + jpg + xmp with the same name as one set (rename and Trash all of them)", target: nil, action: nil)
 
     static func show() {
         let w = shared ?? SettingsWindow()
@@ -16,7 +17,7 @@ final class SettingsWindow: NSWindowController {
     }
 
     init() {
-        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 140),
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 200),
                            styleMask: [.titled, .closable], backing: .buffered, defer: false)
         win.title = "Settings"
         win.isReleasedWhenClosed = false
@@ -26,7 +27,11 @@ final class SettingsWindow: NSWindowController {
         title.font = NSFont.boldSystemFont(ofSize: 13)
         pathBarBottom.target = self
         pathBarBottom.action = #selector(changed(_:))
-        let stack = NSStackView(views: [title, pathBarBottom])
+        fileSets.target = self
+        fileSets.action = #selector(changed(_:))
+        let filesTitle = NSTextField(labelWithString: "Files")
+        filesTitle.font = NSFont.boldSystemFont(ofSize: 13)
+        let stack = NSStackView(views: [title, pathBarBottom, filesTitle, fileSets])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -39,9 +44,15 @@ final class SettingsWindow: NSWindowController {
 
     private func refresh() {
         pathBarBottom.state = BrowserWindowController.pathBarAtBottom ? .on : .off
+        fileSets.state = FileOperations.useSets ? .on : .off
     }
 
     @objc private func changed(_ sender: Any?) {
+        if (sender as? NSButton) === fileSets {
+            FileOperations.useSets = fileSets.state == .on
+            Log.info("setting: file sets \(FileOperations.useSets ? "on" : "off")")
+            return
+        }
         BrowserWindowController.pathBarAtBottom = pathBarBottom.state == .on
         Log.info("setting: path bar \(BrowserWindowController.pathBarAtBottom ? "below" : "above") the list")
         NotificationCenter.default.post(name: .layoutSettingsChanged, object: nil)

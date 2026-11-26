@@ -10,6 +10,7 @@ enum SelfTestRunner {
     static func runAll() -> [SelfTestResult] {
         var results = CoreSelfTest.run()
         results += ListingSelfTest.run()
+        results += FileOpsSelfTest.run()
         results.append(brainPing())
         results.append(architecture())
         Stats.noteSelfTest(results)

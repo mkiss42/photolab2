@@ -29,14 +29,33 @@ final class FileNode: NSObject {
 
 final class FileOutlineView: NSOutlineView {
     var onOpen: (() -> Void)?
+    var onRename: (() -> Void)?
+    var onTrash: (() -> Void)?
+    var contextMenu: (() -> NSMenu?)?
+    private var lastTypeSelect = Date.distantPast
 
+    /// Return or M: rename (Photo Mechanic and Finder). Cmd-E / Cmd-Down: open.
+    /// Backspace / forward Delete / Cmd-Backspace: move to Trash.
+    /// "m" right after other typing is type-select, not rename.
     override func keyDown(with event: NSEvent) {
-        let returnKeys: Set<UInt16> = [36, 76]    // Return, keypad Enter
-        if returnKeys.contains(event.keyCode) && event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty {
-            onOpen?()
-            return
+        let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        if (event.keyCode == 36 || event.keyCode == 76) && mods.isEmpty { onRename?(); return }          // Return, Enter
+        if (event.keyCode == 51 || event.keyCode == 117) && (mods.isEmpty || mods == [.command]) {      // Backspace, Delete
+            onTrash?(); return
         }
+        if mods == [.command] && chars == "e" { onOpen?(); return }
+        if mods.isEmpty && chars == "m" && Date().timeIntervalSince(lastTypeSelect) > 1.0 { onRename?(); return }
+        if mods.isEmpty || mods == [.shift] { lastTypeSelect = Date() }
         super.keyDown(with: event)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let row = self.row(at: convert(event.locationInWindow, from: nil))
+        if row >= 0 && !selectedRowIndexes.contains(row) {
+            selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        }
+        return contextMenu?() ?? super.menu(for: event)
     }
 }
 
@@ -76,7 +95,7 @@ enum FileIcons {
     }
 }
 
-final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate {
+final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSTextFieldDelegate {
     /// What the window lays out: the scroll view plus an overlay (message + spinner) on top of it.
     /// The overlay must be a sibling above the scroll view: views added inside a scroll view are
     /// drawn over by the list (0.1.3-0.1.5 showed neither message nor spinner).
@@ -104,8 +123,15 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     var foldersFirst = true
     var showHidden = false
 
-    /// Double-click, Return.
+    /// Double-click, Cmd-E, Cmd-Down.
     var onOpen: (([FileEntry]) -> Void)?
+    /// Return / M, Backspace: the window decides what to rename or trash.
+    var onRenameRequest: (() -> Void)?
+    var onTrashRequest: (() -> Void)?
+    /// A rename typed in place: (item, new name).
+    var onRenameCommit: ((FileEntry, String) -> Void)?
+    /// Name to start editing as soon as it shows up (new folder).
+    var pendingEdit: String?
     var onSelectionChange: (() -> Void)?
     /// The window lists `path` in the background and then calls setChildren(...).
     var onNeedChildren: ((String) -> Void)?
@@ -147,6 +173,9 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         table.target = self
         table.doubleAction = #selector(doubleClicked(_:))
         table.onOpen = { [weak self] in self?.openSelection() }
+        table.onRename = { [weak self] in self?.onRenameRequest?() }
+        table.onTrash = { [weak self] in self?.onTrashRequest?() }
+        table.contextMenu = { [weak self] in self?.contextMenu() }
         table.sortDescriptors = [NSSortDescriptor(key: EntrySort.Key.name.rawValue, ascending: true)]
 
         scroll.documentView = table
@@ -241,6 +270,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     /// The folder on screen. Keeps expanded subfolders and the selection, unless `select`
     /// (names in this folder) is given.
     func setEntries(_ entries: [FileEntry], select: [String]? = nil) {
+        if editing != nil { deferred.append { [weak self] in self?.setEntries(entries, select: select) }; return }
         let wasExpanded = expandedFolderPaths
         let keep: Set<String>
         if let names = select {
@@ -262,10 +292,77 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         if let first = rows.first { table.scrollRowToVisible(first) }
         else if select != nil { table.scrollRowToVisible(0) }
         onExpandedChange?(Set(expandedFolderPaths))
+        if let p = pendingEdit, rows.count == 1, let n = table.item(atRow: rows.first!) as? FileNode, n.entry.path == p {
+            pendingEdit = nil
+            DispatchQueue.main.async { [weak self] in self?.beginRename() }
+        }
+    }
+
+    // MARK: Rename in place
+
+    private var editing: (field: NSTextField, entry: FileEntry)?
+    private var editCancelled = false
+    private var deferred: [() -> Void] = []
+
+    /// Start editing the name of the single selected item; the name without its extension is
+    /// selected, like Finder.
+    @discardableResult
+    func beginRename() -> Bool {
+        let rows = table.selectedRowIndexes
+        guard rows.count == 1, let r = rows.first, let n = table.item(atRow: r) as? FileNode, !n.isPlaceholder,
+            let cell = table.view(atColumn: 0, row: r, makeIfNecessary: true) as? FileCell,
+            let tf = cell.textField else { return false }
+        table.scrollRowToVisible(r)
+        editing = (tf, n.entry)
+        editCancelled = false
+        tf.stringValue = n.entry.name
+        tf.isEditable = true
+        tf.isSelectable = true
+        tf.drawsBackground = true
+        tf.backgroundColor = NSColor.textBackgroundColor
+        tf.textColor = NSColor.textColor
+        tf.delegate = self
+        table.window?.makeFirstResponder(tf)
+        let stem = n.entry.isDirectory ? n.entry.name : FileOperations.split(n.entry.name).stem
+        tf.currentEditor()?.selectedRange = NSRange(location: 0, length: (stem as NSString).length)
+        return true
+    }
+
+    private func endRename() {
+        guard let ed = editing else { return }
+        let tf = ed.field
+        tf.isEditable = false
+        tf.isSelectable = false
+        tf.drawsBackground = false
+        editing = nil
+        table.window?.makeFirstResponder(table)
+        let work = deferred
+        deferred.removeAll()
+        for w in work { w() }
+    }
+
+    private func contextMenu() -> NSMenu? {
+        let m = NSMenu()
+        let sel = selectedEntries()
+        func add(_ title: String, _ action: String) { m.addItem(NSMenuItem(title: title, action: Selector(action), keyEquivalent: "")) }
+        if !sel.isEmpty {
+            add("Open", "openSelected:")
+            if sel.count == 1 { add("Rename", "renameSelected:") }
+            m.addItem(NSMenuItem.separator())
+            add("Copy Path", "copyPaths:")
+            m.addItem(NSMenuItem.separator())
+        }
+        add("New Folder", "newFolder:")
+        if !sel.isEmpty {
+            m.addItem(NSMenuItem.separator())
+            add("Move to Trash", "moveToTrash:")
+        }
+        return m
     }
 
     /// Children of an expanded folder arrived (error text when it could not be read).
     func setChildren(path: String, entries: [FileEntry], error: String?) {
+        if editing != nil { deferred.append { [weak self] in self?.setChildren(path: path, entries: entries, error: error) }; return }
         guard let n = nodesByPath[path] else { return }
         let wasExpanded = expandedFolderPaths
         n.loading = false
@@ -401,6 +498,30 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     func outlineViewSelectionDidChange(_ notification: Notification) {
         onSelectionChange?()
+    }
+
+    // MARK: Text field (rename)
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)), let ed = editing, ed.field === control {
+            let tf = ed.field
+            editCancelled = true
+            tf.stringValue = ed.entry.name
+            tf.abortEditing()
+            endRename()
+            return true
+        }
+        return false
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard let ed = editing, (obj.object as? NSTextField) === ed.field else { return }
+        let tf = ed.field
+        let entry = ed.entry
+        let newName = tf.stringValue
+        tf.stringValue = entry.name          // the reload after the rename shows the new name
+        endRename()
+        if !editCancelled && newName != entry.name { onRenameCommit?(entry, newName) }
     }
 
     func outlineView(_ outlineView: NSOutlineView, typeSelectStringFor tableColumn: NSTableColumn?, item: Any) -> String? {

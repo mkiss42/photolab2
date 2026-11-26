@@ -5,6 +5,20 @@ import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var brain: BrainClient!
+    private var napBlocker: NSObjectProtocol?
+
+    /// A rename interrupted by a crash or power loss is rolled back at launch.
+    private func recoverInterruptedOperations() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard let text = FileOperations.recoverJournal() else { return }
+            DispatchQueue.main.async {
+                let a = NSAlert()
+                a.messageText = "An interrupted rename was undone"
+                a.informativeText = text
+                a.runModal()
+            }
+        }
+    }
 
     static var appVersion: String {
         return Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
@@ -14,6 +28,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         AppFiles.ensureDirectories()
         Log.info("PhotoLab \(AppDelegate.appVersion) starting, \(SystemInfo.summary)")
         FreezeWatchdog.start()
+        // No App Nap: folder polling and the watchdog must keep their timing in the background.
+        napBlocker = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep],
+                                                           reason: "Watching folders for changes")
+        recoverInterruptedOperations()
         Activity.set("launch: volumes")
         Volumes.refresh()
         Activity.set("launch: menu")
@@ -120,11 +138,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         let file = submenu(main, "File")
         item(file, "New Window", #selector(newWindow(_:)), "n", [.command], target: self)
+        item(file, "New Folder", #selector(BrowserWindowController.newFolder(_:)), "n", [.command, .shift])
         item(file, "Open", #selector(BrowserWindowController.openSelected(_:)), down)
+        item(file, "Rename", #selector(BrowserWindowController.renameSelected(_:)), "", [])
+        file.addItem(NSMenuItem.separator())
+        item(file, "Move to Trash", #selector(BrowserWindowController.moveToTrash(_:)), String(Character(UnicodeScalar(8))))
         file.addItem(NSMenuItem.separator())
         item(file, "Close Window", #selector(NSWindow.performClose(_:)), "w")
 
         let edit = submenu(main, "Edit")
+        item(edit, "Undo", Selector(("undo:")), "z")
+        item(edit, "Redo", Selector(("redo:")), "z", [.command, .shift])
+        edit.addItem(NSMenuItem.separator())
         item(edit, "Copy", #selector(NSText.copy(_:)), "c")
         item(edit, "Paste", #selector(NSText.paste(_:)), "v")
         item(edit, "Select All", #selector(NSText.selectAll(_:)), "a")
