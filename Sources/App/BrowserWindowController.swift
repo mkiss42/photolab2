@@ -399,6 +399,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             copyAll.target = self
             m.addItem(copyHere)
             m.addItem(copyAll)
+            m.addItem(NSMenuItem.separator())
+            for (title, sel) in [("Paste Into", #selector(pasteIntoPathItem(_:))), ("Move Items Into", #selector(moveIntoPathItem(_:))),
+                                 ("Open in New Window", #selector(newWindowPathItem(_:)))] {
+                let i = NSMenuItem(title: title, action: sel, keyEquivalent: "")
+                i.representedObject = p
+                i.target = self
+                m.addItem(i)
+            }
             b.menu = m
             b.bezelStyle = .recessed
             b.isBordered = false
@@ -408,6 +416,21 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             if i == chain.count - 1 { b.font = NSFont.boldSystemFont(ofSize: NSFont.systemFontSize) }
             pathBar.addArrangedSubview(b)
         }
+    }
+
+    /// Path bar: paste the clipboard's files into that folder (copy, or move).
+    @objc private func pasteIntoPathItem(_ sender: NSMenuItem) { pasteInto(sender, kind: .copy) }
+    @objc private func moveIntoPathItem(_ sender: NSMenuItem) { pasteInto(sender, kind: .move) }
+
+    private func pasteInto(_ sender: NSMenuItem, kind: TransferKind) {
+        guard let p = sender.representedObject as? String else { return }
+        let paths = BrowserWindowController.clipboardFiles
+        guard !paths.isEmpty else { NSSound.beep(); return }
+        TransferController.shared.start(paths, to: p, kind: kind, from: self)
+    }
+
+    @objc private func newWindowPathItem(_ sender: NSMenuItem) {
+        if let p = sender.representedObject as? String { BrowserWindowController.openWindow(at: p) }
     }
 
     @objc private func copyPathItem(_ sender: NSMenuItem) {
@@ -906,7 +929,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         case #selector(moveToTrash(_:))?: return list.selectionCount > 0
         case #selector(BrowserWindowController.copy(_:))?: return list.selectionCount > 0
         case #selector(duplicate(_:))?: return list.selectionCount > 0
-        case #selector(paste(_:))?, #selector(pasteMoving(_:))?:
+        case #selector(paste(_:))?, #selector(pasteMoving(_:))?, #selector(pasteIntoPathItem(_:))?, #selector(moveIntoPathItem(_:))?:
             return NSPasteboard.general.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
         case #selector(toggleHidden(_:))?:
             item.state = BrowserWindowController.showHidden ? .on : .off

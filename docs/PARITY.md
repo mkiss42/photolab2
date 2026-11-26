@@ -13,7 +13,7 @@ Status: **done** · **part** (exists, something missing) · **todo** (phase in b
 | cd in (double-click, Cmd-Down), up (Cmd-Up) selects the folder you came from | done | |
 | Breadcrumb path bar, click to navigate | done | path bar on top/bottom setting |
 | Path bar menu: Copy Path / Copy Full Path | done | new in PL2 |
-| Path bar menu: Paste Into, Open in New Tree | todo (1c) | Paste Into needs the copy engine |
+| Path bar menu: Paste Into, Open in New Tree | done (0.4.3) | + Move Items Into |
 | Sorting: name / ext / modified, folders on top | done | PL2 adds size and kind |
 | One row per set (raw+jpg+xmp as one row) while Settings > Files sets are on; an Ext column right after Name shows "CR3+JPG+XMP" | done (0.4.0) | decided 2026-11-25 |
 | Display modes: folders only / current folder's files / expanded folders' files / all | part (0.4.1) | folders only done; the two mixed modes on request |

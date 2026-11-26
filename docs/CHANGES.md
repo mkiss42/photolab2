@@ -1,5 +1,14 @@
 # Changes
 
+## 0.4.3 — path bar: Paste Into, Open in New Window
+
+- Right-click any folder in the path bar: Paste Into (copies the clipboard's files there),
+  Move Items Into, Open in New Window - next to Copy Path / Copy Full Path.
+
+Test checklist (1 minute):
+[ ] 1  Cmd-C a file, right-click a parent folder in the path bar > Paste Into: copied there.
+
+
 ## 0.4.2 — filter bar
 
 - Cmd-F (Edit > Filter...) opens a filter field above the list. Typing keeps only rows whose
