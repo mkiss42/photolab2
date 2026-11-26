@@ -250,6 +250,12 @@ final class ContactSheetView: NSView, NSDraggingSource {
     // MARK: Thumbnails
 
     private var thumbPending = false
+    private var retryCount = 0
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { relayout() }
+    }
 
     /// Tiles on screen first, then a screen ahead.
     func scheduleThumbRequest() {
@@ -258,7 +264,16 @@ final class ContactSheetView: NSView, NSDraggingSource {
         DispatchQueue.main.async { [weak self] in
             guard let me = self else { return }
             me.thumbPending = false
-            guard me.window != nil, !me.isHiddenOrHasHiddenAncestor else { return }
+            // Not on screen yet (new window, view just switched): try again shortly, so the
+            // thumbnails start without a scroll.
+            guard me.window != nil, !me.isHiddenOrHasHiddenAncestor, me.visibleRect.height > 0 else {
+                if !me.items.isEmpty && me.retryCount < 20 {
+                    me.retryCount += 1
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { me.scheduleThumbRequest() }
+                }
+                return
+            }
+            me.retryCount = 0
             let now = me.visibleRange(), ahead = me.visibleRange(extra: me.visibleRect.height)
             let order = Array(now) + ahead.filter { !now.contains($0) }
             // The rest of the folder, nearest first, on the low-priority track.

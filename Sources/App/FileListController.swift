@@ -56,7 +56,9 @@ final class FileOutlineView: NSOutlineView {
         if mods == [.command] && chars == "e" { onOpen?(); return }
         if event.keyCode == 49 && mods.isEmpty && Date().timeIntervalSince(lastTypeSelect) > 1.0 { onSpace?(); return }   // Space
         if mods.isEmpty && chars == "m" && Date().timeIntervalSince(lastTypeSelect) > 1.0 { onRename?(); return }
-        if mods.isEmpty || mods == [.shift] { lastTypeSelect = Date() }
+        // Only letters and digits are typing: an arrow key must not turn the next Space into a
+        // type-select space (that jumped to the first row).
+        if (mods.isEmpty || mods == [.shift]), let ch = chars.first, ch.isLetter || ch.isNumber { lastTypeSelect = Date() }
         super.keyDown(with: event)
     }
 
@@ -909,7 +911,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     /// name starting with it ("ccc" = third "c..."), instead of looking for "ccc".
     func outlineView(_ outlineView: NSOutlineView, nextTypeSelectMatchFromItem startItem: Any, toItem endItem: Any, for searchString: String) -> Any? {
         let count = outlineView.numberOfRows
-        guard count > 0 else { return nil }
+        guard count > 0, !searchString.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
         func name(_ r: Int) -> String? {
             guard let n = outlineView.item(atRow: r) as? FileNode, !n.isPlaceholder else { return nil }
             return n.displayName

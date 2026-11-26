@@ -45,7 +45,14 @@ enum Stats {
 
     private static var thumbs: [String: (n: Int, ms: Double, bytes: Int64, reads: Int, slowest: Double)] = [:]
 
-    /// method: embedded (our RAW parser), imageio, quicklook, cache (local disk cache).
+    private static var thumbMisses: [String: Int] = [:]
+
+    /// Why the embedded-preview reader passed on a file ("nef no-candidates").
+    static func noteThumbMiss(ext: String, reason: String) {
+        lock.lock(); thumbMisses["\(ext) \(reason)", default: 0] += 1; lock.unlock()
+    }
+
+    /// method: "<ext>/<method>" (embedded, jpeg-preview, imageio-thumb, decode, quicklook), or "cache".
     static func noteThumb(method: String, ms: Double, bytes: Int64, reads: Int) {
         lock.lock(); defer { lock.unlock() }
         var t = thumbs[method] ?? (0, 0, 0, 0, 0)
@@ -137,14 +144,19 @@ enum Stats {
         if thumbs.isEmpty {
             out.append("THUMBS none")
         } else {
-            // Per method: count, average ms, slowest ms, average KB and reads per thumbnail.
-            for m in ["embedded", "imageio", "quicklook"] {
-                guard let t = thumbs[m] else { continue }
+            // Per file type and method (the 8 most used): count, average and slowest ms, KB and
+            // reads per thumbnail - which method suits which type.
+            let made = thumbs.filter { $0.key != "cache" }.sorted { $0.value.n > $1.value.n }
+            for (m, t) in made.prefix(8) {
                 let n = Double(t.n)
                 out.append(String(format: "THUMBS %@ %ld: avg %.0f ms, slowest %.0f ms, %.0f KB, %.1f reads", m, t.n,
                                   t.ms / n, t.slowest, Double(t.bytes) / n / 1024, Double(t.reads) / n))
             }
+            if made.count > 8 { out.append("THUMBS +\(made.count - 8) more type/method pairs (log)") }
             out.append("THUMBS from local cache \(thumbs["cache"]?.n ?? 0)")
+            if !thumbMisses.isEmpty {
+                out.append("THUMBS reader passed: " + thumbMisses.sorted { $0.value > $1.value }.prefix(5).map { "\($0.key) x\($0.value)" }.joined(separator: ", "))
+            }
         }
         out.append(sheetDraws == 0 ? "SHEET no draws" :
             String(format: "SHEET %ld tile update(s), %ld over 16 ms, slowest %.0f ms", sheetDraws, sheetSlow, sheetSlowest))

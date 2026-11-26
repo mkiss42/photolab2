@@ -61,7 +61,7 @@ enum ThumbnailSelfTest {
         file.append(small)
         file.append(big)
         guard AppFiles.makeTestFile(dir + "/fake.NEF", data: file), let r = BlockReader(dir + "/fake.NEF"),
-            let img = EmbeddedPreview.thumbnail(r, ext: "nef", maxPixels: 256) else {
+            let img = EmbeddedPreview.thumbnail(r, ext: "nef", maxPixels: 256).image else {
             return SelfTestResult(name: n, status: .fail, detail: "TIFF preview not found")
         }
         guard img.height == 256, abs(img.width - 171) <= 1 else { return SelfTestResult(name: n, status: .fail, detail: "TIFF: \(img.width)x\(img.height), not rotated/picked") }
@@ -74,7 +74,7 @@ enum ThumbnailSelfTest {
         raf.append(Data(count: 100 - raf.count))
         raf.append(big)
         guard AppFiles.makeTestFile(dir + "/fake.RAF", data: raf), let rr = BlockReader(dir + "/fake.RAF"),
-            let img2 = EmbeddedPreview.thumbnail(rr, ext: "raf", maxPixels: 256), img2.width == 256 else {
+            let img2 = EmbeddedPreview.thumbnail(rr, ext: "raf", maxPixels: 256).image, img2.width == 256 else {
             return SelfTestResult(name: n, status: .fail, detail: "RAF preview not found")
         }
         return SelfTestResult(name: n, status: .ok, detail: "TIFF \(tiffReads) reads, RAF \(rr.reads) reads")

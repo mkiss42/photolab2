@@ -114,34 +114,131 @@ final class BlockReader {
 enum EmbeddedPreview {
     struct Candidate { let offset: Int64; let length: Int }
 
-    /// Thumbnail (long side <= maxPixels) from the best embedded JPEG, or nil.
-    static func thumbnail(_ r: BlockReader, ext: String, maxPixels: Int) -> CGImage? {
-        guard let head = r.read(0, 64) , head.count >= 16 else { return nil }
+    /// Thumbnail (long side <= maxPixels) from the best embedded JPEG, or nil with the reason
+    /// (for the Short Report: which files need which method).
+    static func thumbnail(_ r: BlockReader, ext: String, maxPixels: Int) -> (image: CGImage?, miss: String) {
+        guard let head = r.read(0, 64), head.count >= 16 else { return (nil, "short-file") }
         var cands: [Candidate] = []
         var orientation = 1
-        if head.starts(with: Array("FUJIFILMCCD-RAW".utf8)) {
-            guard head.count >= 16, let h = r.read(84, 8), h.count == 8 else { return nil }
+        if head[0] == 0xFF && head[1] == 0xD8 {                                   // JPEG: EXIF + MPF previews
+            let j = jpegPreviews(r)
+            cands = j.candidates
+            orientation = j.orientation
+            if cands.isEmpty { return (nil, "no-preview") }
+        } else if head.starts(with: Array("FUJIFILMCCD-RAW".utf8)) {
+            guard let h = r.read(84, 8), h.count == 8 else { return (nil, "raf-header") }
             cands = [Candidate(offset: Int64(be32(h, 0)), length: Int(be32(h, 4)))]
-        } else if head.count >= 12, Array(head[4..<8]) == Array("ftyp".utf8) {
-            guard let c = cr3(r) else { return nil }
+        } else if Array(head[4..<8]) == Array("ftyp".utf8) {
+            guard let c = cr3(r) else { return (nil, "cr3-no-prvw") }
             cands = [c.preview]
             orientation = c.orientation
-        } else if head[0] == head[1], head[0] == 0x49 || head[0] == 0x4D {     // II / MM
-            guard let t = tiff(r, base: 0) else { return nil }
+        } else if head[0] == head[1], head[0] == 0x49 || head[0] == 0x4D {        // II / MM
+            guard let t = tiff(r, base: 0) else { return (nil, "tiff-header") }
             cands = t.candidates
             orientation = t.orientation
         } else {
-            return nil
+            return (nil, "unknown-format")
         }
-        guard let jpeg = pick(r, cands, minSide: maxPixels) else { return nil }
-        guard let src = CGImageSourceCreateWithData(jpeg as CFData, nil) else { return nil }
+        var jpeg = pick(r, cands, minSide: maxPixels)
+        if jpeg == nil || (jpegLongSide(jpeg!) ?? 0) < maxPixels / 2, ext != "jpg", ext != "jpeg" {
+            // PwCarve's idea, as the last resort: JPEGs in the first 2 MB, found by their markers.
+            let carved = carve(r, window: 2 << 20)
+            if let c = pick(r, carved, minSide: maxPixels) { jpeg = c }
+        }
+        guard let data = jpeg else { return (nil, cands.isEmpty ? "no-candidates" : "no-usable-jpeg") }
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return (nil, "bad-jpeg") }
         let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: maxPixels,
                                      kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceShouldCacheImmediately: true]
-        guard let img = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
-        // Embedded previews rarely carry their own orientation; the RAW's applies then.
+        guard let img = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return (nil, "decode-failed") }
+        if ext == "jpg" || ext == "jpeg", max(img.width, img.height) < maxPixels / 2 { return (nil, "preview-too-small") }
+        // Embedded previews rarely carry their own orientation; the container's applies then.
         let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
         let own = (props?[kCGImagePropertyOrientation] as? Int) ?? 1
-        return own == 1 && orientation != 1 ? rotate(img, orientation) : img
+        return (own == 1 && orientation != 1 ? rotate(img, orientation) : img, "")
+    }
+
+    // MARK: JPEG (camera JPEGs: EXIF thumbnail, MPF previews)
+
+    /// Previews a camera put into its JPEG: the EXIF thumbnail (IFD1, usually 160 px) and the MPF
+    /// images (APP2 "MPF": Nikon ~640 px, Sony ~1616 px...), all located in the first few KB.
+    static func jpegPreviews(_ r: BlockReader) -> (candidates: [Candidate], orientation: Int) {
+        var cands: [Candidate] = []
+        var orientation = 1
+        var pos: Int64 = 2
+        for _ in 0..<40 {
+            guard let m = r.read(pos, 4), m.count == 4, m[0] == 0xFF else { break }
+            let marker = m[1]
+            if marker == 0xDA || marker == 0xD9 { break }                       // image data: no more headers
+            let len = Int64(Int(m[2]) << 8 | Int(m[3]))
+            if marker == 0xE1, let id = r.read(pos + 4, 6), Array(id) == Array("Exif\0\0".utf8),
+                let t = tiff(r, base: pos + 10) {
+                cands += t.candidates
+                orientation = t.orientation
+            } else if marker == 0xE2, let id = r.read(pos + 4, 4), Array(id) == Array("MPF\0".utf8) {
+                cands += mpf(r, base: pos + 8)
+            }
+            pos += 2 + len
+        }
+        return (cands, orientation)
+    }
+
+    /// MPF index (CIPA DC-007): tag 0xB002 = 16-byte entries; images after the first are previews.
+    /// Offsets are relative to the MPF TIFF header.
+    private static func mpf(_ r: BlockReader, base: Int64) -> [Candidate] {
+        guard let h = r.read(base, 8), h.count == 8 else { return [] }
+        let le = h[0] == 0x49
+        func u16(_ d: Data, _ o: Int) -> Int { return le ? Int(d[o]) | Int(d[o + 1]) << 8 : Int(d[o]) << 8 | Int(d[o + 1]) }
+        func u32(_ d: Data, _ o: Int) -> Int64 {
+            let a = Int64(d[o]), b = Int64(d[o + 1]), c = Int64(d[o + 2]), e = Int64(d[o + 3])
+            return le ? a | b << 8 | c << 16 | e << 24 : a << 24 | b << 16 | c << 8 | e
+        }
+        let ifd = u32(h, 4)
+        guard let ch = r.read(base + ifd, 2), ch.count == 2 else { return [] }
+        let n = u16(ch, 0)
+        guard n > 0, n < 64, let d = r.read(base + ifd + 2, n * 12), d.count == n * 12 else { return [] }
+        for i in 0..<n where u16(d, i * 12) == 0xB002 {
+            let count = Int(u32(d, i * 12 + 4)), at = u32(d, i * 12 + 8)
+            guard count >= 32, count <= 16 * 16, let e = r.read(base + at, count), e.count == count else { return [] }
+            var out: [Candidate] = []
+            for k in 1..<(count / 16) {
+                let size = Int(u32(e, k * 16 + 4)), off = u32(e, k * 16 + 8)
+                if size > 0 && off > 0 { out.append(Candidate(offset: base + off, length: size)) }
+            }
+            return out
+        }
+        return []
+    }
+
+    // MARK: Carving (last resort)
+
+    /// JPEGs found by their markers in the first `window` bytes: SOI, segments up to SOS, then the
+    /// entropy data up to EOI (FF D9; FF 00 and restart markers are data).
+    static func carve(_ r: BlockReader, window: Int) -> [Candidate] {
+        guard let d = r.read(0, min(window, Int(r.size))) else { return [] }
+        let b = [UInt8](d)
+        var out: [Candidate] = []
+        var i = 0
+        while i + 4 < b.count, out.count < 8 {
+            guard b[i] == 0xFF, b[i + 1] == 0xD8, b[i + 2] == 0xFF else { i += 1; continue }
+            var j = i + 2
+            var ok = false
+            while j + 4 < b.count {                                            // header segments
+                guard b[j] == 0xFF else { break }
+                let m = b[j + 1]
+                if m == 0xDA { j += 2 + (Int(b[j + 2]) << 8 | Int(b[j + 3])); ok = true; break }
+                j += 2 + (Int(b[j + 2]) << 8 | Int(b[j + 3]))
+            }
+            guard ok else { i += 2; continue }
+            var end = -1
+            while j + 1 < b.count {                                            // entropy data
+                if b[j] == 0xFF, b[j + 1] == 0xD9 { end = j + 2; break }
+                j += 1
+            }
+            guard end > 0 else { break }                                       // runs past the window
+            out.append(Candidate(offset: Int64(i), length: end - i))
+            i = end
+        }
+        return out
     }
 
     // MARK: Choosing and reading the JPEG
@@ -179,7 +276,8 @@ enum EmbeddedPreview {
 
     // MARK: TIFF
 
-    static func tiff(_ r: BlockReader, base: Int64) -> (candidates: [Candidate], orientation: Int)? {
+    /// `nikon`: inside a Nikon maker note, where tag 0x0011 points to the PreviewIFD.
+    static func tiff(_ r: BlockReader, base: Int64, nikon: Bool = false) -> (candidates: [Candidate], orientation: Int)? {
         guard let h = r.read(base, 8), h.count == 8 else { return nil }
         let le = h[0] == 0x49
         func u16(_ d: Data, _ o: Int) -> Int { return le ? Int(d[d.startIndex + o]) | Int(d[d.startIndex + o + 1]) << 8 : Int(d[d.startIndex + o]) << 8 | Int(d[d.startIndex + o + 1]) }
@@ -213,6 +311,15 @@ enum EmbeddedPreview {
             if (comp == 6 || comp == 7), photo != 32803, photo != 34892,
                 let so = tags[0x0111], let sc = tags[0x0117], so.count == 1, sc.count == 1 {
                 cands.append(Candidate(offset: base + so.value, length: Int(sc.value)))
+            }
+            // Panasonic RW2: the JPEG is the value of tag 0x002E itself.
+            if let p = tags[0x002E], p.count > 2048 { cands.append(Candidate(offset: base + p.value, length: Int(p.count))) }
+            if let ex = tags[0x8769] { queue.append(ex.value) }                // Exif IFD (holds the maker note)
+            if nikon, let pv = tags[0x0011] { queue.append(pv.value) }         // Nikon PreviewIFD
+            if !nikon, let mn = tags[0x927C], let hdr = r.read(base + mn.value, 10), hdr.count == 10,
+                Array(hdr[0..<6]) == Array("Nikon\0".utf8),
+                let t = tiff(r, base: base + mn.value + 10, nikon: true) {
+                cands += t.candidates                                          // ~640 px PreviewImage
             }
             if let sub = tags[0x014A] {
                 if sub.count == 1 { queue.append(sub.value) }

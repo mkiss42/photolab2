@@ -1,5 +1,29 @@
 # Changes
 
+## 0.7.3 — thumbnails by file type, Space fix
+
+- Each file type gets the method that suits it (numbers from your 0.7.2 report: our RAW reader
+  65 ms / 480 KB vs ImageIO 476 ms / 9.8 MB per thumbnail):
+  - RAW: our embedded-preview reader, now also Nikon maker-note previews (~640 px), Panasonic's
+    JPEG tag, and - last resort, PwCarve style - JPEGs found by their markers in the first 2 MB.
+  - JPEG: the preview the camera put into the file (MPF: Nikon ~640 px, Sony ~1616 px, Fuji...),
+    found in its first few KB; only JPEGs without one are decoded whole (at reduced size).
+  - HEIC: its embedded thumbnail. PSD/TIFF: their embedded thumbnail, else Quick Look (never the
+    full composite). PNG/GIF/...: decoded at reduced size.
+  - PDF, video, documents, everything else: Quick Look.
+- Short Report: THUMBS lines per file type and method ("nef/embedded 300: 65 ms, 480 KB, 3.2
+  reads"), and "reader passed:" with the reason when our reader could not use a file
+  ("nef no-candidates x12") - so we can see which cameras/types need more work.
+- Space right after the arrow keys no longer jumps to the first row (it was taken as typing).
+- Thumbnails start without a scroll in new windows / right after switching to the sheet.
+
+Test checklist (5 minutes):
+[ ] 1  Arrow to a folder, Space at once: the new contact sheet window opens (first press).
+[ ] 2  Folders of NEF, camera JPG, DNG, PDF: thumbnails faster than 0.7.2? All upright?
+[ ] 3  Open a folder in the sheet and don't touch it: thumbnails appear.
+[ ] 4  Short Report: all THUMBS lines, incl. "reader passed" if present.
+
+
 ## 0.7.2 — layer-based sheet, RAW preview reader, background thumbnails
 
 - Contact sheet tiles are now Core Animation layers: scrolling moves them on the graphics card,

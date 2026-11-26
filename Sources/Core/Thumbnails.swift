@@ -175,36 +175,73 @@ final class Thumbnails {
         }
         let t0 = Date()
         guard let made = Thumbnails.make(r.source, ext: r.ext) else { return nil }
-        Stats.noteThumb(method: made.method, ms: Date().timeIntervalSince(t0) * 1000, bytes: made.bytes, reads: made.reads)
+        Stats.noteThumb(method: r.ext + "/" + made.method, ms: Date().timeIntervalSince(t0) * 1000, bytes: made.bytes, reads: made.reads)
         if let d = Thumbnails.encode(made.image) { AppFiles.storeThumbnail(d, at: file) }
         return made.image
+    }
+
+    enum Route { case raw, jpeg, heic, layered, plain, other }
+
+    /// Which method suits which file type (from the Short Report numbers):
+    ///   raw      our embedded-preview reader, then ImageIO (embedded only), then Quick Look
+    ///   jpeg     the camera's MPF/EXIF preview if >= 128 px, else a reduced-size decode (whole file)
+    ///   heic     ImageIO's embedded thumbnail, else a decode
+    ///   layered  PSD/PSB/TIFF: ImageIO's embedded thumbnail, else Quick Look (never the full composite)
+    ///   plain    PNG/GIF/BMP/WebP...: a reduced-size decode
+    ///   other    PDF, video, documents...: Quick Look (it reads only what the first page/frame needs)
+    static func route(_ ext: String) -> Route {
+        if FileOperations.rawExtensions.contains(ext) { return .raw }
+        switch ext {
+        case "jpg", "jpeg", "jpe": return .jpeg
+        case "heic", "heif", "hif", "avif": return .heic
+        case "psd", "psb", "tif", "tiff": return .layered
+        case "png", "gif", "bmp", "webp", "jp2", "tga", "ico", "icns": return .plain
+        default: return .other
+        }
     }
 
     /// The picture and how it was got (for the Short Report).
     static func make(_ path: String, ext: String) -> (image: CGImage, method: String, bytes: Int64, reads: Int)? {
         let url = URL(fileURLWithPath: path)
-        let isRaw = FileOperations.rawExtensions.contains(ext)
-        // 1. RAW: the embedded JPEG, found and read by us (fewest round trips).
-        if isRaw, let r = BlockReader(path), let img = EmbeddedPreview.thumbnail(r, ext: ext, maxPixels: maxPixels) {
-            return (img, "embedded", r.bytes, r.reads)
+        let route = self.route(ext)
+        func imageIO(_ always: Bool, _ r: BlockReader?) -> CGImage? {
+            var opts: [CFString: Any] = [kCGImageSourceCreateThumbnailWithTransform: true,
+                                         kCGImageSourceThumbnailMaxPixelSize: maxPixels,
+                                         kCGImageSourceShouldCacheImmediately: true]
+            opts[always ? kCGImageSourceCreateThumbnailFromImageAlways : kCGImageSourceCreateThumbnailFromImageIfAbsent] = true
+            let src = r?.imageSource() ?? CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary)
+            guard let s = src, CGImageSourceGetCount(s) > 0 else { return nil }
+            return CGImageSourceCreateThumbnailAtIndex(s, 0, opts as CFDictionary)
         }
-        // 2. ImageIO, reading through BlockReader (batched, counted); RAW: embedded only.
-        var opts: [CFString: Any] = [kCGImageSourceCreateThumbnailWithTransform: true,
-                                     kCGImageSourceThumbnailMaxPixelSize: maxPixels,
-                                     kCGImageSourceShouldCacheImmediately: true]
-        opts[isRaw ? kCGImageSourceCreateThumbnailFromImageIfAbsent : kCGImageSourceCreateThumbnailFromImageAlways] = true
-        if let r = BlockReader(path), let src = r.imageSource(), CGImageSourceGetCount(src) > 0,
-            let t = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) {
-            if !isRaw || max(t.width, t.height) >= maxPixels / 2 { return (t, "imageio", r.bytes, r.reads) }
-            if let q = quickLook(url), max(q.width, q.height) > max(t.width, t.height) { return (q, "quicklook", 0, 0) }
-            return (t, "imageio", r.bytes, r.reads)
+        switch route {
+        case .raw, .jpeg:
+            if let r = BlockReader(path) {
+                let e = EmbeddedPreview.thumbnail(r, ext: ext, maxPixels: maxPixels)
+                if let img = e.image { return (img, route == .raw ? "embedded" : "jpeg-preview", r.bytes, r.reads) }
+                Stats.noteThumbMiss(ext: ext, reason: e.miss)
+            }
+            if route == .jpeg, let r = BlockReader(path), let t = imageIO(true, r) { return (t, "decode", r.bytes, r.reads) }
+            if route == .raw, let r = BlockReader(path), let t = imageIO(false, r), max(t.width, t.height) >= maxPixels / 2 {
+                return (t, "imageio-thumb", r.bytes, r.reads)
+            }
+        case .heic:
+            if let r = BlockReader(path), let t = imageIO(false, r) {
+                if max(t.width, t.height) >= maxPixels * 3 / 4 { return (t, "imageio-thumb", r.bytes, r.reads) }
+                if let r2 = BlockReader(path), let d = imageIO(true, r2) { return (d, "decode", r.bytes + r2.bytes, r.reads + r2.reads) }
+            }
+        case .layered:
+            if let r = BlockReader(path), let t = imageIO(false, r), max(t.width, t.height) >= 128 {
+                return (t, "imageio-thumb", r.bytes, r.reads)
+            }
+        case .plain:
+            if let r = BlockReader(path), let t = imageIO(true, r) { return (t, "decode", r.bytes, r.reads) }
+        case .other:
+            break
         }
-        // 3. ImageIO from the file itself (some codecs want a URL), then Quick Look.
-        if let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
-            CGImageSourceGetCount(src) > 0, let t = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) {
-            return (t, "imageio", 0, 0)
-        }
-        if let q = quickLook(url) { return (q, "quicklook", 0, 0) }
+        let t0 = Date()
+        if let q = quickLook(url) { _ = t0; return (q, "quicklook", 0, 0) }
+        // Quick Look had nothing: one ImageIO try from the file, then the type icon (drawn by the view).
+        if route == .other || route == .raw, let t = imageIO(false, nil) { return (t, "imageio-thumb", 0, 0) }
         return nil
     }
 
