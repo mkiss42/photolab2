@@ -581,6 +581,37 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
                                    r.failures.joined(separator: "\n") + "\n\nThey are still where they were.")
                 }
                 me.reloadAfterOp(Set(paths.map { Paths.parent($0) }))
+                if !r.noTrash.isEmpty { me.confirmPermanentDelete(r.noTrash) }
+            }
+        }
+    }
+
+    /// Shares without a Trash: Finder's choice - delete immediately, after an explicit warning.
+    private func confirmPermanentDelete(_ paths: [String]) {
+        guard let w = window else { return }
+        let a = NSAlert()
+        let n = paths.count
+        a.alertStyle = .critical
+        a.messageText = n == 1 ? "Delete \"\(Paths.name(paths[0]))\" immediately?"
+                               : "Delete these \(n) items immediately?"
+        var names = paths.prefix(8).map { Paths.name($0) }.joined(separator: "\n")
+        if n > 8 { names += "\n...and \(n - 8) more" }
+        a.informativeText = "This share has no Trash. The items will be deleted for good. You can't undo this action.\n\n" + names
+        a.addButton(withTitle: "Delete")
+        a.addButton(withTitle: "Cancel")
+        a.buttons.last?.keyEquivalent = "\u{1b}"
+        a.buttons.first?.keyEquivalent = ""          // Return must not delete
+        a.beginSheetModal(for: w) { [weak self] resp in
+            guard resp == .alertFirstButtonReturn, let me = self else {
+                Log.info("permanent delete cancelled for \(n) item(s)")
+                return
+            }
+            me.opsQueue.async {
+                let failures = FileOperations.deletePermanently(paths)
+                DispatchQueue.main.async {
+                    if !failures.isEmpty { me.showProblem("Some items could not be deleted", failures.joined(separator: "\n")) }
+                    me.reloadAfterOp(Set(paths.map { Paths.parent($0) }))
+                }
             }
         }
     }

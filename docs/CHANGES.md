@@ -1,5 +1,17 @@
 # Changes
 
+## 0.2.1 — delete on shares without a Trash
+
+- On a share with no Trash, Move to Trash now asks, like Finder: "This share has no Trash. The items
+  will be deleted for good. You can't undo this action." Delete / Cancel (Return does NOT delete;
+  Esc cancels). Each deleted item is logged (W-OPS-2). Local disks still use the Trash and Cmd-Z.
+- The self-test's simulated interrupted rename no longer shows as W-OPS-1 in the Short Report.
+
+Test checklist (2 minutes, scratch files on a share):
+[ ] 1  Backspace on a file on a share: the warning appears. Cancel: the file stays.
+[ ] 2  Again, click Delete: it is gone. Same with a RAW set: the whole set is listed and deleted.
+[ ] 3  Short Report: CODES shows W-OPS-2 per deleted item, no W-OPS-1.
+
 ## 0.2.0 — rename, new folder, Trash, undo (first release that changes files)
 
 - Rename: Return or M (M right after typing other letters is still type-to-select). The name

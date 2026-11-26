@@ -10,7 +10,7 @@ enum FileOpsSelfTest {
             return [SelfTestResult(name: "ops-fixture", status: .fail, detail: "could not create fixture")]
         }
         defer { AppFiles.removeOpsFixture(dir) }
-        return [renameSet(dir), clash(dir), caseOnly(dir), single(dir), newFolder(dir), trash(dir), journal(dir)]
+        return [renameSet(dir), clash(dir), caseOnly(dir), single(dir), newFolder(dir), trash(dir), journal(dir), deleteForGood(dir)]
     }
 
     static func exists(_ p: String) -> Bool { return FileManager.default.fileExists(atPath: p) }
@@ -93,6 +93,14 @@ enum FileOpsSelfTest {
         return exists(dir + "/smith_1.CR3") ? ok(n) : fail(n, "set not put back")
     }
 
+    static func deleteForGood(_ dir: String) -> SelfTestResult {
+        let n = "ops-delete-permanent"
+        let folder = dir + "/untitled folder 2"      // left by ops-new-folder
+        guard exists(folder) else { return fail(n, "fixture folder missing") }
+        let failures = FileOperations.deletePermanently([folder])
+        return failures.isEmpty && !exists(folder) ? ok(n) : fail(n, failures.joined(separator: ", "))
+    }
+
     static func journal(_ dir: String) -> SelfTestResult {
         let n = "ops-journal-recovery"
         // As if PhotoLab stopped right after renaming IMG_2.CR3 -> half.CR3.
@@ -100,7 +108,7 @@ enum FileOpsSelfTest {
             return fail(n, "setup")
         }
         AppFiles.writeTestJournal(from: dir + "/IMG_2.CR3", to: dir + "/half.CR3")
-        _ = FileOperations.recoverJournal()
+        _ = FileOperations.recoverJournal(quiet: true)
         guard exists(dir + "/IMG_2.CR3"), !exists(dir + "/half.CR3"), AppFiles.readJournal() == nil else {
             return fail(n, names(dir).sorted().joined(separator: "|"))
         }

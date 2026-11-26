@@ -146,25 +146,48 @@ enum FileOperations {
         let inTrash: String
     }
 
-    /// Move items (and, with sets, their set members) to the Trash. Nothing is ever deleted.
-    static func trash(_ paths: [String], sets: Bool = useSets) -> (done: [Trashed], failures: [String]) {
+    /// Move items (and, with sets, their set members) to the Trash. Nothing is deleted here.
+    /// `noTrash`: items on network volumes whose server has no Trash (the caller may offer
+    /// deletePermanently after an explicit confirmation, like Finder).
+    static func trash(_ paths: [String], sets: Bool = useSets) -> (done: [Trashed], failures: [String], noTrash: [String]) {
         var all: [String] = []
         for p in paths {
             for m in setMembers(of: p, sets: sets) where !all.contains(m) { all.append(m) }
         }
         var done: [Trashed] = []
         var failures: [String] = []
+        var noTrash: [String] = []
         for p in all {
             let r = Platform.moveToTrash(p)
             if let t = r.trashed {
                 done.append(Trashed(original: p, inTrash: t))
+            } else if Volumes.isNetwork(p) {
+                noTrash.append(p)
+                Log.info("no Trash on this share for \(p): \(r.error ?? "?")")
             } else {
                 failures.append("\(Paths.name(p)): \(r.error ?? "unknown error")")
                 Log.error("E-OPS-2 not moved to Trash: \(p): \(r.error ?? "?")")
             }
         }
         if !done.isEmpty { Log.info("moved to Trash: \(done.count) item(s) from \(Paths.parent(done[0].original))") }
-        return (done, failures)
+        return (done, failures, noTrash)
+    }
+
+    /// Delete for good. Only after the user confirmed, for items on shares without a Trash
+    /// (lab decision 2026-11-25, Finder's behaviour). Folders go with their contents.
+    static func deletePermanently(_ paths: [String]) -> [String] {
+        var failures: [String] = []
+        for p in paths {
+            do {
+                try FileManager.default.removeItem(atPath: p)
+                Log.warn("W-OPS-2 deleted permanently (share has no Trash, user confirmed): \(p)")
+            } catch {
+                let why = (error as NSError).localizedDescription
+                failures.append("\(Paths.name(p)): \(why)")
+                Log.error("E-OPS-5 permanent delete failed: \(p): \(why)")
+            }
+        }
+        return failures
     }
 
     /// Undo of trash: move items back where they were (never over something new there).
@@ -194,7 +217,7 @@ enum FileOperations {
 
     /// At launch: a journal left behind means PhotoLab stopped in the middle of a multi-step
     /// rename. Put every already-renamed item back, so the set is whole again.
-    static func recoverJournal() -> String? {
+    static func recoverJournal(quiet: Bool = false) -> String? {
         guard let j = AppFiles.readJournal() else { return nil }
         var restored = 0
         for (from, to) in j.pairs.reversed() {
@@ -203,7 +226,7 @@ enum FileOperations {
         }
         AppFiles.clearJournal()
         let text = "W-OPS-1 an interrupted \(j.op) was found at launch; \(restored) item(s) put back to their old names"
-        Log.warn(text)
+        if quiet { Log.info("self-test: journal recovery put back \(restored) item(s)") } else { Log.warn(text) }
         return restored > 0 ? "PhotoLab was stopped in the middle of a rename. \(restored) file(s) were given back their old names, so nothing is half-renamed." : nil
     }
 }

@@ -141,7 +141,9 @@ at every build): `FileOperations.swift`, `AppFiles.swift`, `Platform.swift`. The
 the same rule (`tools/check_mutations_py.sh`) with its own short whitelist (ingest copy,
 cache dir, volume marker).
 
-Nothing is deleted permanently (Trash only). Nothing is overwritten (exclusive renames).
+Nothing is deleted permanently (Trash only) - with one exception (lab decision 2026-11-25): on
+shares without a Trash (all of the lab's SMB shares), Move to Trash asks first, Finder-style
+("deleted immediately, can't be undone"; Return does not confirm), and only then deletes. Nothing is overwritten (exclusive renames).
 Copies land under hidden temp names, are verified, then renamed. Metadata writes go to a
 copy, are verified (requested values present, image data identical), then swapped.
 
@@ -229,3 +231,4 @@ Each phase ends in something the lab can use. Exit criteria are tested on all th
 - 2026-11-25 — RAW writes default to ExifTool -overwrite_original without image-data verification (speed; years of clean use in the lab); "Verified RAW writes" is an opt-in setting. Conflicts: newest MetadataDate/mtime wins, sidecar on ties.
 - 2026-11-25 — Conflict rule: the winner is taken as a whole; emptied fields propagate (user: clearing a field is intentional).
 - 2026-11-25 — 0.2.0 file operations: sets = PhotoLab 1's GROUPABLE_EXTENSIONS (raws + jpg/jpeg/heic/heif + xmp/acr), a Settings switch, default on. Keys: Return/M rename, Cmd-E/Cmd-Down open, Backspace/Delete/Cmd-Backspace trash at once with undo. Shares without a Trash: items stay, never deleted.
+- 2026-11-25 — Shares without a Trash: permanent delete after an explicit Finder-style confirmation (W-OPS-2 logged per item). Local volumes keep Trash + undo.
