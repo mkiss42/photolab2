@@ -20,7 +20,12 @@ struct FileEntry {
     let inode: UInt64
 
     var isDirectory: Bool { return kind == .directory }
-    var isHidden: Bool { return name.hasPrefix(".") || (flags & UInt32(UF_HIDDEN)) != 0 }
+    /// Dot-names and the UF_HIDDEN flag, like Finder - except /Volumes, which is always shown so
+    /// shares can be reached from "/".
+    var isHidden: Bool {
+        if path == "/Volumes" { return false }
+        return name.hasPrefix(".") || (flags & UInt32(UF_HIDDEN)) != 0
+    }
 
     /// Lowercased extension without the dot ("" when none).
     var ext: String {

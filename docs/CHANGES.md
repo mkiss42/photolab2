@@ -5,8 +5,9 @@
 - Fixed: expanding a folder could flicker endlessly and rows slid over each other (0.1.4). Cause:
   refreshing an open folder's rows makes macOS announce "expanding" again, which PhotoLab answered
   with a new listing, forever. Expansions caused by PhotoLab itself are now ignored.
-- Path bar shows the whole chain from Macintosh HD (Macintosh HD > Volumes > Share > ...); click any
-  level. Cmd-Up goes all the way to /.
+- Path bar shows the whole chain from / (/ > Volumes > Share > ...); click any level. Cmd-Up goes all
+  the way to /. The start-up disk is called "/" everywhere (no invented "Macintosh HD").
+- /Volumes is always shown in /, although macOS marks it hidden.
 - Sidebar: hidden by default; Sidebar button and Cmd-Option-S toggle it; 160 px by default, snaps to
   160 when dragged near it, width remembered; the last window closed decides the state at next launch.
 - PhotoLab > Settings (Cmd-,): "Path bar below the list".
@@ -15,7 +16,7 @@
 
 Test checklist (4 minutes):
 [ ] 1  Expand folders quickly, several in a row, on a share: no flicker, no sliding rows.
-[ ] 2  Click "Macintosh HD" in the path bar, and press Cmd-Up repeatedly from deep in a share.
+[ ] 2  Click "/" in the path bar, and press Cmd-Up repeatedly from deep in a share: Volumes is listed in /.
 [ ] 3  Sidebar: Cmd-Option-S and the button; drag it near 160 (snaps); quit with it shown, relaunch.
 [ ] 4  Settings: path bar below. Resize the window: only the Name column grows.
 [ ] 5  Help -> Short Report.

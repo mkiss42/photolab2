@@ -327,7 +327,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     private func rebuildPathBar() {
         for v in pathBar.arrangedSubviews { pathBar.removeArrangedSubview(v); v.removeFromSuperview() }
-        // The whole chain from "/" (Macintosh HD > Volumes > Share > ...), every level clickable.
+        // The whole chain from "/" (/ > Volumes > Share > ...), every level clickable.
         let chain = Paths.ancestry(currentPath)
         let mounts = Dictionary(Volumes.all.map { ($0.mountPoint, $0.displayName) }, uniquingKeysWith: { a, _ in a })
         for (i, p) in chain.enumerated() {
@@ -336,7 +336,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
                 sep.textColor = NSColor.tertiaryLabelColor
                 pathBar.addArrangedSubview(sep)
             }
-            let title = p == "/" ? "Macintosh HD" : (mounts[p] ?? Paths.name(p))
+            let title = p == "/" ? "/" : (mounts[p] ?? Paths.name(p))
             let b = NSButton(title: title, target: self, action: #selector(pathClicked(_:)))
             b.bezelStyle = .recessed
             b.isBordered = false
