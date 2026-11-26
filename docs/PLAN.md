@@ -146,12 +146,19 @@ Copies land under hidden temp names, are verified, then renamed. Metadata writes
 copy, are verified (requested values present, image data identical), then swapped.
 
 RAW files (lab decision 2026-11-25): metadata is written into RAWs as well as into sidecars
-and JPEGs, so raw+jpg+xmp never disagree; a setting switches RAWs to sidecar-only. Safeguards:
-ExifTool only writes formats it declares writable (others fall back to sidecar, logged); the
-image-data hash must be identical before and after; copy -> write -> verify -> swap like every
-other write. Cost: a RAW write rewrites the whole file over the network, so the UI updates at
-once from the sidecar/JPEG write and RAW writes run in a background queue with progress.
-Open: which copy wins when the group members already disagree on read (decide in Phase 2). Every multi-step operation is journaled; the next start finishes or rolls
+and JPEGs, so raw+jpg+xmp never disagree; a setting switches RAWs to sidecar-only.
+- Default write = ExifTool `-overwrite_original` (what the lab's "xmp embed" tool has done for
+  years without corruption). ExifTool still writes a temp file and renames it, so a failed write
+  leaves the original. Cheap checks only: ExifTool exit status and "1 image files updated", the
+  file size is plausible afterwards, and only formats ExifTool declares writable (others fall back
+  to the sidecar, logged).
+- Setting "Verified RAW writes" (off by default): copy -> write -> image-data hash identical ->
+  swap. It reads the whole RAW twice more over the network, hence opt-in.
+- RAW writes run in a background queue with progress; the UI updates at once.
+- Group members that disagree (written by another app): the most recently changed one wins -
+  XMP MetadataDate when present, else file modification time; on a tie the sidecar wins. Per
+  field: a field that is empty in the winner but set in another member is kept (never lose data).
+  Then all members are rewritten to match. Every multi-step operation is journaled; the next start finishes or rolls
 it back and says so.
 
 ## 8. How we work (vibe coding, with guard rails)
@@ -219,3 +226,4 @@ Each phase ends in something the lab can use. Exit criteria are tested on all th
 - 2026-11-25 — getattrlistbulk: fixed part is 108 bytes; the file-size field is present only for files (smbfs/HFS+ omit it for folders). Fallback is per item / per folder / per volume, never session-wide.
 - 2026-11-25 — Metadata is written into RAWs too (default; setting for sidecar-only), all group members kept identical; safeguards in section 7. Replaces "RAW files are never written".
 - 2026-11-25 — Tools/plugins live in the brain and return proposed changes; the app is the only writer.
+- 2026-11-25 — RAW writes default to ExifTool -overwrite_original without image-data verification (speed; years of clean use in the lab); "Verified RAW writes" is an opt-in setting. Conflicts: newest MetadataDate/mtime wins, sidecar on ties, empty fields never wipe set ones.
