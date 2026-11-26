@@ -148,7 +148,7 @@ final class NetworkWindow: NSWindowController, NSTableViewDataSource, NSTableVie
                     BrowserWindowController.openWindow(at: mp)
                 }
                 me.close()
-            } else if st == ECANCELED || st == Int32(kNetAuthErrorUserCanceled) {
+            } else if st == ECANCELED || st == -128 {          // -128 = userCanceledErr
                 me.status.stringValue = "Cancelled"
             } else {
                 me.status.stringValue = "Could not connect (error \(st))"
