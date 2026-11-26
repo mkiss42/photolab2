@@ -6,6 +6,7 @@ import AppKit
 final class SettingsWindow: NSWindowController {
     private static var shared: SettingsWindow?
     private let pathBarBottom = NSButton(checkboxWithTitle: "Path bar below the list (instead of above)", target: nil, action: nil)
+    private let dropsInSheet = NSButton(checkboxWithTitle: "Folders and files dropped on the app icon open in the contact sheet (instead of the list)", target: nil, action: nil)
     private let fileSets = NSButton(checkboxWithTitle: "Treat raw + jpg + xmp with the same name as one set (one row; rename, copy and Trash all of them)", target: nil, action: nil)
 
     static func show() {
@@ -29,9 +30,11 @@ final class SettingsWindow: NSWindowController {
         pathBarBottom.action = #selector(changed(_:))
         fileSets.target = self
         fileSets.action = #selector(changed(_:))
+        dropsInSheet.target = self
+        dropsInSheet.action = #selector(changed(_:))
         let filesTitle = NSTextField(labelWithString: "Files")
         filesTitle.font = NSFont.boldSystemFont(ofSize: 13)
-        let stack = NSStackView(views: [title, pathBarBottom, filesTitle, fileSets])
+        let stack = NSStackView(views: [title, pathBarBottom, dropsInSheet, filesTitle, fileSets])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -45,9 +48,14 @@ final class SettingsWindow: NSWindowController {
     private func refresh() {
         pathBarBottom.state = BrowserWindowController.pathBarAtBottom ? .on : .off
         fileSets.state = FileOperations.useSets ? .on : .off
+        dropsInSheet.state = UserDefaults.standard.bool(forKey: "dropsOpenInSheet") ? .on : .off
     }
 
     @objc private func changed(_ sender: Any?) {
+        if (sender as? NSButton) === dropsInSheet {
+            UserDefaults.standard.set(dropsInSheet.state == .on, forKey: "dropsOpenInSheet")
+            return
+        }
         if (sender as? NSButton) === fileSets {
             FileOperations.useSets = fileSets.state == .on
             Log.info("setting: file sets \(FileOperations.useSets ? "on" : "off")")

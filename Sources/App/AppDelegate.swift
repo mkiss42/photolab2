@@ -50,6 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
 
         statusMenu = StatusMenu()
+        DispatchQueue.global(qos: .utility).async { AppFiles.pruneThumbnails() }
         let last = UserDefaults.standard.string(forKey: "lastFolder")
         Activity.set("launch: window")
         if !openedWithItems { openFirstWindow(preferred: last) }
@@ -130,8 +131,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             }
             DispatchQueue.main.async {
                 NSApp.activate(ignoringOtherApps: true)
-                for f in folders { BrowserWindowController.openWindow(at: f) }
-                for (dir, names) in files.sorted(by: { $0.key < $1.key }) { BrowserWindowController.openWindow(at: dir, select: names) }
+                let sheet = UserDefaults.standard.bool(forKey: "dropsOpenInSheet")
+                for f in folders { let c = BrowserWindowController.openWindow(at: f); c.setMode(sheet ? .sheet : .list) }
+                for (dir, names) in files.sorted(by: { $0.key < $1.key }) {
+                    let c = BrowserWindowController.openWindow(at: dir, select: names)
+                    c.setMode(sheet ? .sheet : .list)
+                }
             }
         }
     }
@@ -211,6 +216,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         let view = submenu(main, "View")
         item(view, "Show Sidebar", #selector(toggleSidebarMenu(_:)), "s", [.command, .option], target: self)
+        view.addItem(NSMenuItem.separator())
+        item(view, "as List", #selector(BrowserWindowController.showAsList(_:)), "1")
+        item(view, "as Contact Sheet", #selector(BrowserWindowController.showAsSheet(_:)), "2")
         view.addItem(NSMenuItem.separator())
         item(view, "Show Hidden Files", #selector(BrowserWindowController.toggleHidden(_:)), ".", [.command, .shift])
         item(view, "Keep Folders on Top", #selector(BrowserWindowController.toggleFoldersFirst(_:)))

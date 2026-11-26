@@ -80,6 +80,41 @@ enum AppFiles {
         }
     }
 
+    // MARK: Thumbnail cache (~/Library/Caches/PhotoLab2/thumbs/ab/<hash>.jpg)
+
+    static var thumbsDir: String { return cachesDir + "/thumbs" }
+
+    static func thumbnailPath(_ hash: String) -> String {
+        return thumbsDir + "/" + String(hash.prefix(2)) + "/" + hash + ".jpg"
+    }
+
+    /// Written to a temp name, then renamed: a reader never sees half a JPEG.
+    static func storeThumbnail(_ data: Data, at path: String) {
+        let dir = (path as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: nil)
+        try? data.write(to: URL(fileURLWithPath: path), options: .atomic)
+    }
+
+    /// At launch, in the background: keep the cache under `maxBytes`, oldest files out first.
+    static func pruneThumbnails(maxBytes: Int64 = 3 << 30) {
+        let fm = FileManager.default
+        guard let e = fm.enumerator(at: URL(fileURLWithPath: thumbsDir), includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey],
+                                    options: [.skipsHiddenFiles]) else { return }
+        var files: [(URL, Int64, Date)] = []
+        var total: Int64 = 0
+        for case let u as URL in e {
+            guard let v = try? u.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]), let s = v.fileSize else { continue }
+            files.append((u, Int64(s), v.contentModificationDate ?? Date.distantPast))
+            total += Int64(s)
+        }
+        guard total > maxBytes else { return }
+        var removed = 0
+        for f in files.sorted(by: { $0.2 < $1.2 }) where total > maxBytes * 9 / 10 {
+            if (try? fm.removeItem(at: f.0)) != nil { total -= f.1; removed += 1 }
+        }
+        Log.info("thumbnail cache pruned: \(removed) file(s) removed")
+    }
+
     // MARK: Transfer journal (partial copies in progress)
 
     static var transferJournalPath: String { return supportDir + "/transfer-journal.json" }
@@ -138,6 +173,10 @@ enum AppFiles {
         guard FileManager.default.createFile(atPath: path, contents: data, attributes: nil) else { return false }
         return (try? FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: modified)],
                                                        ofItemAtPath: path)) != nil
+    }
+
+    static func makeTestFile(_ path: String, data: Data) -> Bool {
+        return FileManager.default.createFile(atPath: path, contents: data, attributes: nil)
     }
 
     static func makeTestFolder(_ path: String) -> Bool {

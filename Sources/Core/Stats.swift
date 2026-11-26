@@ -43,6 +43,14 @@ enum Stats {
         freezeWhat[kind, default: 0] += 1
     }
 
+    private static var thumbsMade = 0, thumbsFromDisk = 0, thumbMs: Double = 0, thumbSlowest: Double = 0
+
+    static func noteThumb(fromDisk: Bool, ms: Double) {
+        lock.lock(); defer { lock.unlock() }
+        if fromDisk { thumbsFromDisk += 1; return }
+        thumbsMade += 1; thumbMs += ms; thumbSlowest = max(thumbSlowest, ms)
+    }
+
     static func noteTransfer(files: Int, bytes: Int64, seconds: Double, network: Bool, failed: Int) {
         lock.lock(); defer { lock.unlock() }
         var t = transfers[network] ?? (0, 0, 0, 0)
@@ -114,6 +122,9 @@ enum Stats {
         let methods = Dictionary(grouping: (listings[false] ?? []) + (listings[true] ?? []), by: { $0.bulk ? "bulk" : "readdir" })
             .map { "\($0.key) \($0.value.count)" }.sorted().joined(separator: ", ")
         out.append("METHOD " + (methods.isEmpty ? "none" : methods))
+        out.append(thumbsMade + thumbsFromDisk == 0 ? "THUMBS none" :
+            String(format: "THUMBS made %ld (avg %.0f ms, slowest %.0f ms), from cache %ld", thumbsMade,
+                   thumbsMade > 0 ? thumbMs / Double(thumbsMade) : 0, thumbSlowest, thumbsFromDisk))
         if transfers.isEmpty {
             out.append("COPY none")
         } else {

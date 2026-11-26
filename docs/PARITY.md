@@ -48,18 +48,18 @@ Status: **done** · **part** (exists, something missing) · **todo** (phase in b
 
 | PhotoLab 1 | Status | Notes |
 |---|---|---|
-| Grid of tiles: thumbnail, name + extensions, up to 5 metadata rows | todo (2) | |
+| Grid of tiles: thumbnail, name + extensions, up to 5 metadata rows | part (0.7.0) | metadata rows with the metadata reader (0.8+) |
 | Stars (0-5) and colour labels (0-8) on tiles, click to set | todo (2) | |
 | Tile buttons: preview, reveal, edit, info | todo (2) | |
-| Size slider 80-400 | todo (2) | |
+| Size slider 80-400 | done (0.7.0) | |
 | Filter bar: stars and colour labels, Alt-click solo | todo (2) | |
-| Selection: click, Cmd-click, Shift-click, arrows, Shift/Cmd-arrows, Cmd-A | todo (2) | |
+| Selection: click, Cmd-click, Shift-click, arrows, Shift/Cmd-arrows, Cmd-A | done (0.7.0) | rubber band later |
 | Rating / label shortcuts with configurable modifiers | todo (2) | |
-| M rename, Space preview, I metadata editor, Return open, Cmd-E open batch | todo (2) | |
+| M rename, Space preview, I metadata editor, Return open, Cmd-E open batch | part (0.7.0) | M, Return, Cmd-E done; Space preview 0.8; I with the editor |
 | Tabs, "+" tab, several windows, drag tabs between windows | todo (2) | |
 | Search-results and recursive tabs (protected, not replaced by navigation) | todo (2/4) | |
 | Live updates from the watcher (add/remove/changed sig -> new thumb) | todo (2) | |
-| Drag out / drop in (move/copy) | todo (2) | with the copy engine |
+| Drag out / drop in (move/copy) | done (0.7.0) | |
 | Context menu: open, open with, ratings, labels, template, rename, refresh, copy path, copy, reveal (Finder/tree), delete | todo (2) | |
 | Metadata loading progress bar, item count | todo (2) | |
 

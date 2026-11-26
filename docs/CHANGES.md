@@ -1,5 +1,35 @@
 # Changes
 
+## 0.7.0 — contact sheet
+
+- Every window can show its folder as a list or as a contact sheet: the two buttons next to
+  the arrows, View > as List (Cmd-1) / as Contact Sheet (Cmd-2). New windows open the way you
+  last chose. Space on a folder opens it in the contact sheet (from the list too).
+- Tiles: thumbnail, name, extensions ("CR3+JPG+XMP": one tile per set, like the list). Slider in
+  the status bar sets the size (80-400), for all windows.
+- Thumbnails are made in the background for the tiles on screen first, then a screen ahead;
+  tiles scrolled away are dropped from the queue. RAW: the preview embedded by the camera (a
+  small part of the file, not a full read); a set uses its JPG. Kept in memory and on the local
+  disk (~/Library/Caches/PhotoLab2/thumbs, capped at 3 GB), so a folder seen before shows at
+  once. A changed file gets a new thumbnail.
+- In the sheet: click / Cmd-click / Shift-click, arrows (Shift extends), Cmd-A, type a letter,
+  Return or double-click opens, M renames, Backspace trashes, Cmd-C / Cmd-V / Cmd-D, drag out
+  (whole sets) and drop in (on a folder tile: into it), right-click menu.
+- Settings: "dropped on the app icon open in the contact sheet".
+- Short Report: THUMBS line (made, average and slowest ms, from cache).
+- Not yet: preview window and Quick Look on Space (0.8), stars / colour labels (0.8), tabs,
+  rubber-band selection, Finder tags in the sheet.
+
+Test checklist (5 minutes, use a share folder with RAW+JPG sets):
+[ ] 1  Cmd-2: tiles; thumbnails fill in from the top; scroll fast: the visible ones come first.
+[ ] 2  Leave and come back to the folder: thumbnails appear at once (disk cache).
+[ ] 3  Slider: tiles resize smoothly.
+[ ] 4  Arrows, Shift-arrows, Return opens, M renames a set, Backspace trashes (+ Cmd-Z).
+[ ] 5  Drag a tile to Finder (all files of the set arrive); drop a file on a folder tile.
+[ ] 6  In the list, Space on a folder: contact sheet of that folder.
+[ ] 7  Short Report: THUMBS line - how fast on the share?
+
+
 ## 0.6.1 — Network, menu bar clicks reversed
 
 - Sidebar > Network (also Go > Network / Connect to Server, Cmd-K, and in the menu bar icon):

@@ -37,6 +37,29 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     private let sidebar = SidebarController()
     private let list = FileListController()
+    private let sheet = ContactSheetController()
+
+    enum ViewMode: String { case list, sheet }
+    /// The mode new windows start in (the last one chosen).
+    static var defaultMode: ViewMode {
+        get { return ViewMode(rawValue: UserDefaults.standard.string(forKey: "viewMode") ?? "") ?? .list }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "viewMode") }
+    }
+    private(set) var mode: ViewMode = BrowserWindowController.defaultMode
+    private let modeControl = NSSegmentedControl()
+    private let sizeSlider = NSSlider()
+
+    // The selection, whichever view shows the folder.
+    private func selection() -> [FileEntry] { return mode == .sheet ? sheet.selectedEntries() : list.selectedEntries() }
+    private var selectedCount: Int { return mode == .sheet ? sheet.selectionCount : list.selectionCount }
+    private var shownCounts: (rows: Int, sets: Int, total: Int) { return mode == .sheet ? sheet.shownCounts : list.shownCounts }
+    private func setMembers(_ entries: [FileEntry]) -> [String] {
+        guard mode == .sheet else { return list.withSetMembers(entries) }
+        let want = Set(entries.map { $0.path })
+        var out: [String] = []
+        for it in sheet.grid.items where want.contains(it.entry.path) { out += it.isSet ? it.members.map { $0.path } : [it.entry.path] }
+        return out
+    }
     private let pathBar = NSStackView()
     private let backButton = NSButton()
     private let forwardButton = NSButton()
@@ -158,7 +181,16 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         pathBar.spacing = 0
         pathBar.alignment = .centerY
         pathBar.setHuggingPriority(NSLayoutConstraint.Priority(rawValue: 100), for: .horizontal)
-        for v in [sidebarButton, backButton, forwardButton, upButton] as [NSView] { navBar.addArrangedSubview(v) }
+        modeControl.segmentCount = 2
+        modeControl.setImage(NSImage(named: NSImage.listViewTemplateName), forSegment: 0)
+        modeControl.setImage(NSImage(named: NSImage.iconViewTemplateName), forSegment: 1)
+        modeControl.setToolTip("List (Cmd-1)", forSegment: 0)
+        modeControl.setToolTip("Contact sheet (Cmd-2)", forSegment: 1)
+        modeControl.trackingMode = .selectOne
+        modeControl.segmentStyle = .texturedRounded
+        modeControl.target = self
+        modeControl.action = #selector(modeClicked(_:))
+        for v in [sidebarButton, backButton, forwardButton, upButton, modeControl] as [NSView] { navBar.addArrangedSubview(v) }
         pathRow.orientation = .horizontal
         pathRow.edgeInsets = NSEdgeInsets(top: 4, left: 8, bottom: 2, right: 8)
         navBar.orientation = .horizontal
@@ -178,6 +210,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         list.onDrop = { [weak self] paths, dest, kind in
             TransferController.shared.start(paths, to: dest, kind: kind, from: self)
         }
+        list.onSpace = { [weak self] in self?.spacePressed() }
+        let g = sheet.grid
+        g.onOpen = { [weak self] sel in self?.open(sel) }
+        g.onTrash = { [weak self] in self?.moveToTrash(nil) }
+        g.onRename = { [weak self] in self?.renameSelected(nil) }
+        g.onSpace = { [weak self] in self?.spacePressed() }
+        g.onSelectionChange = { [weak self] in self?.updateStatus() }
+        g.onDrop = { [weak self] paths, dest, kind in TransferController.shared.start(paths, to: dest, kind: kind, from: self) }
+        g.onMenu = { [weak self] in self?.sheetMenu() }
         list.showHidden = BrowserWindowController.showHidden
         list.foldersOnly = BrowserWindowController.foldersOnly
 
@@ -200,7 +241,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         statusSpinner.style = .spinning
         statusSpinner.controlSize = .small
         statusSpinner.isDisplayedWhenStopped = false
-        for v in [statusSpinner, statusLabel, brainLabel] as [NSView] { statusBar.addArrangedSubview(v) }
+        sizeSlider.minValue = 80
+        sizeSlider.maxValue = 400
+        sizeSlider.doubleValue = Double(ContactSheetController.tileSize)
+        sizeSlider.controlSize = .small
+        sizeSlider.target = self
+        sizeSlider.action = #selector(sizeChanged(_:))
+        sizeSlider.toolTip = "Thumbnail size"
+        sizeSlider.widthAnchor.constraint(equalToConstant: 120).isActive = true
+        for v in [statusSpinner, statusLabel, sizeSlider, brainLabel] as [NSView] { statusBar.addArrangedSubview(v) }
         statusBar.orientation = .horizontal
         statusBar.edgeInsets = NSEdgeInsets(top: 3, left: 10, bottom: 4, right: 10)
         statusLabel.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(rawValue: 100), for: .horizontal)
@@ -210,6 +259,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         rightStack.alignment = .leading
         rightStack.distribution = .fill
         list.view.setContentHuggingPriority(NSLayoutConstraint.Priority(rawValue: 1), for: .vertical)
+        sheet.view.setContentHuggingPriority(NSLayoutConstraint.Priority(rawValue: 1), for: .vertical)
+        modeControl.selectedSegment = mode == .sheet ? 1 : 0
+        sizeSlider.isHidden = mode != .sheet
         arrangeRightStack()
 
         let side = sidebar.scroll
@@ -222,6 +274,28 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     /// Path bar above the list (default) or below it, from Settings.
+    private var content: NSView { return mode == .sheet ? sheet.view : list.view }
+
+    /// List or contact sheet. Both always hold the folder's listing, so switching is instant.
+    func setMode(_ m: ViewMode) {
+        mode = m
+        BrowserWindowController.defaultMode = m
+        modeControl.selectedSegment = m == .sheet ? 1 : 0
+        sizeSlider.isHidden = m != .sheet
+        arrangeRightStack()
+        window?.makeFirstResponder(m == .sheet ? sheet.grid as NSView : list.table as NSView)
+        if m == .sheet { DispatchQueue.main.async { [weak self] in self?.sheet.grid.relayout() } }
+        updateStatus()
+    }
+
+    @objc private func modeClicked(_ sender: Any?) { setMode(modeControl.selectedSegment == 1 ? .sheet : .list) }
+    @objc func showAsList(_ sender: Any?) { setMode(.list) }
+    @objc func showAsSheet(_ sender: Any?) { setMode(.sheet) }
+    @objc private func sizeChanged(_ sender: Any?) {
+        let v = CGFloat(sizeSlider.doubleValue.rounded())
+        for c in BrowserWindowController.open { c.sheet.setTileSize(v); c.sizeSlider.doubleValue = Double(v) }
+    }
+
     private func arrangeRightStack() {
         for v in rightStack.arrangedSubviews { rightStack.removeArrangedSubview(v); v.removeFromSuperview() }
         // Path bar above: one row (nav buttons + path). Below: nav buttons stay on top, the path
@@ -231,10 +305,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         let order: [NSView]
         if BrowserWindowController.pathBarAtBottom {
             pathRow.setViews([pathBar], in: .leading)
-            order = [navBar, filterRow, list.view, pathRow, statusBar]
+            order = [navBar, filterRow, content, pathRow, statusBar]
         } else {
             navBar.addArrangedSubview(pathBar)
-            order = [navBar, filterRow, list.view, statusBar]
+            order = [navBar, filterRow, content, statusBar]
         }
         for v in order {
             rightStack.addArrangedSubview(v)
@@ -356,6 +430,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         list.foldersOnly = BrowserWindowController.foldersOnly
         list.rootPath = path
         list.setEntries(listing.entries, select: select)
+        sheet.showHidden = showHidden
+        sheet.foldersOnly = BrowserWindowController.foldersOnly
+        sheet.foldersFirst = BrowserWindowController.foldersFirst
+        sheet.filterText = list.filterText
+        sheet.rootPath = path
+        sheet.setEntries(listing.entries, select: select)
         if listing.error != 0 {
             list.showMessage("Can't open this folder: \(listing.errorText) (E-LIST-\(listing.error))")
         } else if visible.isEmpty {
@@ -364,7 +444,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         } else {
             list.showMessage(nil)
         }
-        if listing.error == 0 && !list.filterText.isEmpty && list.shownCounts.rows == 0 {
+        if listing.error == 0 && !list.filterText.isEmpty && shownCounts.rows == 0 {
             list.showMessage("Nothing here matches \"\(list.filterText)\"")
         }
         updateStatus()
@@ -375,10 +455,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         guard let l = lastListing else { statusLabel.stringValue = ""; return }
         if l.error != 0 { statusLabel.stringValue = "Not readable: \(l.errorText)"; return }
         let hidden = l.entries.filter { $0.isHidden }.count
-        let c = list.shownCounts                       // expanded folders included, a set is one
+        let c = shownCounts                       // expanded folders included, a set is one
         var parts = ["\(c.rows) item\(c.rows == 1 ? "" : "s")" + (c.sets > 0 ? " (\(c.sets) set\(c.sets == 1 ? "" : "s"), \(c.total) total)" : "")]
         if hidden > 0 && !BrowserWindowController.showHidden { parts.append("\(hidden) hidden") }
-        let sel = list.selectionCount
+        let sel = selectedCount
         if sel > 0 { parts.append("\(sel) selected") }
         parts.append(fromCache ? "from memory" : String(format: "%@ %.0f ms", l.method, l.milliseconds))
         if !l.problems.isEmpty { parts.append("\(l.problems.count) unreadable") }
@@ -462,7 +542,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// Edit > Copy Path (Cmd-Shift-C): the selected items' paths, one per line; the folder itself
     /// when nothing is selected.
     @objc func copyPaths(_ sender: Any?) {
-        let sel = list.selectedEntries().map { $0.path }
+        let sel = selection().map { $0.path }
         BrowserWindowController.putOnClipboard(sel.isEmpty ? [currentPath] : sel)
     }
 
@@ -557,7 +637,82 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
     }
 
-    @objc func openSelected(_ sender: Any?) { list.openSelection() }
+    @objc func openSelected(_ sender: Any?) {
+        if mode == .sheet { let s = selection(); if s.isEmpty { NSSound.beep() } else { open(s) } } else { list.openSelection() }
+    }
+
+    /// Space: a folder opens in the contact sheet (from the list too). Files get the preview
+    /// with 0.8.
+    private func spacePressed() {
+        let s = selection()
+        if s.count == 1, let e = s.first, e.isDirectory && !e.isPackage {
+            if mode != .sheet { setMode(.sheet) }
+            navigate(to: e.path)
+        } else {
+            NSSound.beep()
+        }
+    }
+
+    /// Right-click in the contact sheet: the list's file items (tags stay in the list for now).
+    private func sheetMenu() -> NSMenu {
+        let m = NSMenu()
+        let sel = selection()
+        func add(_ title: String, _ action: String) { m.addItem(NSMenuItem(title: title, action: Selector(action), keyEquivalent: "")) }
+        if let first = sel.first {
+            add("Open", "openSelected:")
+            let ow = NSMenuItem(title: "Open With", action: nil, keyEquivalent: "")
+            ow.submenu = FinderActions.openWithMenu(for: first)
+            m.addItem(ow)
+            if sel.count == 1 && first.isDirectory && !first.isPackage { add("Open in New Window", "openInNewWindow:") }
+            add("Show in Finder", "revealInFinder:")
+            add("Get Info", "getInfo:")
+            m.addItem(NSMenuItem.separator())
+            if sel.count == 1 { add("Rename", "renameSelected:") }
+            add("Copy", "copy:")
+        }
+        if NSPasteboard.general.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) {
+            add("Paste", "paste:")
+            add("Move Items Here", "pasteMoving:")
+        }
+        if !sel.isEmpty {
+            add("Duplicate", "duplicate:")
+            m.addItem(NSMenuItem.separator())
+            add("Copy Path", "copyPaths:")
+            m.addItem(NSMenuItem.separator())
+            add("Move to Trash", "moveToTrash:")
+        } else {
+            add("New Folder", "newFolder:")
+        }
+        return m
+    }
+
+    /// M / Return-rename in the contact sheet: a small sheet with the name (set: without the
+    /// extension, every member keeps its own).
+    private func renameInSheet() {
+        let sel = sheet.grid.selectedItems
+        guard sel.count == 1, let it = sel.first, let w = window else { NSSound.beep(); return }
+        let a = NSAlert()
+        a.messageText = "Rename \"\(it.displayName)\""
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        field.stringValue = it.isSet ? it.displayName : it.entry.name
+        a.accessoryView = field
+        a.addButton(withTitle: "Rename")
+        a.addButton(withTitle: "Cancel")
+        a.window.initialFirstResponder = field
+        a.beginSheetModal(for: w) { [weak self] r in
+            guard r == .alertFirstButtonReturn else { return }
+            var name = field.stringValue.trimmingCharacters(in: .whitespaces)
+            if it.isSet {
+                let ext = FileOperations.split(it.entry.name).ext
+                if !name.lowercased().hasSuffix("." + ext.lowercased()) { name += "." + ext }
+            }
+            if name != it.entry.name && !name.isEmpty { self?.commitRename(it.entry, name) }
+        }
+        DispatchQueue.main.async {
+            let stem = it.isSet || it.isFolder ? field.stringValue : FileOperations.split(field.stringValue).stem
+            field.currentEditor()?.selectedRange = NSRange(location: 0, length: (stem as NSString).length)
+        }
+    }
 
     @objc func refresh(_ sender: Any?) {
         ListingCache.shared.invalidate(currentPath)
@@ -588,6 +743,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     @objc func renameSelected(_ sender: Any?) {
+        if mode == .sheet { renameInSheet(); return }
         if !list.beginRename() { NSSound.beep() }
     }
 
@@ -629,7 +785,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     @objc func moveToTrash(_ sender: Any?) {
-        let sel = list.selectedEntries().map { $0.path }
+        let sel = selection().map { $0.path }
         guard !sel.isEmpty else { NSSound.beep(); return }
         performTrash(sel, sets: FileOperations.useSets)
     }
@@ -705,8 +861,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// Cmd-C: the selected items (with their set members) go on the clipboard as files, so they
     /// paste in PhotoLab and in Finder.
     @objc func copy(_ sender: Any?) {
-        let sel = list.selectedEntries()
-        let paths = list.withSetMembers(sel)
+        let sel = selection()
+        let paths = setMembers(sel)
         guard !paths.isEmpty else { NSSound.beep(); return }
         let folders = Set(sel.filter { $0.isDirectory }.map { $0.path })
         Activity.during("clipboard: copy") {
@@ -733,16 +889,16 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private func pasteFiles(kind: TransferKind) {
         let paths = Activity.during("clipboard: paste") { BrowserWindowController.clipboardFiles }
         guard !paths.isEmpty else { NSSound.beep(); return }
-        let dest = list.selectedEntries().first.map { Paths.parent($0.path) } ?? currentPath
+        let dest = selection().first.map { Paths.parent($0.path) } ?? currentPath
         TransferController.shared.start(paths, to: dest, kind: kind, from: self)
     }
 
     /// Cmd-D: copies next to the originals ("IMG_1 copy.CR3"; a set stays a set).
     @objc func duplicate(_ sender: Any?) {
-        let sel = list.selectedEntries()
+        let sel = selection()
         guard let first = sel.first else { NSSound.beep(); return }
         let dir = Paths.parent(first.path)
-        let paths = list.withSetMembers(sel.filter { Paths.parent($0.path) == dir })
+        let paths = setMembers(sel.filter { Paths.parent($0.path) == dir })
         TransferController.shared.start(paths, to: dir, kind: .copy, from: self)
     }
 
@@ -921,11 +1077,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     @objc func openWithApp(_ sender: NSMenuItem) {
         guard let app = sender.representedObject as? URL else { return }
-        FinderActions.open(list.selectedEntries().map { $0.path }, with: app)
+        FinderActions.open(selection().map { $0.path }, with: app)
     }
 
     @objc func openWithOther(_ sender: Any?) {
-        let paths = list.selectedEntries().map { $0.path }
+        let paths = selection().map { $0.path }
         guard !paths.isEmpty, let w = window else { return }
         let p = NSOpenPanel()
         p.directoryURL = URL(fileURLWithPath: "/Applications")
@@ -939,30 +1095,30 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     /// Selected folders go to the end of Favorites (Finder: Ctrl-Cmd-T).
     @objc func addToSidebar(_ sender: Any?) {
-        let dirs = list.selectedEntries().filter { $0.isDirectory && !$0.isPackage }.map { $0.path }
+        let dirs = selection().filter { $0.isDirectory && !$0.isPackage }.map { $0.path }
         let paths = dirs.isEmpty ? [currentPath] : dirs
         Favorites.all = Favorites.inserting(paths, at: Favorites.all.count, into: Favorites.all)
         Log.info("sidebar: added \(paths.count) favorite(s)")
     }
 
     @objc func openInNewWindow(_ sender: Any?) {
-        for e in list.selectedEntries() where e.isDirectory && !e.isPackage { BrowserWindowController.openWindow(at: e.path) }
+        for e in selection() where e.isDirectory && !e.isPackage { BrowserWindowController.openWindow(at: e.path) }
     }
 
     @objc func revealInFinder(_ sender: Any?) {
-        let paths = list.selectedEntries().map { $0.path }
+        let paths = selection().map { $0.path }
         FinderActions.reveal(paths.isEmpty ? [currentPath] : paths)
     }
 
     @objc func getInfo(_ sender: Any?) {
-        let paths = list.withSetMembers(list.selectedEntries())
+        let paths = setMembers(selection())
         FinderActions.getInfo(paths.isEmpty ? [currentPath] : paths)
     }
 
     /// Selected volumes, or the volume whose top folder is on screen. Windows showing it move to
     /// /Volumes first, so PhotoLab itself is not what keeps it busy.
     @objc func ejectVolume(_ sender: Any?) {
-        var targets = FinderActions.ejectable(list.selectedEntries().map { $0.path })
+        var targets = FinderActions.ejectable(selection().map { $0.path })
         if targets.isEmpty { targets = FinderActions.ejectable([currentPath]) }
         guard !targets.isEmpty else { NSSound.beep(); return }
         for v in targets {
@@ -990,11 +1146,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         case #selector(goBack(_:))?: return !backStack.isEmpty
         case #selector(goForward(_:))?: return !forwardStack.isEmpty
         case #selector(goEnclosingFolder(_:))?: return currentPath != "/"
-        case #selector(openSelected(_:))?: return list.selectionCount > 0
-        case #selector(renameSelected(_:))?: return list.selectionCount == 1
-        case #selector(moveToTrash(_:))?: return list.selectionCount > 0
-        case #selector(BrowserWindowController.copy(_:))?: return list.selectionCount > 0
-        case #selector(duplicate(_:))?: return list.selectionCount > 0
+        case #selector(openSelected(_:))?: return selectedCount > 0
+        case #selector(renameSelected(_:))?: return selectedCount == 1
+        case #selector(moveToTrash(_:))?: return selectedCount > 0
+        case #selector(BrowserWindowController.copy(_:))?: return selectedCount > 0
+        case #selector(duplicate(_:))?: return selectedCount > 0
         case #selector(paste(_:))?, #selector(pasteMoving(_:))?, #selector(pasteIntoPathItem(_:))?, #selector(moveIntoPathItem(_:))?:
             return NSPasteboard.general.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
         case #selector(toggleHidden(_:))?:
@@ -1003,12 +1159,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         case #selector(toggleSidebar(_:))?:
             item.title = sidebarShown ? "Hide Sidebar" : "Show Sidebar"
             return true
+        case #selector(showAsList(_:))?: item.state = mode == .list ? .on : .off; return true
+        case #selector(showAsSheet(_:))?: item.state = mode == .sheet ? .on : .off; return true
         case #selector(toggleFoldersOnly(_:))?:
             item.state = BrowserWindowController.foldersOnly ? .on : .off
             return true
-        case #selector(openInNewWindow(_:))?: return list.selectedEntries().contains { $0.isDirectory && !$0.isPackage }
+        case #selector(openInNewWindow(_:))?: return selection().contains { $0.isDirectory && !$0.isPackage }
         case #selector(ejectVolume(_:))?:
-            return !FinderActions.ejectable(list.selectedEntries().map { $0.path } + [currentPath]).isEmpty
+            return !FinderActions.ejectable(selection().map { $0.path } + [currentPath]).isEmpty
         case #selector(toggleFoldersFirst(_:))?:
             item.state = BrowserWindowController.foldersFirst ? .on : .off
             return true
@@ -1060,6 +1218,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         watcher = nil
         watchExpanded([])
         list.stopTags()
+        sheet.stop()
         _ = generation.next()
         NotificationCenter.default.removeObserver(self)
         BrowserWindowController.open.removeAll { $0 === self }

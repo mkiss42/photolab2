@@ -39,6 +39,7 @@ final class FileOutlineView: NSOutlineView {
     var onOpen: (() -> Void)?
     var onRename: (() -> Void)?
     var onTrash: (() -> Void)?
+    var onSpace: (() -> Void)?
     var contextMenu: (() -> NSMenu?)?
     private var lastTypeSelect = Date.distantPast
 
@@ -53,6 +54,7 @@ final class FileOutlineView: NSOutlineView {
             onTrash?(); return
         }
         if mods == [.command] && chars == "e" { onOpen?(); return }
+        if event.keyCode == 49 && mods.isEmpty && Date().timeIntervalSince(lastTypeSelect) > 1.0 { onSpace?(); return }   // Space
         if mods.isEmpty && chars == "m" && Date().timeIntervalSince(lastTypeSelect) > 1.0 { onRename?(); return }
         if mods.isEmpty || mods == [.shift] { lastTypeSelect = Date() }
         super.keyDown(with: event)
@@ -148,6 +150,8 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     /// Double-click, Cmd-E, Cmd-Down.
     var onOpen: (([FileEntry]) -> Void)?
+    /// Space (a folder opens in the contact sheet).
+    var onSpace: (() -> Void)?
     /// Cmd-double-click on a folder: it opens in a new window.
     var onOpenInNewWindow: ((FileEntry) -> Void)?
     /// Return / M, Backspace: the window decides what to rename or trash.
@@ -204,6 +208,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         table.onOpen = { [weak self] in self?.openSelection() }
         table.onRename = { [weak self] in self?.onRenameRequest?() }
         table.onTrash = { [weak self] in self?.onTrashRequest?() }
+        table.onSpace = { [weak self] in self?.onSpace?() }
         table.contextMenu = { [weak self] in self?.contextMenu() }
         table.sortDescriptors = [NSSortDescriptor(key: EntrySort.Key.name.rawValue, ascending: true)]
         table.registerForDraggedTypes([.fileURL])
