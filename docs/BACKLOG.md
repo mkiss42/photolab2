@@ -12,7 +12,6 @@ early even if its feature comes late, so nothing has to be rebuilt.
 
 - **Folder merge on copy** (copy engine, later): copying a folder onto one with the same name
   could offer "Merge" (add missing files, keep both on file clashes). 0.3.0 offers Keep Both / Skip.
-- **Drag to Finder carries whole sets** (with one row per set, 1c).
 
 | # | Idea | From | Kind | Phase |
 |---|---|---|---|---|

@@ -6,7 +6,7 @@ import Foundation
 
 enum ListingSelfTest {
     static func run() -> [SelfTestResult] {
-        var out: [SelfTestResult] = [paths(), naturalSort(), cache(), volumes(), realRecords()]
+        var out: [SelfTestResult] = [paths(), naturalSort(), setRows(), cache(), volumes(), realRecords()]
         guard let dir = AppFiles.makeListingFixture() else {
             out.append(SelfTestResult(name: "listing-fixture", status: .fail, detail: "could not create fixture"))
             return out
@@ -38,6 +38,23 @@ enum ListingSelfTest {
     static func entry(_ name: String, dir: Bool = false, size: Int64 = 0, mtime: Double = 0) -> FileEntry {
         return FileEntry.make(name: name, dir: "/t", mode: dir ? 0o040755 : 0o100644, size: size,
                               modified: mtime, created: 0, added: 0, flags: 0, device: 1, inode: 1)
+    }
+
+    /// One row per set: raw is the representative, sizes add up, Ext in raw/jpg/sidecar order;
+    /// a lone JPG, a PSD of the same name and a folder stay rows of their own.
+    static func setRows() -> SelfTestResult {
+        let n = "set-rows"
+        func f(_ name: String, _ size: Int64, dir: Bool = false) -> FileEntry {
+            return FileEntry.make(name: name, dir: "/t", mode: dir ? 0o040755 : 0o100644, size: size, modified: 1,
+                                  created: 0, added: 0, flags: 0, device: 0, inode: 0)
+        }
+        let rows = FileSets.rows([f("A.xmp", 1), f("A.JPG", 10), f("A.CR3", 100), f("A.psd", 5), f("B.JPG", 7), f("A", 0, dir: true)])
+        let byName = Dictionary(rows.map { ($0.entry.name, $0) }, uniquingKeysWith: { a, _ in a })
+        guard rows.count == 4, let a = byName["A.CR3"], a.entry.size == 111, FileSets.extLabel(a.members) == "CR3+JPG+XMP",
+            byName["A.psd"]?.members.count == 1, byName["B.JPG"]?.members.count == 1, byName["A"] != nil else {
+            return SelfTestResult(name: n, status: .fail, detail: rows.map { "\($0.entry.name)/\($0.members.count)" }.joined(separator: " "))
+        }
+        return SelfTestResult(name: n, status: .ok, detail: "")
     }
 
     static func naturalSort() -> SelfTestResult {

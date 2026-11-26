@@ -21,6 +21,11 @@ final class FileNode: NSObject {
     var showPlaceholder = false
     var error: String?
     let isPlaceholder: Bool
+    /// Files of the set this row stands for (rank order), when sets are on; else empty.
+    var members: [FileEntry] = []
+    var isSet: Bool { return members.count > 1 }
+    /// What the Name column shows: a set by its name without extension (the Ext column has them).
+    var displayName: String { return isSet ? FileOperations.split(entry.name).stem : entry.name }
 
     init(entry: FileEntry, placeholder: Bool = false) {
         self.entry = entry
@@ -156,7 +161,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     override init() {
         super.init()
         let columns: [(String, String, CGFloat, EntrySort.Key)] = [
-            ("name", "Name", 300, .name), ("modified", "Date Modified", 165, .modified),
+            ("name", "Name", 300, .name), ("ext", "Ext", 90, .ext), ("modified", "Date Modified", 165, .modified),
             ("size", "Size", 75, .size), ("kind", "Kind", 130, .kind)]
         for (id, title, width, key) in columns {
             let c = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
@@ -221,20 +226,22 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     // MARK: Nodes
 
-    private func visible(_ entries: [FileEntry]) -> [FileEntry] {
-        let v = showHidden ? entries : entries.filter { !$0.isHidden }
-        return EntrySort.sort(v, by: sortKey, ascending: ascending, foldersFirst: foldersFirst)
-    }
-
-    /// Nodes for `entries`, reusing existing folder nodes with the same path (keeps their
-    /// expansion and children).
+    /// Nodes for `entries` (hidden ones filtered, sets folded into one row when sets are on,
+    /// sorted), reusing existing folder nodes with the same path (keeps their expansion and children).
     private func nodes(for entries: [FileEntry]) -> [FileNode] {
-        return visible(entries).map { e -> FileNode in
+        let v = showHidden ? entries : entries.filter { !$0.isHidden }
+        let rows = FileOperations.useSets ? FileSets.rows(v) : v.map { SetRow(entry: $0, members: [$0]) }
+        var members: [String: [FileEntry]] = [:]
+        for r in rows where r.members.count > 1 { members[r.entry.path] = r.members }
+        let sorted = EntrySort.sort(rows.map { $0.entry }, by: sortKey, ascending: ascending, foldersFirst: foldersFirst)
+        return sorted.map { e -> FileNode in
             if e.isDirectory, let prev = nodesByPath[e.path] {
                 prev.entry = e
                 return prev
             }
-            return FileNode(entry: e)
+            let n = FileNode(entry: e)
+            n.members = members[e.path] ?? []
+            return n
         }
     }
 
@@ -312,6 +319,9 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     // MARK: Rename in place
 
     private var editing: (field: NSTextField, entry: FileEntry)?
+    /// Renaming a set row: only the name is edited; the extension is added back on commit.
+    private var editSetExt: String?
+    private var editShown = ""
     private var editCancelled = false
     private var deferred: [() -> Void] = []
 
@@ -326,7 +336,9 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         table.scrollRowToVisible(r)
         editing = (tf, n.entry)
         editCancelled = false
-        tf.stringValue = n.entry.name
+        editSetExt = n.isSet ? FileOperations.split(n.entry.name).ext : nil
+        editShown = n.displayName
+        tf.stringValue = n.isSet ? n.displayName : n.entry.name
         tf.isEditable = true
         tf.isSelectable = true
         tf.drawsBackground = true
@@ -334,7 +346,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         tf.textColor = NSColor.textColor
         tf.delegate = self
         table.window?.makeFirstResponder(tf)
-        let stem = n.entry.isDirectory ? n.entry.name : FileOperations.split(n.entry.name).stem
+        let stem = n.entry.isDirectory || n.isSet ? tf.stringValue : FileOperations.split(n.entry.name).stem
         tf.currentEditor()?.selectedRange = NSRange(location: 0, length: (stem as NSString).length)
         return true
     }
@@ -460,8 +472,14 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         return NSURL(fileURLWithPath: n.entry.path)
     }
 
+    /// A set row drags as one row; the other files of the set are added to the drag, so Finder
+    /// (and any other app) gets the whole set.
     func outlineView(_ outlineView: NSOutlineView, draggingSession session: NSDraggingSession, willBeginAt screenPoint: NSPoint, forItems draggedItems: [Any]) {
         Activity.set("drag: out")
+        let extra = draggedItems.compactMap { $0 as? FileNode }.flatMap { n in n.members.filter { $0.path != n.entry.path } }
+        if extra.isEmpty { return }
+        let ok = session.draggingPasteboard.writeObjects(extra.map { NSURL(fileURLWithPath: $0.path) })
+        Log.info("drag: \(extra.count) set member(s) added to the drag: \(ok ? "ok" : "refused")")
     }
 
     func outlineView(_ outlineView: NSOutlineView, draggingSession session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
@@ -586,9 +604,12 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         switch id.rawValue {
         case "name":
             if let err = n.error { cell.textField?.stringValue = "\(e.name)  (\(err))" }
-            else { cell.textField?.stringValue = e.name }
+            else { cell.textField?.stringValue = n.displayName }
             cell.imageView?.image = FileIcons.icon(for: e)
             cell.textField?.textColor = e.isHidden ? NSColor.secondaryLabelColor : NSColor.labelColor
+            cell.toolTip = n.isSet ? n.members.map { $0.name }.joined(separator: "\n") : e.path
+        case "ext":
+            cell.textField?.stringValue = e.isDirectory && !e.isPackage ? "" : (n.isSet ? FileSets.extLabel(n.members) : e.ext.uppercased())
         case "modified":
             cell.textField?.stringValue = e.modified > 0 ? dateFormatter.string(from: Date(timeIntervalSince1970: e.modified)) : "--"
         case "size":
@@ -620,7 +641,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         if commandSelector == #selector(NSResponder.cancelOperation(_:)), let ed = editing, ed.field === control {
             let tf = ed.field
             editCancelled = true
-            tf.stringValue = ed.entry.name
+            tf.stringValue = editShown
             tf.abortEditing()
             endRename()
             return true
@@ -632,15 +653,16 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         guard let ed = editing, (obj.object as? NSTextField) === ed.field else { return }
         let tf = ed.field
         let entry = ed.entry
-        let newName = tf.stringValue
-        tf.stringValue = entry.name          // the reload after the rename shows the new name
+        var newName = tf.stringValue
+        if let ext = editSetExt, !newName.lowercased().hasSuffix("." + ext.lowercased()) { newName += "." + ext }
+        tf.stringValue = editShown           // the reload after the rename shows the new name
         endRename()
         if !editCancelled && newName != entry.name { onRenameCommit?(entry, newName) }
     }
 
     func outlineView(_ outlineView: NSOutlineView, typeSelectStringFor tableColumn: NSTableColumn?, item: Any) -> String? {
         guard tableColumn?.identifier.rawValue == "name", let n = item as? FileNode, !n.isPlaceholder else { return nil }
-        return n.entry.name
+        return n.displayName
     }
 }
 

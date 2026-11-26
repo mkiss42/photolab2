@@ -6,7 +6,7 @@ import AppKit
 final class SettingsWindow: NSWindowController {
     private static var shared: SettingsWindow?
     private let pathBarBottom = NSButton(checkboxWithTitle: "Path bar below the list (instead of above)", target: nil, action: nil)
-    private let fileSets = NSButton(checkboxWithTitle: "Treat raw + jpg + xmp with the same name as one set (rename and Trash all of them)", target: nil, action: nil)
+    private let fileSets = NSButton(checkboxWithTitle: "Treat raw + jpg + xmp with the same name as one set (one row; rename, copy and Trash all of them)", target: nil, action: nil)
 
     static func show() {
         let w = shared ?? SettingsWindow()
@@ -51,6 +51,7 @@ final class SettingsWindow: NSWindowController {
         if (sender as? NSButton) === fileSets {
             FileOperations.useSets = fileSets.state == .on
             Log.info("setting: file sets \(FileOperations.useSets ? "on" : "off")")
+            for c in BrowserWindowController.open { c.reapply() }      // one row per set, or not
             return
         }
         BrowserWindowController.pathBarAtBottom = pathBarBottom.state == .on

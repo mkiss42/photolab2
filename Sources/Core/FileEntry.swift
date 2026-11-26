@@ -95,7 +95,7 @@ enum Paths {
 
 /// Finder-like ordering: natural number order, case-insensitive; optionally folders first.
 enum EntrySort {
-    enum Key: String { case name, modified, size, kind }
+    enum Key: String { case name, ext, modified, size, kind }
 
     static func sort(_ entries: [FileEntry], by key: Key, ascending: Bool, foldersFirst: Bool) -> [FileEntry] {
         return entries.sorted { a, b in
@@ -107,7 +107,7 @@ enum EntrySort {
                 : (a.modified < b.modified ? .orderedAscending : .orderedDescending)
             case .size: r = a.size == b.size ? a.name.localizedStandardCompare(b.name)
                 : (a.size < b.size ? .orderedAscending : .orderedDescending)
-            case .kind:
+            case .kind, .ext:
                 let k = a.ext.compare(b.ext)
                 r = k == .orderedSame ? a.name.localizedStandardCompare(b.name) : k
             }

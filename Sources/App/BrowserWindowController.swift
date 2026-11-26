@@ -779,7 +779,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         for c in BrowserWindowController.open { c.reapply() }
     }
 
-    private func reapply() {
+    func reapply() {
         if let l = lastListing, let p = lastListingPath { apply(l, path: p, cached: fromCache, select: nil) }
     }
 

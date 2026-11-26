@@ -1,5 +1,23 @@
 # Changes
 
+## 0.4.0 — one row per set, Ext column
+
+- With sets on (Settings > Files, default), raw + jpg/heic + xmp with the same name are one row:
+  the name without extension, and a new Ext column right after Name: "CR3+JPG+XMP". Size is the
+  whole set; Date Modified the newest member. Hover the name to see the member files.
+  Ordinary files show their extension in Ext; click the Ext header to sort by it.
+- Renaming a set row edits just the name; every member keeps its extension.
+- Dragging a set row to Finder (or anywhere) now carries all of its files.
+- Turning sets off in Settings shows every file as its own row again, at once.
+
+Test checklist (3 minutes):
+[ ] 1  A folder with RAW+JPG+XMP sets: one row each, Ext "CR3+JPG+XMP", a PSD of the same name
+       is its own row.
+[ ] 2  Return on a set row: only the name is selected; type a new one: all three renamed.
+[ ] 3  Drag a set row to a Finder window: all three files arrive.
+[ ] 4  Settings > Files off: separate rows; on again: back to one row.
+
+
 ## 0.3.1 — Short Report fixes
 
 - "up N min" counts from launch (it showed 0 min: the clock started when the report opened).

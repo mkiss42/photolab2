@@ -15,7 +15,7 @@ Status: **done** · **part** (exists, something missing) · **todo** (phase in b
 | Path bar menu: Copy Path / Copy Full Path | done | new in PL2 |
 | Path bar menu: Paste Into, Open in New Tree | todo (1c) | Paste Into needs the copy engine |
 | Sorting: name / ext / modified, folders on top | done | PL2 adds size and kind |
-| One row per set (raw+jpg+xmp as one row) while Settings > Files sets are on; an Ext column right after Name shows "CR3+JPG+XMP" | todo (0.3.x) | decided 2026-11-25 |
+| One row per set (raw+jpg+xmp as one row) while Settings > Files sets are on; an Ext column right after Name shows "CR3+JPG+XMP" | done (0.4.0) | decided 2026-11-25 |
 | Display modes: folders only / current folder's files / expanded folders' files / all | todo (1c) | "folders only" is the useful one |
 | Quick mode (name only), icon style Pretty/Generic/None, show ext / modified columns | todo (1c) | columns show/hide via header menu |
 | Finder colour tag dots on rows | todo (1c) | |
@@ -26,7 +26,7 @@ Status: **done** · **part** (exists, something missing) · **todo** (phase in b
 | New Folder (Cmd-Shift-N) | done | PL1 asked for a name in a dialog; PL2 renames in place |
 | Delete / Backspace | done | Trash + undo; shares: confirmed delete |
 | Cmd-C copies files (set-expanded) to the clipboard; Cmd-V pastes (copies) into the folder | done (0.3.0) | + Cmd-Option-V moves, Cmd-D duplicates |
-| Drag out (set-expanded file URLs); drop into folders: move on same volume, copy across, Option = copy; drop highlight, autoscroll | done (0.3.0) | drags to Finder carry only the dragged rows until set rows arrive; drops in PhotoLab take the whole set |
+| Drag out (set-expanded file URLs); drop into folders: move on same volume, copy across, Option = copy; drop highlight, autoscroll | done (0.3.0) | set rows drag all their files (0.4.0) |
 | Drop from the FTP browser | todo (6) | with FTP |
 | Cmd-/ force refresh (expanded folders too) | done | Cmd-R; add Cmd-/ alias (1c) |
 | Refresh Selected (re-read; nuke derived caches for files) | todo (3) | caches arrive with the brain |
