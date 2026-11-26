@@ -197,6 +197,12 @@ enum TransferSelfTest {
         guard let c = j.created.first, FinderTags.read(c)?.count == 3 else { return fail(n, "tags not copied") }
         _ = FileOperations.changeTag([f], color: 6, add: false)
         guard FinderTags.read(f)?.map({ $0.color }) == [0, 4] else { return fail(n, "after remove") }
+        let c0 = TagLoader.ctime(f) ?? 0
+        Thread.sleep(forTimeInterval: 0.01)
+        guard FileOperations.toggleTag([f], color: 4).added == false, FinderTags.read(f)?.map({ $0.color }) == [0] else {
+            return fail(n, "toggle did not remove Blue")
+        }
+        guard (TagLoader.ctime(f) ?? 0) > c0 else { return fail(n, "change time did not move (live tag updates need it)") }
         FileOperations.setTags(f, [])
         return FinderTags.read(f) == [] ? ok(n) : fail(n, "not cleared")
     }

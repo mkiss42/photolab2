@@ -216,6 +216,10 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = true
         scroll.autohidesScrollers = true
+        NotificationCenter.default.addObserver(forName: .tagsChanged, object: nil, queue: .main) { [weak self] note in
+            if let p = note.userInfo?["paths"] as? [String] { self?.tagsArrived(p) }
+        }
+        startTagRecheck()
         scroll.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main) { [weak self] _ in
             self?.scheduleTagRequest()
@@ -413,9 +417,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         if !sel.isEmpty {
             add("Duplicate", "duplicate:")
             m.addItem(NSMenuItem.separator())
-            let tagsItem = NSMenuItem(title: "Tags", action: nil, keyEquivalent: "")
-            tagsItem.submenu = tagMenu()
-            m.addItem(tagsItem)
+            m.addItem(tagSwatchItem())
             m.addItem(NSMenuItem.separator())
             add("Copy Path", "copyPaths:")
             m.addItem(NSMenuItem.separator())
@@ -459,19 +461,54 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
             let visible = me.table.rows(in: me.table.visibleRect)
             guard visible.length > 0 else { return }
             let end = min(me.table.numberOfRows, visible.location + visible.length * 2)
-            var paths: [String] = []
-            for r in visible.location..<end {
-                if let n = me.table.item(atRow: r) as? FileNode, !n.isPlaceholder { paths.append(n.entry.path) }
-            }
-            TagLoader.shared.request(paths, owner: me) { [weak me] read in me?.tagsArrived(read) }
+            me.visibleTagPaths = me.pathsForTags(visible.location..<end)
+            TagLoader.shared.request(me.visibleTagPaths, owner: me)
+            var folders = Set(me.expandedFolderPaths)
+            folders.insert(me.rootPath)
+            TagWatcher.shared.update(owner: me, folders: folders)
         }
+    }
+
+    /// Paths of these rows and of every file of their sets (a set row shows and changes all).
+    private func pathsForTags(_ rows: Range<Int>) -> [String] {
+        var paths: [String] = []
+        for r in rows {
+            guard let n = table.item(atRow: r) as? FileNode, !n.isPlaceholder else { continue }
+            if n.isSet { paths += n.members.map { $0.path } } else { paths.append(n.entry.path) }
+        }
+        return paths
+    }
+
+    private var visibleTagPaths: [String] = []
+    private var tagTimer: Timer?
+
+    /// The window closes: no more tag reads, checks or FSEvents for it.
+    func stopTags() {
+        tagTimer?.invalidate()
+        tagTimer = nil
+        TagWatcher.shared.remove(owner: self)
+        TagLoader.shared.release(owner: self)
+    }
+
+    /// Shares only (local changes all come through FSEvents): every 5 s, while the window is on
+    /// screen, a stat per row on screen; tags re-read only where the change time moved.
+    private func startTagRecheck() {
+        let t = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
+            guard let me = self, NSApp.isActive || NSApp.windows.contains(where: { $0.isVisible }),
+                let w = me.table.window, w.occlusionState.contains(.visible) else { return }
+            let net = me.visibleTagPaths.filter { Volumes.isNetwork($0) }
+            if !net.isEmpty { TagLoader.shared.recheck(net) }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        tagTimer = t
     }
 
     func tagsArrived(_ paths: [String]) {
         let set = Set(paths)
         var rows = IndexSet()
         for r in 0..<table.numberOfRows {
-            if let n = table.item(atRow: r) as? FileNode, set.contains(n.entry.path) { rows.insert(r) }
+            guard let n = table.item(atRow: r) as? FileNode, !n.isPlaceholder else { continue }
+            if set.contains(n.entry.path) || n.members.contains(where: { set.contains($0.path) }) { rows.insert(r) }
         }
         guard !rows.isEmpty, editing == nil else { return }
         let col = table.column(withIdentifier: NSUserInterfaceItemIdentifier("name"))
@@ -505,34 +542,47 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         return i
     }
 
-    /// Name followed by its tag colours as dots, like Finder.
-    private func nameWithTags(_ text: String, _ path: String, color: NSColor) -> NSAttributedString {
-        let s = NSMutableAttributedString(string: text, attributes: [.foregroundColor: color])
-        let colors = (TagLoader.shared.cached(path) ?? []).map { $0.color }.filter { $0 > 0 }
+    private static let truncating: NSParagraphStyle = {
+        let p = NSMutableParagraphStyle()
+        p.lineBreakMode = .byTruncatingMiddle
+        return p
+    }()
+
+    /// Name followed by its tag colours as dots, like Finder; a set row shows every colour any of
+    /// its files has. Truncates in the middle on one line, like the plain cells.
+    private func nameWithTags(_ n: FileNode, color: NSColor) -> NSAttributedString {
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let s = NSMutableAttributedString(string: n.displayName,
+                                          attributes: [.foregroundColor: color, .font: font, .paragraphStyle: FileListController.truncating])
+        let paths = n.isSet ? n.members.map { $0.path } : [n.entry.path]
+        var colors: [Int] = []
+        for p in paths { for t in TagLoader.shared.cached(p) ?? [] where t.color > 0 && !colors.contains(t.color) { colors.append(t.color) } }
         if colors.isEmpty { return s }
-        s.append(NSAttributedString(string: " "))
+        s.append(NSAttributedString(string: " ", attributes: [.font: font, .paragraphStyle: FileListController.truncating]))
         for c in colors {
             s.append(NSAttributedString(string: "\u{25CF}", attributes: [.foregroundColor: FileListController.tagColor(c),
-                                                                       .font: NSFont.systemFont(ofSize: 10)]))
+                                                                       .font: NSFont.systemFont(ofSize: 10),
+                                                                       .paragraphStyle: FileListController.truncating]))
         }
         return s
     }
 
-    /// The seven Finder colours; a tick when every selected file has it, a dash when some do
-    /// (as far as already read - tags of rows never on screen count as unknown).
-    func tagMenu() -> NSMenu {
-        let m = NSMenu(title: "Tags")
+    /// A colour was clicked in the menu's tag row.
+    var onTagPick: ((Int) -> Void)?
+
+    /// Finder's row of colour dots in the context menu: a tick when every selected file has the
+    /// colour, a dash when some do. What a click does is decided from the files themselves.
+    func tagSwatchItem() -> NSMenuItem {
         let targets = tagTargets()
         let known = targets.map { TagLoader.shared.cached($0) ?? [] }
+        var states: [Int: NSControl.StateValue] = [:]
         for c in FinderTags.menuOrder {
-            let item = NSMenuItem(title: FinderTags.colorNames[c], action: Selector(("toggleTag:")), keyEquivalent: "")
-            item.tag = c
-            item.image = FileListController.tagDot(c)
             let have = known.filter { $0.contains { $0.color == c } }.count
-            item.state = have == 0 ? .off : (have == known.count ? .on : .mixed)
-            m.addItem(item)
+            states[c] = have == 0 ? .off : (have == known.count ? .on : .mixed)
         }
-        return m
+        let item = NSMenuItem()
+        item.view = TagSwatchView(states: states) { [weak self] c in self?.onTagPick?(c) }
+        return item
     }
 
     /// Paths whose tags a menu should show / change: the selection with its sets.
@@ -786,7 +836,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         case "name":
             let color = e.isHidden ? NSColor.secondaryLabelColor : NSColor.labelColor
             if let err = n.error { cell.textField?.stringValue = "\(e.name)  (\(err))"; cell.textField?.textColor = color }
-            else { cell.textField?.attributedStringValue = nameWithTags(n.displayName, e.path, color: color) }
+            else { cell.textField?.attributedStringValue = nameWithTags(n, color: color) }
             cell.imageView?.image = FileIcons.icon(for: e)
             if n.isSet {
                 cell.toolTip = n.members.map { $0.name }.joined(separator: "\n")
@@ -879,6 +929,19 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
             r = (r + 1) % count
             if r == end { break }
         }
+        // No name starts with it: the nearest one - the last name that sorts before it ("z" in
+        // a, f, j goes to j), or the first name when everything sorts after it.
+        var best: (row: Int, name: String)?
+        var first: (row: Int, name: String)?
+        for i in 0..<count {
+            guard let nm = name(i) else { continue }
+            if nm.localizedStandardCompare(searchString) == .orderedAscending {
+                if best == nil || nm.localizedStandardCompare(best!.name) == .orderedDescending { best = (i, nm) }
+            } else if first == nil || nm.localizedStandardCompare(first!.name) == .orderedAscending {
+                first = (i, nm)
+            }
+        }
+        if let b = best ?? first { return outlineView.item(atRow: b.row) }
         return nil
     }
 
@@ -946,4 +1009,77 @@ final class FileCell: NSTableCellView {
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+}
+
+/// The row of seven colour dots in a context menu (Finder style). Hover shows what a click does:
+/// a cross removes (every selected file has it), a plus adds.
+final class TagSwatchView: NSView {
+    private let states: [Int: NSControl.StateValue]
+    private let pick: (Int) -> Void
+    private var hover: Int?
+    private let size: CGFloat = 14, gap: CGFloat = 7, left: CGFloat = 20
+
+    init(states: [Int: NSControl.StateValue], pick: @escaping (Int) -> Void) {
+        self.states = states
+        self.pick = pick
+        super.init(frame: NSRect(x: 0, y: 0, width: 20 + 7 * 21 + 14, height: 24))
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                       owner: self, userInfo: nil))
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    private func rect(_ i: Int) -> NSRect {
+        return NSRect(x: left + CGFloat(i) * (size + gap), y: (bounds.height - size) / 2, width: size, height: size)
+    }
+
+    private func index(at p: NSPoint) -> Int? {
+        for i in 0..<FinderTags.menuOrder.count where rect(i).insetBy(dx: -3, dy: -4).contains(p) { return i }
+        return nil
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        for (i, c) in FinderTags.menuOrder.enumerated() {
+            let r = rect(i)
+            FileListController.tagColor(c).setFill()
+            NSBezierPath(ovalIn: r).fill()
+            let state = states[c] ?? .off
+            NSColor.white.setStroke()
+            let path = NSBezierPath()
+            path.lineWidth = 1.6
+            let mid = NSPoint(x: r.midX, y: r.midY)
+            if hover == i {
+                NSColor.labelColor.withAlphaComponent(0.6).setStroke()
+                let ring = NSBezierPath(ovalIn: r.insetBy(dx: -2, dy: -2)); ring.lineWidth = 1; ring.stroke()
+                NSColor.white.setStroke()
+                if state == .on {                                    // remove
+                    path.move(to: NSPoint(x: mid.x - 3, y: mid.y - 3)); path.line(to: NSPoint(x: mid.x + 3, y: mid.y + 3))
+                    path.move(to: NSPoint(x: mid.x - 3, y: mid.y + 3)); path.line(to: NSPoint(x: mid.x + 3, y: mid.y - 3))
+                } else {                                             // add
+                    path.move(to: NSPoint(x: mid.x - 3.5, y: mid.y)); path.line(to: NSPoint(x: mid.x + 3.5, y: mid.y))
+                    path.move(to: NSPoint(x: mid.x, y: mid.y - 3.5)); path.line(to: NSPoint(x: mid.x, y: mid.y + 3.5))
+                }
+            } else if state == .on {                                 // tick
+                path.move(to: NSPoint(x: mid.x - 3.5, y: mid.y)); path.line(to: NSPoint(x: mid.x - 1, y: mid.y - 2.5))
+                path.line(to: NSPoint(x: mid.x + 3.5, y: mid.y + 3))
+            } else if state == .mixed {                              // dash
+                path.move(to: NSPoint(x: mid.x - 3.5, y: mid.y)); path.line(to: NSPoint(x: mid.x + 3.5, y: mid.y))
+            }
+            path.stroke()
+        }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let h = index(at: convert(event.locationInWindow, from: nil))
+        if h != hover { hover = h; needsDisplay = true }
+    }
+
+    override func mouseExited(with event: NSEvent) { hover = nil; needsDisplay = true }
+
+    override func mouseUp(with event: NSEvent) {
+        guard let i = index(at: convert(event.locationInWindow, from: nil)) else { return }
+        enclosingMenuItem?.menu?.cancelTracking()
+        let c = FinderTags.menuOrder[i]
+        DispatchQueue.main.async { [pick] in pick(c) }
+    }
 }

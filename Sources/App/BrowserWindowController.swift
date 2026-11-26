@@ -156,6 +156,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         list.foldersFirst = BrowserWindowController.foldersFirst
         list.onOpen = { [weak self] sel in self?.open(sel) }
         list.onOpenInNewWindow = { e in BrowserWindowController.openWindow(at: e.path) }
+        list.onTagPick = { [weak self] c in self?.pickTag(c) }
         list.onSelectionChange = { [weak self] in self?.updateStatus() }
         list.onNeedChildren = { [weak self] p in self?.loadChildren(p) }
         list.onRenameRequest = { [weak self] in self?.renameSelected(nil) }
@@ -863,15 +864,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     // MARK: Finder tags
 
-    /// Tags submenu: add the colour to every selected file (sets whole), or remove it when all have it.
-    @objc func toggleTag(_ sender: NSMenuItem) {
-        let color = sender.tag
+    /// Tag row in the context menu: remove the colour when every selected file (sets whole) has
+    /// it, else add it to all - decided in the background from the files' current tags.
+    func pickTag(_ color: Int) {
         let paths = list.tagTargets()
         guard !paths.isEmpty else { return }
-        let add = sender.state != .on
         opsQueue.async { [weak self] in
-            let r = FileOperations.changeTag(paths, color: color, add: add)
-            DispatchQueue.main.async { self?.tagsChanged(r.changed, failed: r.failed, undoName: (add ? "Add Tag " : "Remove Tag ") + FinderTags.colorNames[color]) }
+            let r = FileOperations.toggleTag(paths, color: color)
+            DispatchQueue.main.async { self?.tagsChanged(r.changed, failed: r.failed, undoName: (r.added ? "Add Tag " : "Remove Tag ") + FinderTags.colorNames[color]) }
         }
     }
 
@@ -1034,6 +1034,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         watcher?.stop()
         watcher = nil
         watchExpanded([])
+        list.stopTags()
         _ = generation.next()
         NotificationCenter.default.removeObserver(self)
         BrowserWindowController.open.removeAll { $0 === self }

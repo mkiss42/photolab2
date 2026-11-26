@@ -1,5 +1,31 @@
 # Changes
 
+## 0.5.1 — live tags, tag dots in the menu, nearest-name jump
+
+- Long names truncate in the middle again (0.5.0 wrapped them onto a second line).
+- Tags update by themselves:
+  - changes made on this Mac (Finder, other apps), on local disks and on shares: at once,
+    through macOS file events (FSEvents) for the folders on screen - no polling;
+  - changes made from another Mac on a share (macOS does not report those): checked every 5 s,
+    only for rows on screen, only while the window is visible, one stat per row (usually from
+    the SMB client's cache) and a tag read only where the file's change time moved; the next
+    check is skipped while one is still running.
+- The context menu has Finder's row of colour dots instead of a Tags submenu: tick = all
+  selected files have it, dash = some do; hovering shows + (adds) or x (removes).
+- A click on a colour decides from the files themselves (not from what the menu showed), and
+  a set row now shows and changes the tags of all its files. Tag memory no longer expires after
+  2 minutes (the cause of the unchecked colour you saw).
+- Type-select: a letter with no match jumps to the nearest name ("z" in a, f, j goes to j).
+
+Test checklist (3 minutes):
+[ ] 1  A long name in a narrow Name column: "Long...name.CR3" on one line.
+[ ] 2  Tag a file red in Finder: the dot appears in PhotoLab within a second (local and share).
+[ ] 3  Right-click: colour dots row; hover shows + / x; click: tagged; Cmd-Z: gone.
+[ ] 4  Leave a tagged file 3+ minutes, right-click: its colour is ticked.
+[ ] 5  In a folder with a, f, j: press z -> j.
+[ ] 6  (Optional, two Macs) tag a file on the share from the other Mac: dot appears within ~5 s.
+
+
 ## 0.5.0 — Finder tags, totals, type-select cycling
 
 - Finder tags in the list: coloured dots after the name, like Finder. Read in the background,

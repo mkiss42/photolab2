@@ -680,6 +680,14 @@ enum FileOperations {
         return (changed, failed)
     }
 
+    /// Finder's tag click: remove the colour when every item has it, else add it to all - decided
+    /// from the items' tags as they are on disk now, not from what the menu showed.
+    static func toggleTag(_ paths: [String], color: Int) -> (changed: [(path: String, before: [FinderTag], after: [FinderTag])], failed: [String], added: Bool) {
+        let all = paths.allSatisfy { p in FinderTags.read(p)?.contains { $0.color == color } ?? false }
+        let r = changeTag(paths, color: color, add: !all)
+        return (r.changed, r.failed, !all)
+    }
+
     /// Write an item's whole tag list (undo uses this).
     @discardableResult
     static func setTags(_ path: String, _ tags: [FinderTag]) -> Bool {
