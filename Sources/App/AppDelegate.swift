@@ -146,10 +146,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         item(file, "New Window", #selector(newWindow(_:)), "n", [.command], target: self)
         item(file, "New Folder", #selector(BrowserWindowController.newFolder(_:)), "n", [.command, .shift])
         item(file, "Open", #selector(BrowserWindowController.openSelected(_:)), down)
+        item(file, "Open in New Window", #selector(BrowserWindowController.openInNewWindow(_:)), down, [.command, .option])
+        item(file, "Show in Finder", #selector(BrowserWindowController.revealInFinder(_:)), "r", [.command, .shift])
+        item(file, "Get Info", #selector(BrowserWindowController.getInfo(_:)), "i")
         item(file, "Rename", #selector(BrowserWindowController.renameSelected(_:)), "", [])
         item(file, "Duplicate", #selector(BrowserWindowController.duplicate(_:)), "d")
         file.addItem(NSMenuItem.separator())
         item(file, "Move to Trash", #selector(BrowserWindowController.moveToTrash(_:)), String(Character(UnicodeScalar(8))))
+        file.addItem(NSMenuItem.separator())
+        item(file, "Eject", #selector(BrowserWindowController.ejectVolume(_:)))
         file.addItem(NSMenuItem.separator())
         item(file, "Close Window", #selector(NSWindow.performClose(_:)), "w")
 
@@ -169,8 +174,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         view.addItem(NSMenuItem.separator())
         item(view, "Show Hidden Files", #selector(BrowserWindowController.toggleHidden(_:)), ".", [.command, .shift])
         item(view, "Keep Folders on Top", #selector(BrowserWindowController.toggleFoldersFirst(_:)))
+        item(view, "Show Folders Only", #selector(BrowserWindowController.toggleFoldersOnly(_:)))
         view.addItem(NSMenuItem.separator())
         item(view, "Refresh", #selector(BrowserWindowController.refresh(_:)), "r")
+        // Cmd-/ also refreshes (PhotoLab 1's key); hidden from the menu, the key still works.
+        let slash = NSMenuItem(title: "Refresh", action: #selector(BrowserWindowController.refresh(_:)), keyEquivalent: "/")
+        slash.isHidden = true
+        slash.allowsKeyEquivalentWhenHidden = true
+        view.addItem(slash)
 
         let go = submenu(main, "Go")
         item(go, "Back", #selector(BrowserWindowController.goBack(_:)), "[")

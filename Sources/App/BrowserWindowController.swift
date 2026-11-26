@@ -49,6 +49,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         get { return UserDefaults.standard.bool(forKey: "showHidden") }
         set { UserDefaults.standard.set(newValue, forKey: "showHidden") }
     }
+    static var foldersOnly: Bool {
+        get { return UserDefaults.standard.bool(forKey: "foldersOnly") }
+        set { UserDefaults.standard.set(newValue, forKey: "foldersOnly") }
+    }
     static var foldersFirst: Bool {
         get { return UserDefaults.standard.object(forKey: "foldersFirst") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "foldersFirst") }
@@ -149,16 +153,18 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
         list.foldersFirst = BrowserWindowController.foldersFirst
         list.onOpen = { [weak self] sel in self?.open(sel) }
+        list.onOpenInNewWindow = { e in BrowserWindowController.openWindow(at: e.path) }
         list.onSelectionChange = { [weak self] in self?.updateStatus() }
         list.onNeedChildren = { [weak self] p in self?.loadChildren(p) }
         list.onRenameRequest = { [weak self] in self?.renameSelected(nil) }
         list.onTrashRequest = { [weak self] in self?.moveToTrash(nil) }
         list.onRenameCommit = { [weak self] e, name in self?.commitRename(e, name) }
-        list.onExpandedChange = { [weak self] set in self?.watchExpanded(set) }
+        list.onExpandedChange = { [weak self] set in self?.watchExpanded(set); self?.updateStatus() }
         list.onDrop = { [weak self] paths, dest, kind in
             TransferController.shared.start(paths, to: dest, kind: kind, from: self)
         }
         list.showHidden = BrowserWindowController.showHidden
+        list.foldersOnly = BrowserWindowController.foldersOnly
 
         statusLabel.textColor = NSColor.secondaryLabelColor
         statusLabel.font = NSFont.systemFont(ofSize: 11)
@@ -320,6 +326,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         let visible = showHidden ? listing.entries : listing.entries.filter { !$0.isHidden }
         list.foldersFirst = BrowserWindowController.foldersFirst
         list.showHidden = showHidden
+        list.foldersOnly = BrowserWindowController.foldersOnly
         list.rootPath = path
         list.setEntries(listing.entries, select: select)
         if listing.error != 0 {
@@ -338,8 +345,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         guard let l = lastListing else { statusLabel.stringValue = ""; return }
         if l.error != 0 { statusLabel.stringValue = "Not readable: \(l.errorText)"; return }
         let hidden = l.entries.filter { $0.isHidden }.count
-        let shown = BrowserWindowController.showHidden ? l.entries.count : l.entries.count - hidden
-        var parts = ["\(shown) item\(shown == 1 ? "" : "s")"]
+        let c = list.shownCounts                       // expanded folders included, a set is one
+        var parts = ["\(c.rows) item\(c.rows == 1 ? "" : "s")" + (c.sets > 0 ? " (\(c.sets) set\(c.sets == 1 ? "" : "s"))" : "")]
         if hidden > 0 && !BrowserWindowController.showHidden { parts.append("\(hidden) hidden") }
         let sel = list.selectionCount
         if sel > 0 { parts.append("\(sel) selected") }
@@ -774,6 +781,62 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         for c in BrowserWindowController.open { c.reapply() }
     }
 
+    @objc func toggleFoldersOnly(_ sender: Any?) {
+        BrowserWindowController.foldersOnly = !BrowserWindowController.foldersOnly
+        for c in BrowserWindowController.open { c.reapply() }
+    }
+
+    // MARK: Finder actions
+
+    @objc func openWithApp(_ sender: NSMenuItem) {
+        guard let app = sender.representedObject as? URL else { return }
+        FinderActions.open(list.selectedEntries().map { $0.path }, with: app)
+    }
+
+    @objc func openWithOther(_ sender: Any?) {
+        let paths = list.selectedEntries().map { $0.path }
+        guard !paths.isEmpty, let w = window else { return }
+        let p = NSOpenPanel()
+        p.directoryURL = URL(fileURLWithPath: "/Applications")
+        p.allowedFileTypes = ["app"]
+        p.treatsFilePackagesAsDirectories = false
+        p.prompt = "Open"
+        p.beginSheetModal(for: w) { r in
+            if r == .OK, let app = p.url { FinderActions.open(paths, with: app) }
+        }
+    }
+
+    @objc func openInNewWindow(_ sender: Any?) {
+        for e in list.selectedEntries() where e.isDirectory && !e.isPackage { BrowserWindowController.openWindow(at: e.path) }
+    }
+
+    @objc func revealInFinder(_ sender: Any?) {
+        let paths = list.selectedEntries().map { $0.path }
+        FinderActions.reveal(paths.isEmpty ? [currentPath] : paths)
+    }
+
+    @objc func getInfo(_ sender: Any?) {
+        let paths = list.withSetMembers(list.selectedEntries())
+        FinderActions.getInfo(paths.isEmpty ? [currentPath] : paths)
+    }
+
+    /// Selected volumes, or the volume whose top folder is on screen. Windows showing it move to
+    /// /Volumes first, so PhotoLab itself is not what keeps it busy.
+    @objc func ejectVolume(_ sender: Any?) {
+        var targets = FinderActions.ejectable(list.selectedEntries().map { $0.path })
+        if targets.isEmpty { targets = FinderActions.ejectable([currentPath]) }
+        guard !targets.isEmpty else { NSSound.beep(); return }
+        for v in targets {
+            let mp = v.mountPoint
+            for c in BrowserWindowController.open where c.currentPath == mp || c.currentPath.hasPrefix(mp + "/") {
+                c.navigate(to: "/Volumes")
+            }
+            FinderActions.eject(v) { [weak self] problem in
+                if let p = problem { self?.showProblem("\"\(v.displayName)\" was not ejected", p) }
+            }
+        }
+    }
+
     @objc func toggleFoldersFirst(_ sender: Any?) {
         BrowserWindowController.foldersFirst = !BrowserWindowController.foldersFirst
         for c in BrowserWindowController.open { c.reapply() }
@@ -801,6 +864,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         case #selector(toggleSidebar(_:))?:
             item.title = sidebarShown ? "Hide Sidebar" : "Show Sidebar"
             return true
+        case #selector(toggleFoldersOnly(_:))?:
+            item.state = BrowserWindowController.foldersOnly ? .on : .off
+            return true
+        case #selector(openInNewWindow(_:))?: return list.selectedEntries().contains { $0.isDirectory && !$0.isPackage }
+        case #selector(ejectVolume(_:))?:
+            return !FinderActions.ejectable(list.selectedEntries().map { $0.path } + [currentPath]).isEmpty
         case #selector(toggleFoldersFirst(_:))?:
             item.state = BrowserWindowController.foldersFirst ? .on : .off
             return true

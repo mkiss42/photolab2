@@ -110,6 +110,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersionByArchitecture</key>
   <dict><key>x86_64</key><string>$MIN_SYSTEM</string><key>arm64</key><string>${TARGET_ARM64##*macosx}</string></dict>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSAppleEventsUsageDescription</key><string>PhotoLab asks Finder to show Get Info windows.</string>
   <key>NSPrincipalClass</key><string>NSApplication</string>
   <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
 </dict>

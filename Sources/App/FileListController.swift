@@ -130,9 +130,13 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     var ascending = true
     var foldersFirst = true
     var showHidden = false
+    /// View > Show Folders Only.
+    var foldersOnly = false
 
     /// Double-click, Cmd-E, Cmd-Down.
     var onOpen: (([FileEntry]) -> Void)?
+    /// Cmd-double-click on a folder: it opens in a new window.
+    var onOpenInNewWindow: ((FileEntry) -> Void)?
     /// Return / M, Backspace: the window decides what to rename or trash.
     var onRenameRequest: (() -> Void)?
     var onTrashRequest: (() -> Void)?
@@ -193,6 +197,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         table.setDraggingSourceOperationMask([.copy, .move], forLocal: true)
         table.setDraggingSourceOperationMask([.copy, .move, .generic], forLocal: false)
         table.draggingDestinationFeedbackStyle = .regular
+        setUpColumnMenu()
 
         scroll.documentView = table
         scroll.hasVerticalScroller = true
@@ -229,7 +234,8 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     /// Nodes for `entries` (hidden ones filtered, sets folded into one row when sets are on,
     /// sorted), reusing existing folder nodes with the same path (keeps their expansion and children).
     private func nodes(for entries: [FileEntry]) -> [FileNode] {
-        let v = showHidden ? entries : entries.filter { !$0.isHidden }
+        var v = showHidden ? entries : entries.filter { !$0.isHidden }
+        if foldersOnly { v = v.filter { $0.isDirectory && !$0.isPackage } }
         let rows = FileOperations.useSets ? FileSets.rows(v) : v.map { SetRow(entry: $0, members: [$0]) }
         var members: [String: [FileEntry]] = [:]
         for r in rows where r.members.count > 1 { members[r.entry.path] = r.members }
@@ -370,6 +376,14 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         func add(_ title: String, _ action: String) { m.addItem(NSMenuItem(title: title, action: Selector(action), keyEquivalent: "")) }
         if !sel.isEmpty {
             add("Open", "openSelected:")
+            let ow = NSMenuItem(title: "Open With", action: nil, keyEquivalent: "")
+            ow.submenu = FinderActions.openWithMenu(for: sel[0])
+            m.addItem(ow)
+            if sel.count == 1 && sel[0].isDirectory && !sel[0].isPackage { add("Open in New Window", "openInNewWindow:") }
+            add("Show in Finder", "revealInFinder:")
+            add("Get Info", "getInfo:")
+            if !FinderActions.ejectable(sel.map { $0.path }).isEmpty { add("Eject", "ejectVolume:") }
+            m.addItem(NSMenuItem.separator())
             if sel.count == 1 { add("Rename", "renameSelected:") }
             m.addItem(NSMenuItem.separator())
             add("Copy", "copy:")
@@ -433,10 +447,58 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     var selectionCount: Int { return selectedEntries().count }
 
+    /// Rows on screen (expanded folders included) and how many of them are sets.
+    var shownCounts: (rows: Int, sets: Int) {
+        var rows = 0, sets = 0
+        for r in 0..<table.numberOfRows {
+            guard let n = table.item(atRow: r) as? FileNode, !n.isPlaceholder else { continue }
+            rows += 1
+            if n.isSet { sets += 1 }
+        }
+        return (rows, sets)
+    }
+
+    // MARK: Columns (right-click the header; hidden columns are remembered)
+
+    private static var hiddenColumns: Set<String> {
+        get { return Set(UserDefaults.standard.stringArray(forKey: "hiddenColumns") ?? []) }
+        set { UserDefaults.standard.set(Array(newValue).sorted(), forKey: "hiddenColumns") }
+    }
+
+    private func setUpColumnMenu() {
+        let m = NSMenu()
+        let hidden = FileListController.hiddenColumns
+        for c in table.tableColumns where c.identifier.rawValue != "name" {
+            c.isHidden = hidden.contains(c.identifier.rawValue)
+            let item = NSMenuItem(title: c.title, action: #selector(toggleColumn(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = c.identifier.rawValue
+            item.state = c.isHidden ? .off : .on
+            m.addItem(item)
+        }
+        table.headerView?.menu = m
+    }
+
+    @objc private func toggleColumn(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+            let c = table.tableColumns.first(where: { $0.identifier.rawValue == id }) else { return }
+        c.isHidden = !c.isHidden
+        sender.state = c.isHidden ? .off : .on
+        var h = FileListController.hiddenColumns
+        if c.isHidden { h.insert(id) } else { h.remove(id) }
+        FileListController.hiddenColumns = h
+        table.sizeLastColumnToFit()
+    }
+
     // MARK: Actions
 
     @objc private func doubleClicked(_ sender: Any?) {
         guard table.clickedRow >= 0 else { return }
+        if NSEvent.modifierFlags.contains(.command), let n = table.item(atRow: table.clickedRow) as? FileNode,
+            !n.isPlaceholder, n.isExpandableFolder {
+            onOpenInNewWindow?(n.entry)
+            return
+        }
         openSelection()
     }
 

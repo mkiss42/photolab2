@@ -16,8 +16,8 @@ Status: **done** · **part** (exists, something missing) · **todo** (phase in b
 | Path bar menu: Paste Into, Open in New Tree | todo (1c) | Paste Into needs the copy engine |
 | Sorting: name / ext / modified, folders on top | done | PL2 adds size and kind |
 | One row per set (raw+jpg+xmp as one row) while Settings > Files sets are on; an Ext column right after Name shows "CR3+JPG+XMP" | done (0.4.0) | decided 2026-11-25 |
-| Display modes: folders only / current folder's files / expanded folders' files / all | todo (1c) | "folders only" is the useful one |
-| Quick mode (name only), icon style Pretty/Generic/None, show ext / modified columns | todo (1c) | columns show/hide via header menu |
+| Display modes: folders only / current folder's files / expanded folders' files / all | part (0.4.1) | folders only done; the two mixed modes on request |
+| Quick mode (name only), icon style Pretty/Generic/None, show ext / modified columns | part (0.4.1) | columns show/hide via header menu; icons are always by type (no file reads) |
 | Finder colour tag dots on rows | todo (1c) | |
 | Context menu tag swatches: add/remove Finder tags (multi-select, partial state) | todo (1c) | |
 | Filter bar (Cmd-F), filters the visible tree incl. expanded folders, Esc clears | todo (1c) | |
@@ -28,18 +28,18 @@ Status: **done** · **part** (exists, something missing) · **todo** (phase in b
 | Cmd-C copies files (set-expanded) to the clipboard; Cmd-V pastes (copies) into the folder | done (0.3.0) | + Cmd-Option-V moves, Cmd-D duplicates |
 | Drag out (set-expanded file URLs); drop into folders: move on same volume, copy across, Option = copy; drop highlight, autoscroll | done (0.3.0) | set rows drag all their files (0.4.0) |
 | Drop from the FTP browser | todo (6) | with FTP |
-| Cmd-/ force refresh (expanded folders too) | done | Cmd-R; add Cmd-/ alias (1c) |
+| Cmd-/ force refresh (expanded folders too) | done (0.4.1) | Cmd-R and Cmd-/ |
 | Refresh Selected (re-read; nuke derived caches for files) | todo (3) | caches arrive with the brain |
-| Open, Open With submenu | part | Open done; Open With todo (1c) |
-| Reveal in Finder, Reveal in New Folder Tree | todo (1c) | |
-| Cmd-I Finder Get Info | todo (1c) | |
+| Open, Open With submenu | done (0.4.1) | + Other... |
+| Reveal in Finder, Reveal in New Folder Tree | done (0.4.1) | Show in Finder; Open in New Window / Cmd-double-click |
+| Cmd-I Finder Get Info | done (0.4.1) | via Finder (one permission prompt) |
 | Opt-I metadata editor | todo (2) | |
 | Space: file -> preview, folder -> contact sheet; Opt-Space new tab; Shift-Space current tab | todo (2) | |
 | Open in Contact Sheet (+ New Tab, + Recursive) | todo (2) | |
 | Apply Metadata Template (stationery) | todo (4) | |
-| Status line: files / folders / selected, counting expanded folders | part | counts the folder on screen only |
-| Tooltip: folder's asset count, file path | todo (1c) | |
-| Eject from /Volumes (PL1 TODO: Cmd-E ejects there) | todo (1c) | Cmd-E is Open now; eject via menu/context menu |
+| Status line: files / folders / selected, counting expanded folders | done (0.4.1) | rows on screen incl. expanded, sets counted |
+| Tooltip: folder's asset count, file path | part (0.4.1) | path / set members done; folder count needs a listing per hover (later, from the cache) |
+| Eject from /Volumes (PL1 TODO: Cmd-E ejects there) | done (0.4.1) | menu / context menu (Cmd-E stays Open) |
 | Dock-icon drops / Finder "Open With PhotoLab": open folders, select dropped files | todo (2) | in contact sheet tabs, as PL1 |
 | Window geometry remembered | done | |
 | Watching only active (visible/expanded) folders | done | |

@@ -1,5 +1,26 @@
 # Changes
 
+## 0.4.1 — Finder actions, columns, folders only
+
+- Right-click: Open With (default app first, Other...), Open in New Window (folders), Show in
+  Finder, Get Info, Eject (volumes). Same in the File menu: Open in New Window Cmd-Option-Down,
+  Show in Finder Cmd-Shift-R, Get Info Cmd-I, Eject. Cmd-double-click a folder: new window.
+- Get Info asks once for permission to control Finder (macOS asks, like the folder prompt).
+- Eject: windows showing the volume move to /Volumes first.
+- View > Show Folders Only (remembered).
+- Right-click the column header to hide or show Ext / Date Modified / Size / Kind (remembered).
+- Status bar counts every row on screen, expanded folders included, and how many are sets.
+- Cmd-/ refreshes too (PhotoLab 1's key).
+- Tooltips: a file's full path; a set row lists its files.
+
+Test checklist (3 minutes):
+[ ] 1  Right-click a JPG > Open With: apps listed, default first; one opens it.
+[ ] 2  Cmd-I: Finder's info window (allow the prompt once). Cmd-Shift-R: Finder shows it.
+[ ] 3  In /Volumes select a share > Eject: it disappears.
+[ ] 4  Header right-click: hide Kind; new window: still hidden.
+[ ] 5  View > Show Folders Only; expand a folder: status bar counts the expanded rows.
+
+
 ## 0.4.0 — one row per set, Ext column
 
 - With sets on (Settings > Files, default), raw + jpg/heic + xmp with the same name are one row:
