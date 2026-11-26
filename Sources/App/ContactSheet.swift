@@ -4,8 +4,8 @@
 // One tile per set while sets are on (same rule as the list). Selection, keys and drag and drop
 // follow the list: click / Cmd-click / Shift-click, arrows (Shift extends), Cmd-A; double-click,
 // Cmd-E, Cmd-O, Cmd-Down open; Return or M renames; Backspace trashes; Space on a folder opens it.
-// Drawing: each thumbnail is scaled once (background) to the tile's pixel size and drawn 1:1,
-// so scrolling only copies pixels (AppKit draws a screen ahead while scrolling).
+// Display: each tile is a Core Animation layer (thumbnail, name, extensions) - scrolling moves
+// layers on the GPU and the GPU scales the pictures; nothing is redrawn while scrolling.
 
 import AppKit
 
@@ -155,10 +155,12 @@ final class ContactSheetView: NSView, NSDraggingSource {
     private var downPoint: NSPoint?
     private var downIndex: Int?
     private var lastTyped = Date.distantPast
-    /// Thumbnails scaled to the tile's pixel size: key -> (pixel size, image).
-    private var scaled: [String: (px: Int, image: CGImage)] = [:]
-    private var scaling = Set<String>()
-    private static let scaleQueue = DispatchQueue(label: "photolab.sheet.scale", qos: .userInitiated)
+    // Tiles are Core Animation layers: scrolling moves layers on the GPU, nothing is redrawn.
+    private var tileLayers: [Int: TileLayer] = [:]
+    private var spareLayers: [TileLayer] = []
+    /// Keys whose thumbnail (or "no picture") is known: the background progress.
+    private(set) var doneKeys = Set<String>()
+    var onThumbProgress: ((Int, Int) -> Void)?
 
     var onOpen: (([FileEntry]) -> Void)?
     var onTrash: (() -> Void)?
@@ -173,8 +175,14 @@ final class ContactSheetView: NSView, NSDraggingSource {
 
     override init(frame: NSRect) {
         super.init(frame: frame)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .never           // the view itself draws nothing: tiles are layers
+        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         registerForDraggedTypes([.fileURL])
     }
+
+    override var wantsUpdateLayer: Bool { return true }
+    override func updateLayer() { layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
@@ -186,13 +194,15 @@ final class ContactSheetView: NSView, NSDraggingSource {
         else { keepPaths = Set(selectedItems.map { $0.entry.path }) }
         let cursorPath = cursor.flatMap { $0 < items.count ? items[$0].entry.path : nil }
         items = new
-        if scaled.count > 3000 { scaled.removeAll() }
+        for (_, t) in tileLayers { t.index = -1 }
         indexByKey = [:]
         for (i, it) in items.enumerated() { if let k = it.request?.key { indexByKey[k, default: []].append(i) } }
         selection = Set(items.indices.filter { keepPaths.contains(items[$0].entry.path) })
         cursor = items.indices.first { items[$0].entry.path == cursorPath } ?? selection.min()
         anchor = cursor
+        doneKeys = Set(indexByKey.keys.filter { Thumbnails.shared.image($0) != nil || Thumbnails.shared.hasNoPicture($0) })
         relayout()
+        reportProgress()
         if select != nil, let first = selection.min() { scrollToVisible(rect(first)) }
         onSelectionChange?()
     }
@@ -208,7 +218,8 @@ final class ContactSheetView: NSView, NSDraggingSource {
         let rows = (items.count + cols - 1) / cols
         let h = max(CGFloat(rows) * cellH + 8, enclosingScrollView?.contentSize.height ?? 0)
         setFrameSize(NSSize(width: width, height: h))
-        needsDisplay = true
+        for (_, t) in tileLayers { t.index = -1 }          // positions changed: re-place every tile
+        updateTiles()
         scheduleThumbRequest()
     }
 
@@ -250,42 +261,12 @@ final class ContactSheetView: NSView, NSDraggingSource {
             guard me.window != nil, !me.isHiddenOrHasHiddenAncestor else { return }
             let now = me.visibleRange(), ahead = me.visibleRange(extra: me.visibleRect.height)
             let order = Array(now) + ahead.filter { !now.contains($0) }
-            Thumbnails.shared.request(order.compactMap { me.items[$0].request }, owner: me)
+            // The rest of the folder, nearest first, on the low-priority track.
+            let center = now.isEmpty ? 0 : now.lowerBound
+            let rest = me.items.indices.filter { !ahead.contains($0) }.sorted { abs($0 - center) < abs($1 - center) }
+            Thumbnails.shared.request(order.compactMap { me.items[$0].request }, background: rest.compactMap { me.items[$0].request }, owner: me)
+            me.updateTiles()
         }
-    }
-
-    private var tilePixels: Int { return Int((tile * (window?.backingScaleFactor ?? 2)).rounded()) }
-
-    /// The tile-sized copy of a thumbnail, or nil (then it is being made: drawn when ready).
-    private func scaledImage(_ key: String, _ cg: CGImage) -> CGImage? {
-        let px = tilePixels
-        if let s = scaled[key], s.px == px { return s.image }
-        if max(cg.width, cg.height) <= px { return cg }            // already small enough: 1:1
-        if !scaling.contains(key) {
-            scaling.insert(key)
-            ContactSheetView.scaleQueue.async { [weak self] in
-                let s = CGFloat(px) / CGFloat(max(cg.width, cg.height))
-                let w = max(1, Int(CGFloat(cg.width) * s)), h = max(1, Int(CGFloat(cg.height) * s))
-                var out: CGImage?
-                if let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
-                                       space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue) {
-                    ctx.interpolationQuality = .high
-                    ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
-                    out = ctx.makeImage()
-                }
-                DispatchQueue.main.async {
-                    guard let me = self else { return }
-                    me.scaling.remove(key)
-                    if let o = out, me.tilePixels == px { me.scaled[key] = (px, o); me.redraw(key) }
-                }
-            }
-        }
-        return nil
-    }
-
-    private func redraw(_ key: String) {
-        let vis = visibleRange(extra: visibleRect.height)
-        for i in indexByKey[key] ?? [] where vis.contains(i) { setNeedsDisplay(imageRect(i)) }
     }
 
     private var iconCache: [String: NSImage] = [:]
@@ -298,77 +279,96 @@ final class ContactSheetView: NSView, NSDraggingSource {
     }
 
     func thumbnailsArrived(_ keys: [String]) {
-        let vis = visibleRange()
-        for k in keys { for i in indexByKey[k] ?? [] where vis.contains(i) { setNeedsDisplay(imageRect(i)) } }
+        var changed = false
+        for k in keys where indexByKey[k] != nil {
+            if doneKeys.insert(k).inserted { changed = true }
+            for i in indexByKey[k] ?? [] { if let t = tileLayers[i] { configure(t, i, force: true) } }
+        }
+        if changed { reportProgress() }
     }
 
-    // MARK: Drawing
+    private var thumbTotal: Int { return indexByKey.count }
 
-    private static let nameStyle: NSParagraphStyle = {
-        let p = NSMutableParagraphStyle()
-        p.alignment = .center
-        p.lineBreakMode = .byTruncatingMiddle
-        return p
-    }()
+    private func reportProgress() {
+        onThumbProgress?(doneKeys.count, thumbTotal)
+    }
 
-    override var isOpaque: Bool { return true }
+    // MARK: Tiles (layers)
 
-    override func draw(_ dirtyRect: NSRect) {
+    private static let nameFont = NSFont.systemFont(ofSize: 11)
+    private static let extFont = NSFont.systemFont(ofSize: 9)
+
+    /// Give every tile within a screen of the visible area a layer, recycle the rest. Cheap:
+    /// only frames and contents are set, and only when they change.
+    func updateTiles() {
+        guard let root = layer else { return }
         let t0 = Date()
-        defer { Stats.noteSheetDraw(Date().timeIntervalSince(t0) * 1000) }
-        NSColor.controlBackgroundColor.setFill()
-        dirtyRect.fill()
-        guard !items.isEmpty else { return }
-        let first = max(0, Int((dirtyRect.minY - 4) / cellH)) * cols
-        let last = min(items.count, (Int((dirtyRect.maxY - 4) / cellH) + 1) * cols)
-        guard first < last else { return }
-        let nameAttrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.labelColor,
-                                                        .paragraphStyle: ContactSheetView.nameStyle]
-        let extAttrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 9), .foregroundColor: NSColor.secondaryLabelColor,
-                                                       .paragraphStyle: ContactSheetView.nameStyle]
-        for i in first..<last {
-            let it = items[i]
-            let r = rect(i)
-            if selection.contains(i) || dropTarget == i {
-                let sel = NSBezierPath(roundedRect: r.insetBy(dx: 3, dy: 2), xRadius: 6, yRadius: 6)
-                NSColor.alternateSelectedControlColor.withAlphaComponent(dropTarget == i ? 0.45 : 0.25).setFill()
-                sel.fill()
-                if cursor == i && selection.count > 1 { NSColor.alternateSelectedControlColor.setStroke(); sel.stroke() }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let range = visibleRange(extra: visibleRect.height)
+        for (i, t) in tileLayers where !range.contains(i) {
+            t.isHidden = true
+            spareLayers.append(t)
+            tileLayers.removeValue(forKey: i)
+        }
+        let scale = window?.backingScaleFactor ?? 2
+        for i in range {
+            let t: TileLayer
+            if let have = tileLayers[i] { t = have } else {
+                t = spareLayers.popLast() ?? TileLayer()
+                if t.superlayer == nil { root.addSublayer(t) }
+                t.isHidden = false
+                t.index = -1
+                tileLayers[i] = t
             }
-            let ir = imageRect(i)
+            t.setScale(scale)
+            configure(t, i, force: false)
+        }
+        CATransaction.commit()
+        Stats.noteSheetDraw(Date().timeIntervalSince(t0) * 1000)
+    }
+
+    private func configure(_ t: TileLayer, _ i: Int, force: Bool) {
+        guard i < items.count else { return }
+        let it = items[i]
+        let r = rect(i)
+        let newItem = t.index != i || t.path != it.entry.path
+        if newItem || t.frame != r {
+            t.frame = r
+            t.layout(tile: tile)
+        }
+        if newItem {
+            t.index = i
+            t.path = it.entry.path
+            t.nameLayer.string = it.displayName
+            t.extLayer.string = it.extText
+            t.image.contents = nil
+            t.shownKey = nil
+        }
+        let sel = selection.contains(i), drop = dropTarget == i
+        let bg = sel || drop ? NSColor.alternateSelectedControlColor.withAlphaComponent(drop ? 0.45 : 0.25).cgColor : nil
+        if t.backgroundColor != bg { t.backgroundColor = bg }
+        if newItem || force || t.shownKey == nil {
             if let k = it.request?.key, let cg = Thumbnails.shared.image(k) {
-                let w = CGFloat(cg.width), h = CGFloat(cg.height)
-                let s = min(ir.width / w, ir.height / h)
-                let fit = NSRect(x: (ir.midX - w * s / 2).rounded(), y: (ir.maxY - h * s).rounded(), width: (w * s).rounded(), height: (h * s).rounded())
-                if let ctx = NSGraphicsContext.current?.cgContext {
-                    // Tile-sized copy drawn 1:1 (cheap); until it exists, the 512 px one at low quality.
-                    let img = scaledImage(k, cg)
-                    ctx.saveGState()
-                    ctx.interpolationQuality = img == nil ? .low : .none
-                    ctx.translateBy(x: fit.minX, y: fit.maxY)
-                    ctx.scaleBy(x: 1, y: -1)
-                    ctx.draw(img ?? cg, in: CGRect(x: 0, y: 0, width: fit.width, height: fit.height))
-                    ctx.restoreGState()
+                if t.shownKey != k {
+                    t.image.contents = cg
+                    t.image.contentsGravity = .resizeAspect
+                    t.image.borderWidth = 0
+                    t.shownKey = k
                 }
-                NSColor.black.withAlphaComponent(0.15).setStroke()
-                NSBezierPath(rect: fit.insetBy(dx: 0.5, dy: 0.5)).stroke()
             } else if it.request == nil || Thumbnails.shared.hasNoPicture(it.request!.key) {
-                let icon = self.icon(for: it)
-                let s = min(ir.width, ir.height) * 0.6
-                icon?.draw(in: NSRect(x: ir.midX - s / 2, y: ir.midY - s / 2, width: s, height: s), from: .zero, operation: .sourceOver,
-                           fraction: 1, respectFlipped: true, hints: nil)
-            } else {
-                NSColor.secondaryLabelColor.withAlphaComponent(0.08).setFill()
-                NSBezierPath(roundedRect: ir.insetBy(dx: ir.width * 0.08, dy: ir.height * 0.08), xRadius: 4, yRadius: 4).fill()
-            }
-            let nameRect = NSRect(x: r.minX + 4, y: ir.maxY + 4, width: r.width - 8, height: 15)
-            (it.displayName as NSString).draw(with: nameRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: nameAttrs)
-            let ext = it.extText
-            if !ext.isEmpty {
-                (ext as NSString).draw(with: NSRect(x: r.minX + 4, y: nameRect.maxY, width: r.width - 8, height: 13),
-                                       options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: extAttrs)
+                if t.shownKey != "icon" {
+                    t.image.contents = icon(for: it)?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+                    t.image.contentsGravity = .center
+                    t.shownKey = "icon"
+                }
             }
         }
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        updateTiles()
     }
 
     // MARK: Selection
@@ -376,7 +376,7 @@ final class ContactSheetView: NSView, NSDraggingSource {
     private func select(_ set: Set<Int>, cursor c: Int?) {
         selection = set
         cursor = c
-        needsDisplay = true
+        updateTiles()
         if let c = c { scrollToVisible(rect(c)) }
         onSelectionChange?()
     }
@@ -541,7 +541,7 @@ final class ContactSheetView: NSView, NSDraggingSource {
         let paths = droppedPaths(info)
         let (dest, tile) = dropDestination(info)
         let target = paths.contains(dest) ? nil : tile
-        if target != dropTarget { dropTarget = target; needsDisplay = true }
+        if target != dropTarget { dropTarget = target; updateTiles() }
         guard !paths.isEmpty, !paths.contains(dest), let kind = dropKind(info, paths, dest) else { return [] }
         if kind == .move && paths.allSatisfy({ Paths.parent($0) == dest }) { return [] }
         return kind == .copy ? .copy : .move
@@ -549,16 +549,63 @@ final class ContactSheetView: NSView, NSDraggingSource {
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { return Activity.during("drag: hover") { evaluate(sender) } }
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { return Activity.during("drag: hover") { evaluate(sender) } }
-    override func draggingExited(_ sender: NSDraggingInfo?) { dropTarget = nil; needsDisplay = true }
+    override func draggingExited(_ sender: NSDraggingInfo?) { dropTarget = nil; updateTiles() }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         dropTarget = nil
-        needsDisplay = true
+        updateTiles()
         let paths = droppedPaths(sender)
         let (dest, _) = dropDestination(sender)
         guard !paths.isEmpty, !paths.contains(dest), let kind = dropKind(sender, paths, dest) else { return false }
         Log.info("drop on sheet: \(paths.count) item(s), \(kind.rawValue) -> \(dest)")
         onDrop?(paths, dest, kind)
         return true
+    }
+}
+
+
+/// One tile: selection background (the layer itself), picture, name, extensions.
+final class TileLayer: CALayer {
+    let image = CALayer()
+    let nameLayer = CATextLayer()
+    let extLayer = CATextLayer()
+    var index = -1
+    var path = ""
+    var shownKey: String?
+
+    override init() {
+        super.init()
+        cornerRadius = 6
+        image.minificationFilter = .trilinear
+        image.magnificationFilter = .linear
+        for t in [nameLayer, extLayer] {
+            t.alignmentMode = .center
+            t.truncationMode = .middle
+            t.isWrapped = false
+        }
+        nameLayer.font = NSFont.systemFont(ofSize: 11)
+        nameLayer.fontSize = 11
+        nameLayer.foregroundColor = NSColor.labelColor.cgColor
+        extLayer.font = NSFont.systemFont(ofSize: 9)
+        extLayer.fontSize = 9
+        extLayer.foregroundColor = NSColor.secondaryLabelColor.cgColor
+        for l in [image, nameLayer, extLayer] { addSublayer(l) }
+        actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "hidden": NSNull()]
+        for l in [image, nameLayer, extLayer] as [CALayer] { l.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "string": NSNull()] }
+    }
+
+    override init(layer: Any) { super.init(layer: layer) }
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    func setScale(_ s: CGFloat) {
+        if contentsScale != s { for l in [self, image, nameLayer, extLayer] as [CALayer] { l.contentsScale = s } }
+    }
+
+    /// Geometry inside the tile (the hosting view is flipped: y grows downwards).
+    func layout(tile: CGFloat) {
+        let w = bounds.width
+        image.frame = CGRect(x: 8, y: 6, width: tile, height: tile)
+        nameLayer.frame = CGRect(x: 4, y: 6 + tile + 4, width: w - 8, height: 15)
+        extLayer.frame = CGRect(x: 4, y: 6 + tile + 19, width: w - 8, height: 13)
     }
 }

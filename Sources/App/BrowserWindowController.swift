@@ -48,6 +48,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private(set) var mode: ViewMode = BrowserWindowController.defaultMode
     private let modeControl = NSSegmentedControl()
     private let sizeSlider = NSSlider()
+    private let thumbLabel = NSTextField(labelWithString: "")
 
     // The selection, whichever view shows the folder.
     private func selection() -> [FileEntry] { return mode == .sheet ? sheet.selectedEntries() : list.selectedEntries() }
@@ -219,6 +220,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         g.onSelectionChange = { [weak self] in self?.updateStatus() }
         g.onDrop = { [weak self] paths, dest, kind in TransferController.shared.start(paths, to: dest, kind: kind, from: self) }
         g.onMenu = { [weak self] in self?.sheetMenu() }
+        g.onThumbProgress = { [weak self] done, total in
+            guard let me = self else { return }
+            me.thumbLabel.stringValue = "Thumbnails \(done)/\(total)"
+            me.thumbLabel.isHidden = me.mode != .sheet || total == 0 || done >= total
+        }
         list.showHidden = BrowserWindowController.showHidden
         list.foldersOnly = BrowserWindowController.foldersOnly
 
@@ -249,7 +255,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         sizeSlider.action = #selector(sizeChanged(_:))
         sizeSlider.toolTip = "Thumbnail size"
         sizeSlider.widthAnchor.constraint(equalToConstant: 120).isActive = true
-        for v in [statusSpinner, statusLabel, sizeSlider, brainLabel] as [NSView] { statusBar.addArrangedSubview(v) }
+        thumbLabel.font = NSFont.systemFont(ofSize: 11)
+        thumbLabel.textColor = NSColor.secondaryLabelColor
+        thumbLabel.isHidden = true
+        for v in [statusSpinner, statusLabel, thumbLabel, sizeSlider, brainLabel] as [NSView] { statusBar.addArrangedSubview(v) }
         statusBar.orientation = .horizontal
         statusBar.edgeInsets = NSEdgeInsets(top: 3, left: 10, bottom: 4, right: 10)
         statusLabel.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(rawValue: 100), for: .horizontal)
@@ -283,11 +292,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private var content: NSView { return mode == .sheet ? sheet.view : list.view }
 
     /// List or contact sheet. Both always hold the folder's listing, so switching is instant.
-    func setMode(_ m: ViewMode) {
+    /// `remember`: the user switched (new windows follow); windows PhotoLab opens in a mode
+    /// (Space, Dock drops) don't change that.
+    func setMode(_ m: ViewMode, remember: Bool = true) {
         mode = m
-        BrowserWindowController.defaultMode = m
+        if remember { BrowserWindowController.defaultMode = m }
         modeControl.selectedSegment = m == .sheet ? 1 : 0
         sizeSlider.isHidden = m != .sheet
+        if m != .sheet { thumbLabel.isHidden = true }
         arrangeRightStack()
         window?.makeFirstResponder(m == .sheet ? sheet.grid as NSView : list.table as NSView)
         if m == .sheet { DispatchQueue.main.async { [weak self] in self?.sheet.grid.relayout() } }
@@ -647,13 +659,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         if mode == .sheet { let s = selection(); if s.isEmpty { NSSound.beep() } else { open(s) } } else { list.openSelection() }
     }
 
-    /// Space: a folder opens in the contact sheet (from the list too). Files get the preview
-    /// with 0.8.
+    /// Space: a folder opens in a new window, as a contact sheet, in front (from the list and
+    /// from the sheet). Files get the preview with 0.8.
     private func spacePressed() {
         let s = selection()
         if s.count == 1, let e = s.first, e.isDirectory && !e.isPackage {
-            if mode != .sheet { setMode(.sheet) }
-            navigate(to: e.path)
+            let c = BrowserWindowController.openWindow(at: e.path)
+            c.setMode(.sheet, remember: false)
+            c.window?.makeKeyAndOrderFront(nil)
         } else {
             NSSound.beep()
         }

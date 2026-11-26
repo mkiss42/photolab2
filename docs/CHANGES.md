@@ -1,5 +1,31 @@
 # Changes
 
+## 0.7.2 — layer-based sheet, RAW preview reader, background thumbnails
+
+- Contact sheet tiles are now Core Animation layers: scrolling moves them on the graphics card,
+  which also scales the pictures; nothing is redrawn while you scroll.
+- Thumbnails are 256 px (cheaper to read, decode, keep and cache). New cache entries; the old
+  ones age out of the 3 GB cache by themselves.
+- RAW thumbnails: PhotoLab now reads the camera's embedded JPEG itself - one read of the file's
+  start, its structure parsed (TIFF-based RAWs: NEF, CR2, ARW, DNG, ORF, RW2, PEF...; RAF; CR3),
+  the smallest embedded JPEG that is at least 256 px chosen, and exactly its bytes read, rotated
+  to the camera's orientation. ImageIO (now reading in 64 KB blocks, counted) and Quick Look
+  remain the fallbacks.
+- The rest of the folder's thumbnails load in the background when nothing on screen is waiting
+  ("Thumbnails 340/826" in the status bar), so after a pause the whole sheet is ready.
+- Space on a folder opens it in a new window, as a contact sheet, in front.
+- Short Report: THUMBS per method (embedded / imageio / quicklook): count, average and slowest
+  ms, KB and reads per thumbnail; SHEET now counts tile updates.
+
+Test checklist (5 minutes, share folder with RAWs of your usual cameras, incl. portrait shots):
+[ ] 1  Scroll the sheet: smooth? (SHEET "over 16 ms" small.)
+[ ] 2  Portrait RAWs stand upright; thumbnails look right for each camera you use.
+[ ] 3  Open a big folder, wait without scrolling until "Thumbnails n/n" disappears, then scroll:
+       everything is there.
+[ ] 4  Space on a folder: new window in front, contact sheet.
+[ ] 5  Short Report: the THUMBS lines (embedded vs imageio: ms, KB, reads).
+
+
 ## 0.7.1 — sheet keys, spinner, smoother scrolling
 
 - Contact sheet keys like the list: Return or M renames; Cmd-E, Cmd-O, Cmd-Down or a double-click

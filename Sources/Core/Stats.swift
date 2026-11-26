@@ -43,12 +43,14 @@ enum Stats {
         freezeWhat[kind, default: 0] += 1
     }
 
-    private static var thumbsMade = 0, thumbsFromDisk = 0, thumbMs: Double = 0, thumbSlowest: Double = 0
+    private static var thumbs: [String: (n: Int, ms: Double, bytes: Int64, reads: Int, slowest: Double)] = [:]
 
-    static func noteThumb(fromDisk: Bool, ms: Double) {
+    /// method: embedded (our RAW parser), imageio, quicklook, cache (local disk cache).
+    static func noteThumb(method: String, ms: Double, bytes: Int64, reads: Int) {
         lock.lock(); defer { lock.unlock() }
-        if fromDisk { thumbsFromDisk += 1; return }
-        thumbsMade += 1; thumbMs += ms; thumbSlowest = max(thumbSlowest, ms)
+        var t = thumbs[method] ?? (0, 0, 0, 0, 0)
+        t.n += 1; t.ms += ms; t.bytes += bytes; t.reads += reads; t.slowest = max(t.slowest, ms)
+        thumbs[method] = t
     }
 
     private static var sheetDraws = 0, sheetSlow = 0, sheetSlowest: Double = 0
@@ -132,11 +134,20 @@ enum Stats {
         let methods = Dictionary(grouping: (listings[false] ?? []) + (listings[true] ?? []), by: { $0.bulk ? "bulk" : "readdir" })
             .map { "\($0.key) \($0.value.count)" }.sorted().joined(separator: ", ")
         out.append("METHOD " + (methods.isEmpty ? "none" : methods))
-        out.append(thumbsMade + thumbsFromDisk == 0 ? "THUMBS none" :
-            String(format: "THUMBS made %ld (avg %.0f ms, slowest %.0f ms), from cache %ld", thumbsMade,
-                   thumbsMade > 0 ? thumbMs / Double(thumbsMade) : 0, thumbSlowest, thumbsFromDisk))
+        if thumbs.isEmpty {
+            out.append("THUMBS none")
+        } else {
+            // Per method: count, average ms, slowest ms, average KB and reads per thumbnail.
+            for m in ["embedded", "imageio", "quicklook"] {
+                guard let t = thumbs[m] else { continue }
+                let n = Double(t.n)
+                out.append(String(format: "THUMBS %@ %ld: avg %.0f ms, slowest %.0f ms, %.0f KB, %.1f reads", m, t.n,
+                                  t.ms / n, t.slowest, Double(t.bytes) / n / 1024, Double(t.reads) / n))
+            }
+            out.append("THUMBS from local cache \(thumbs["cache"]?.n ?? 0)")
+        }
         out.append(sheetDraws == 0 ? "SHEET no draws" :
-            String(format: "SHEET %ld draw(s), %ld over 16 ms, slowest %.0f ms", sheetDraws, sheetSlow, sheetSlowest))
+            String(format: "SHEET %ld tile update(s), %ld over 16 ms, slowest %.0f ms", sheetDraws, sheetSlow, sheetSlowest))
         if transfers.isEmpty {
             out.append("COPY none")
         } else {

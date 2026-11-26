@@ -10,6 +10,9 @@ early even if its feature comes late, so nothing has to be rebuilt.
 
 ## Open
 
+- **Metadata under thumbnails** (selectable fields, stars, colour labels): lazy, tiles on screen
+  first, then the whole folder in the background, with a progress indicator like PhotoLab 1's.
+
 - **Styling like PhotoLab 1** (colours, density, tile look) when we get to styles.
 - **Activity monitor** (nice to have; only if it stays cheap): a window with what PhotoLab is
   doing now (listing, thumbnails, copies, tag checks, brain), counters, and a read-only tail of

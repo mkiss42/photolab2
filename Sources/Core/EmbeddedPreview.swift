@@ -1,0 +1,305 @@
+// EmbeddedPreview.swift
+// The cheapest way to a RAW thumbnail over a slow share: read the start of the file in one
+// block, parse the RAW's own structure for the JPEGs the camera embedded, pick the smallest one
+// that is still big enough, and read exactly its bytes - a few round trips in all, instead of
+// ImageIO's many small reads (and, for some cameras, its read of the full-size preview).
+//   TIFF family (NEF, CR2, ARW, DNG, ORF, RW2, PEF, SRW, 3FR, IIQ...): IFD chain + SubIFDs,
+//     JPEGInterchangeFormat/Length and single-strip JPEG IFDs (not raw CFA/linear data);
+//     orientation from IFD0.
+//   RAF: the JPEG offset/length in the header.
+//   CR3: the PRVW box (about 1620 px), orientation from CMT1 (a TIFF IFD0 inside moov).
+// Anything that does not parse returns nil, and Thumbnails falls back to ImageIO.
+// BlockReader also backs ImageIO (CGDataProvider), so those reads are counted and batched too.
+
+import Foundation
+import Darwin
+import ImageIO
+import CoreGraphics
+
+/// Reads a file in 64 KB blocks (128 KB for the first), cached for the life of the reader;
+/// reads of 256 KB or more go straight to the file. Counts round trips and bytes.
+final class BlockReader {
+    let size: Int64
+    private let fd: Int32
+    private var blocks: [Int64: Data] = [:]
+    private let block: Int64 = 64 << 10
+    private(set) var reads = 0
+    private(set) var bytes: Int64 = 0
+
+    init?(_ path: String) {
+        fd = open(path, O_RDONLY)
+        if fd < 0 { return nil }
+        var st = stat()
+        if fstat(fd, &st) != 0 { close(fd); return nil }
+        size = Int64(st.st_size)
+    }
+
+    deinit { close(fd) }
+
+    private func pread(_ offset: Int64, _ count: Int) -> Data? {
+        guard count > 0, offset >= 0, offset < size else { return Data() }
+        let n = Int(min(Int64(count), size - offset))
+        var d = Data(count: n)
+        let got = d.withUnsafeMutableBytes { p -> Int in
+            var done = 0
+            while done < n {
+                let r = Darwin.pread(fd, p.baseAddress!.advanced(by: done), n - done, off_t(offset) + off_t(done))
+                if r < 0 { if errno == EINTR { continue }; return -1 }
+                if r == 0 { break }
+                done += r
+            }
+            return done
+        }
+        if got < 0 { return nil }
+        reads += 1
+        bytes += Int64(got)
+        if got < n { d.count = got }
+        return d
+    }
+
+    /// `count` bytes at `offset` (fewer at the end of the file), nil on a read error.
+    func read(_ offset: Int64, _ count: Int) -> Data? {
+        if count >= 256 << 10 { return pread(offset, count) }
+        guard offset >= 0, offset < size else { return Data() }
+        let end = min(size, offset + Int64(count))
+        var first = offset / block, last = (end - 1) / block
+        if first == 0 && last == 0 { last = 1 }                    // first read: 128 KB
+        var missing: [Int64] = []
+        for b in first...last where blocks[b] == nil { missing.append(b) }
+        if let lo = missing.first, let hi = missing.last {
+            guard let d = pread(lo * block, Int((hi - lo + 1) * block)) else { return nil }
+            var b = lo
+            while b <= hi {
+                let s = Int((b - lo) * block)
+                if s >= d.count { break }
+                blocks[b] = d.subdata(in: s..<min(d.count, s + Int(block)))
+                b += 1
+            }
+        }
+        first = offset / block
+        var out = Data(capacity: Int(end - offset))
+        var pos = offset
+        while pos < end {
+            let b = pos / block
+            guard let chunk = blocks[b] else { break }
+            let s = Int(pos - b * block)
+            let e = min(chunk.count, s + Int(end - pos))
+            if s >= e { break }
+            out.append(chunk.subdata(in: s..<e))
+            pos += Int64(e - s)
+        }
+        return out
+    }
+
+    /// For CGDataProvider: copy into ImageIO's buffer.
+    func copy(into buffer: UnsafeMutableRawPointer, offset: Int64, count: Int) -> Int {
+        guard let d = read(offset, count) else { return 0 }
+        d.copyBytes(to: buffer.assumingMemoryBound(to: UInt8.self), count: d.count)
+        return d.count
+    }
+
+    /// An ImageIO source reading through this reader.
+    func imageSource() -> CGImageSource? {
+        var cb = CGDataProviderDirectCallbacks(version: 0, getBytePointer: nil, releaseBytePointer: nil,
+            getBytesAtPosition: { info, buffer, pos, count in
+                guard let info = info else { return 0 }
+                return Unmanaged<BlockReader>.fromOpaque(info).takeUnretainedValue().copy(into: buffer, offset: Int64(pos), count: count)
+            },
+            releaseInfo: { info in if let info = info { Unmanaged<BlockReader>.fromOpaque(info).release() } })
+        guard let provider = CGDataProvider(directInfo: Unmanaged.passRetained(self).toOpaque(), size: off_t(size), callbacks: &cb) else { return nil }
+        return CGImageSourceCreateWithDataProvider(provider, [kCGImageSourceShouldCache: false] as CFDictionary)
+    }
+}
+
+enum EmbeddedPreview {
+    struct Candidate { let offset: Int64; let length: Int }
+
+    /// Thumbnail (long side <= maxPixels) from the best embedded JPEG, or nil.
+    static func thumbnail(_ r: BlockReader, ext: String, maxPixels: Int) -> CGImage? {
+        guard let head = r.read(0, 64) , head.count >= 16 else { return nil }
+        var cands: [Candidate] = []
+        var orientation = 1
+        if head.starts(with: Array("FUJIFILMCCD-RAW".utf8)) {
+            guard head.count >= 16, let h = r.read(84, 8), h.count == 8 else { return nil }
+            cands = [Candidate(offset: Int64(be32(h, 0)), length: Int(be32(h, 4)))]
+        } else if head.count >= 12, Array(head[4..<8]) == Array("ftyp".utf8) {
+            guard let c = cr3(r) else { return nil }
+            cands = [c.preview]
+            orientation = c.orientation
+        } else if head[0] == head[1], head[0] == 0x49 || head[0] == 0x4D {     // II / MM
+            guard let t = tiff(r, base: 0) else { return nil }
+            cands = t.candidates
+            orientation = t.orientation
+        } else {
+            return nil
+        }
+        guard let jpeg = pick(r, cands, minSide: maxPixels) else { return nil }
+        guard let src = CGImageSourceCreateWithData(jpeg as CFData, nil) else { return nil }
+        let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: maxPixels,
+                                     kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceShouldCacheImmediately: true]
+        guard let img = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+        // Embedded previews rarely carry their own orientation; the RAW's applies then.
+        let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
+        let own = (props?[kCGImagePropertyOrientation] as? Int) ?? 1
+        return own == 1 && orientation != 1 ? rotate(img, orientation) : img
+    }
+
+    // MARK: Choosing and reading the JPEG
+
+    private static func pick(_ r: BlockReader, _ cands: [Candidate], minSide: Int) -> Data? {
+        let ok = cands.filter { $0.length > 2048 && $0.offset > 0 && $0.offset + Int64($0.length) <= r.size }
+        var best: (Candidate, Int)?
+        for c in ok.sorted(by: { $0.length < $1.length }) {
+            guard let start = r.read(c.offset, min(c.length, 64 << 10)), start.count > 4, start[0] == 0xFF, start[1] == 0xD8 else { continue }
+            let side = jpegLongSide(start) ?? 0
+            if side >= minSide { best = (c, side); break }
+            if best == nil || side > best!.1 { best = (c, side) }
+        }
+        guard let (c, _) = best else { return nil }
+        return r.read(c.offset, c.length)
+    }
+
+    /// Long side from the JPEG's SOF marker (in the first bytes), nil if not found.
+    static func jpegLongSide(_ d: Data) -> Int? {
+        var i = 2
+        let b = [UInt8](d)
+        while i + 9 < b.count {
+            guard b[i] == 0xFF else { i += 1; continue }
+            let m = b[i + 1]
+            if m == 0xD8 || m == 0x01 || (m >= 0xD0 && m <= 0xD7) { i += 2; continue }
+            let len = Int(b[i + 2]) << 8 | Int(b[i + 3])
+            if (0xC0...0xCF).contains(m) && m != 0xC4 && m != 0xC8 && m != 0xCC {
+                let h = Int(b[i + 5]) << 8 | Int(b[i + 6]), w = Int(b[i + 7]) << 8 | Int(b[i + 8])
+                return max(w, h)
+            }
+            i += 2 + len
+        }
+        return nil
+    }
+
+    // MARK: TIFF
+
+    static func tiff(_ r: BlockReader, base: Int64) -> (candidates: [Candidate], orientation: Int)? {
+        guard let h = r.read(base, 8), h.count == 8 else { return nil }
+        let le = h[0] == 0x49
+        func u16(_ d: Data, _ o: Int) -> Int { return le ? Int(d[d.startIndex + o]) | Int(d[d.startIndex + o + 1]) << 8 : Int(d[d.startIndex + o]) << 8 | Int(d[d.startIndex + o + 1]) }
+        func u32(_ d: Data, _ o: Int) -> Int64 {
+            let a = Int64(d[d.startIndex + o]), b = Int64(d[d.startIndex + o + 1]), c = Int64(d[d.startIndex + o + 2]), e = Int64(d[d.startIndex + o + 3])
+            return le ? a | b << 8 | c << 16 | e << 24 : a << 24 | b << 16 | c << 8 | e
+        }
+        var queue: [Int64] = [u32(h, 4)]
+        var seen = Set<Int64>()
+        var cands: [Candidate] = []
+        var orientation = 1
+        var first = true
+        while let off = queue.first, seen.count < 24 {
+            queue.removeFirst()
+            guard off > 0, !seen.contains(off), base + off < r.size, let ch = r.read(base + off, 2), ch.count == 2 else { first = false; continue }
+            seen.insert(off)
+            let n = u16(ch, 0)
+            guard n > 0, n < 1000, let d = r.read(base + off + 2, n * 12 + 4), d.count == n * 12 + 4 else { first = false; continue }
+            var tags: [Int: (type: Int, count: Int64, value: Int64, raw: Int)] = [:]
+            for i in 0..<n {
+                let e = i * 12
+                let tag = u16(d, e), type = u16(d, e + 2), count = u32(d, e + 4)
+                let value = type == 3 && count == 1 ? Int64(u16(d, e + 8)) : u32(d, e + 8)
+                tags[tag] = (type, count, value, e + 8)
+            }
+            if first, let o = tags[0x0112] { orientation = Int(o.value) }
+            first = false
+            if let jo = tags[0x0201], let jl = tags[0x0202] { cands.append(Candidate(offset: base + jo.value, length: Int(jl.value))) }
+            let comp = tags[0x0103]?.value ?? 1
+            let photo = tags[0x0106]?.value ?? 2
+            if (comp == 6 || comp == 7), photo != 32803, photo != 34892,
+                let so = tags[0x0111], let sc = tags[0x0117], so.count == 1, sc.count == 1 {
+                cands.append(Candidate(offset: base + so.value, length: Int(sc.value)))
+            }
+            if let sub = tags[0x014A] {
+                if sub.count == 1 { queue.append(sub.value) }
+                else if sub.count < 16, let arr = r.read(base + sub.value, Int(sub.count) * 4), arr.count == Int(sub.count) * 4 {
+                    for k in 0..<Int(sub.count) { queue.append(u32(arr, k * 4)) }
+                }
+            }
+            let next = u32(d, n * 12)
+            if next != 0 { queue.append(next) }
+        }
+        return (cands, orientation)
+    }
+
+    // MARK: CR3 (ISO base media file)
+
+    private static let prvwUUID: [UInt8] = [0xea, 0xf4, 0x2b, 0x5e, 0x1c, 0x98, 0x4b, 0x88, 0xb9, 0xfb, 0xb7, 0xdc, 0x40, 0x6e, 0x4d, 0x16]
+    private static let canonUUID: [UInt8] = [0x85, 0xc0, 0xb6, 0x87, 0x82, 0x0f, 0x11, 0xe0, 0x81, 0x11, 0xf4, 0xce, 0x46, 0x2b, 0x6a, 0x48]
+
+    /// Boxes inside [start, end): (type, payload start, box end).
+    private static func boxes(_ r: BlockReader, _ start: Int64, _ end: Int64) -> [(type: String, payload: Int64, end: Int64, uuid: [UInt8])] {
+        var out: [(String, Int64, Int64, [UInt8])] = []
+        var pos = start
+        while pos + 8 <= end, out.count < 64 {
+            guard let h = r.read(pos, 32), h.count >= 8 else { break }
+            var size = Int64(be32(h, 0))
+            let type = String(bytes: h[4..<8], encoding: .ascii) ?? "????"
+            var header: Int64 = 8
+            if size == 1, h.count >= 16 { size = Int64(be32(h, 8)) << 32 | Int64(be32(h, 12)); header = 16 }
+            if size == 0 { size = end - pos }
+            guard size >= header, pos + size <= end else { break }
+            var uuid: [UInt8] = []
+            if type == "uuid", h.count >= Int(header) + 16 { uuid = Array(h[Int(header)..<Int(header) + 16]); header += 16 }
+            out.append((type, pos + header, pos + size, uuid))
+            pos += size
+        }
+        return out
+    }
+
+    static func cr3(_ r: BlockReader) -> (preview: Candidate, orientation: Int)? {
+        let top = boxes(r, 0, r.size)
+        var orientation = 1
+        if let moov = top.first(where: { $0.type == "moov" }),
+            let canon = boxes(r, moov.payload, moov.end).first(where: { $0.type == "uuid" && $0.uuid == canonUUID }),
+            let cmt1 = boxes(r, canon.payload, canon.end).first(where: { $0.type == "CMT1" }),
+            let t = tiff(r, base: cmt1.payload) {
+            orientation = t.orientation
+        }
+        guard let pv = top.first(where: { $0.type == "uuid" && $0.uuid == prvwUUID }) else { return nil }
+        // 8 bytes, then the PRVW box; its JPEG starts a few bytes in (find the SOI marker).
+        guard let prvw = boxes(r, pv.payload + 8, pv.end).first(where: { $0.type == "PRVW" }),
+            let head = r.read(prvw.payload, 64) else { return nil }
+        let b = [UInt8](head)
+        for i in 0..<(b.count - 2) where b[i] == 0xFF && b[i + 1] == 0xD8 && b[i + 2] == 0xFF {
+            let off = prvw.payload + Int64(i)
+            return (Candidate(offset: off, length: Int(prvw.end - off)), orientation)
+        }
+        return nil
+    }
+
+    // MARK: Helpers
+
+    static func be32(_ d: Data, _ o: Int) -> UInt32 {
+        let s = d.startIndex + o
+        return UInt32(d[s]) << 24 | UInt32(d[s + 1]) << 16 | UInt32(d[s + 2]) << 8 | UInt32(d[s + 3])
+    }
+
+    /// Apply an EXIF orientation (1-8).
+    static func rotate(_ img: CGImage, _ o: Int) -> CGImage {
+        guard (2...8).contains(o) else { return img }
+        let w = CGFloat(img.width), h = CGFloat(img.height)
+        let swap = o >= 5
+        let ow = swap ? h : w, oh = swap ? w : h
+        guard let ctx = CGContext(data: nil, width: Int(ow), height: Int(oh), bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue) else { return img }
+        var t = CGAffineTransform.identity
+        switch o {
+        case 2: t = CGAffineTransform(a: -1, b: 0, c: 0, d: 1, tx: w, ty: 0)
+        case 3: t = CGAffineTransform(a: -1, b: 0, c: 0, d: -1, tx: w, ty: h)
+        case 4: t = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: h)
+        case 5: t = CGAffineTransform(a: 0, b: -1, c: -1, d: 0, tx: h, ty: w)
+        case 6: t = CGAffineTransform(a: 0, b: -1, c: 1, d: 0, tx: 0, ty: w)
+        case 7: t = CGAffineTransform(a: 0, b: 1, c: 1, d: 0, tx: 0, ty: 0)
+        case 8: t = CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: h, ty: 0)
+        default: break
+        }
+        ctx.concatenate(t)
+        ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return ctx.makeImage() ?? img
+    }
+}

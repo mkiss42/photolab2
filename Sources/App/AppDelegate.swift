@@ -132,10 +132,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             DispatchQueue.main.async {
                 NSApp.activate(ignoringOtherApps: true)
                 let sheet = UserDefaults.standard.bool(forKey: "dropsOpenInSheet")
-                for f in folders { let c = BrowserWindowController.openWindow(at: f); c.setMode(sheet ? .sheet : .list) }
+                for f in folders { let c = BrowserWindowController.openWindow(at: f); c.setMode(sheet ? .sheet : .list, remember: false) }
                 for (dir, names) in files.sorted(by: { $0.key < $1.key }) {
                     let c = BrowserWindowController.openWindow(at: dir, select: names)
-                    c.setMode(sheet ? .sheet : .list)
+                    c.setMode(sheet ? .sheet : .list, remember: false)
                 }
             }
         }
