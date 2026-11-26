@@ -204,6 +204,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             Activity.set("idle")
             if listing.cancelled { return }
             let ms = Date().timeIntervalSince(started) * 1000
+            if !cached && listing.error == 0 {
+                Stats.noteListing(network: isNetwork, ms: ms, method: listing.method)
+            }
             if !cached {
                 Log.info(String(format: "list %@ %ld entries %.1f ms via %@%@%@", path, listing.entries.count, ms,
                                 listing.method, isNetwork ? " (network)" : "",

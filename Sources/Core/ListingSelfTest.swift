@@ -6,7 +6,7 @@ import Foundation
 
 enum ListingSelfTest {
     static func run() -> [SelfTestResult] {
-        var out: [SelfTestResult] = [paths(), naturalSort(), cache(), volumes()]
+        var out: [SelfTestResult] = [paths(), naturalSort(), cache(), volumes(), realRecords()]
         guard let dir = AppFiles.makeListingFixture() else {
             out.append(SelfTestResult(name: "listing-fixture", status: .fail, detail: "could not create fixture"))
             return out
@@ -80,6 +80,45 @@ enum ListingSelfTest {
         guard root.isLocal, Volumes.volume(for: "/usr/bin")?.isRoot == true else { return fail(n, "root not local/lookup") }
         let net = all.filter { $0.isNetwork }.count
         return ok(n, "\(all.count) mounts, \(net) network, \(Volumes.browsable.count) shown")
+    }
+
+    /// Records captured from the lab's SMB servers (0.1.1 log): folders without the size field,
+    /// 112 bytes, name at offset 108. These must parse as folders, never as broken.
+    static let capturedRecords: [(hex: String, name: String, perm: UInt16, hidden: Bool, inode: UInt64)] = [
+        ("70000000 0b0606a2 00000000 00000000 00000000 00000000 00000000 50000000 04000000 03000036 02000000 06110166 00000000 00000000 00000000 7e5b1268 00000000 00000000 00000000 c0410000 00800000 ffffd4ba fad1e783 00000000 00000000 00000000 00000000 2e393900",
+         ".99", 0o700, true, 0x83e7_d1fa_bad4_ffff),
+        ("70000000 0b0606a2 00000000 00000000 00000000 00000000 00000000 50000000 04000000 02000036 02000000 a0772c64 00000000 00000000 00000000 b44afa6a 00000000 00000000 00000000 c0410000 00000000 6c1a82e3 d6d22d84 00000000 00000000 00000000 00000000 64656c00",
+         "del", 0o700, false, 0x842d_d2d6_e382_1a6c),
+        ("70000000 0b0606a2 00000000 00000000 00000000 00000000 00000000 50000000 04000000 04000036 02000000 e3bdf059 00000000 00000000 00000000 c8350f5a 00000000 00000000 00000000 ed410000 00800000 b89c7de3 d0d22b84 00000000 00000000 00000000 00000000 62696e00",
+         "bin", 0o755, true, 0x842b_d2d0_e37d_9cb8),
+    ]
+
+    static func bytes(_ hex: String) -> [UInt8] {
+        let digits = Array(hex.replacingOccurrences(of: " ", with: ""))
+        var out: [UInt8] = []
+        var i = 0
+        while i + 1 < digits.count {
+            out.append(UInt8(String(digits[i...i + 1]), radix: 16) ?? 0)
+            i += 2
+        }
+        return out
+    }
+
+    static func realRecords() -> SelfTestResult {
+        let n = "listing-smb-records"
+        for r in capturedRecords {
+            let (e, problem) = BulkLister.parseForTest(bytes(r.hex), dir: "/Volumes/T")
+            if let p = problem { return fail(n, "\(r.name): \(p)") }
+            guard let entry = e else { return fail(n, "\(r.name): no entry") }
+            guard entry.name == r.name, entry.isDirectory, entry.size == 0, entry.permissions == r.perm,
+                entry.isHidden == r.hidden, entry.inode == r.inode, entry.modified > 1_400_000_000,
+                entry.path == "/Volumes/T/" + r.name else { return fail(n, "\(r.name): fields wrong") }
+        }
+        // A file record that claims a size but has no room for it must not be read past its end.
+        var short = bytes(capturedRecords[0].hex)
+        short[16] = 0x00; short[17] = 0x02     // fileattr: DATALENGTH returned
+        if BulkLister.parseForTest(short, dir: "/Volumes/T").problem == nil { return fail(n, "missing size field accepted") }
+        return ok(n, "\(capturedRecords.count) captured records")
     }
 
     static func fixture(_ dir: String) -> SelfTestResult {

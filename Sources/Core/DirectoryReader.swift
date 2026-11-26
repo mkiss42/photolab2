@@ -162,11 +162,15 @@ enum BulkLister {
     private static let fileDataLength: UInt32 = 0x0000_0200
     private static let packInvalAttrs: UInt64 = 0x0000_0008
 
-    /// Fixed record layout with FSOPT_PACK_INVAL_ATTRS (offsets from the record start):
+    /// Record layout with FSOPT_PACK_INVAL_ATTRS (offsets from the record start):
     ///   0 length u32 | 4 returned attrs (5 x u32) | 24 error u32 | 28 name attrreference (i32 off, u32 len)
     ///  36 devid i32 | 40 objtype u32 | 44 crtime timespec | 60 modtime timespec | 76 accessmask u32
-    ///  80 flags u32 | 84 fileid u64 | 92 addedtime timespec | 108 datalength u64 | 116 end
-    static let fixedLength = 116
+    ///  80 flags u32 | 84 fileid u64 | 92 addedtime timespec | 108 [datalength u64] ...
+    /// The file-attribute group (datalength) is only present when the entry is a file: for folders,
+    /// smbfs and HFS+ end the fixed part at 108 (record 112 with a short name), APFS pads to 116.
+    /// So: 108 bytes are required; datalength is read only when returned and present.
+    static let fixedLength = 108
+    static let withDataLength = 116
 
     static func list(_ dir: String, isCancelled: () -> Bool, bufferSize: Int = 256 * 1024) -> Outcome {
         let fd = open(dir, O_RDONLY | O_DIRECTORY)
@@ -245,6 +249,18 @@ enum BulkLister {
         return Double(s) + Double(ns) / 1e9
     }
 
+    /// Self-test hook: parse one record from raw bytes. Returns the entry, or a description of the problem.
+    static func parseForTest(_ bytes: [UInt8], dir: String) -> (entry: FileEntry?, problem: String?) {
+        let buf = UnsafeMutableRawPointer.allocate(byteCount: bytes.count, alignment: 16)
+        defer { buf.deallocate() }
+        buf.copyMemory(from: bytes, byteCount: bytes.count)
+        switch parse(buf, at: 0, limit: bytes.count, dir: dir) {
+        case .record(let len, let e): return len == bytes.count ? (e, nil) : (e, "length \(len) of \(bytes.count)")
+        case .odd(_, let name, let why): return (nil, "odd \(name): \(why)")
+        case .bad(let why): return (nil, why)
+        }
+    }
+
     private static func parse(_ buf: UnsafeMutableRawPointer, at start: Int, limit: Int, dir: String) -> Parsed {
         guard start + 4 <= limit else { return .bad("record past buffer") }
         let len = Int(u32(buf, start))
@@ -256,7 +272,7 @@ enum BulkLister {
         let nameOff = Int(i32(r, 28))
         let nameLen = Int(u32(r, 32))
         let nameStart = 28 + nameOff
-        guard nameLen >= 2, nameLen <= 1024, nameStart >= 36, nameStart + nameLen <= len else {
+        guard nameLen >= 2, nameLen <= 1024, nameStart >= fixedLength, nameStart + nameLen <= len else {
             return .bad("name reference")
         }
         let namePtr = (r + nameStart).assumingMemoryBound(to: CChar.self)
@@ -280,7 +296,11 @@ enum BulkLister {
         case 7: typeBits = UInt32(S_IFIFO)
         default: return .odd(length: len, name: name, why: "object type \(u32(r, 40))")
         }
-        let size = (retFile & fileDataLength) != 0 ? Int64(bitPattern: u64(r, 108)) : 0
+        var size: Int64 = 0
+        if (retFile & fileDataLength) != 0 {
+            guard len >= withDataLength, nameStart >= withDataLength else { return .bad("size field missing") }
+            size = Int64(bitPattern: u64(r, 108))
+        }
         guard size >= 0 else { return .odd(length: len, name: name, why: "negative size") }
         let added = (retCommon & cmnAddedTime) != 0 ? time(r, 92) : 0
         let e = FileEntry.make(name: name, dir: dir, mode: typeBits | (u32(r, 76) & 0o7777), size: size,

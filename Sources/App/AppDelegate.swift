@@ -146,6 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let help = submenu(main, "Help")
         item(help, "Run Self-Test", #selector(runSelfTest(_:)), "", [], target: self)
+        item(help, "Short Report", #selector(shortReport(_:)), "", [], target: self)
         item(help, "Save Report...", #selector(saveReport(_:)), "", [], target: self)
         item(help, "Show Logs Folder", #selector(showLogs(_:)), "", [], target: self)
 
@@ -165,13 +166,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let results = SelfTestRunner.runAll()
             for r in results { Log.info(r.line) }
             DispatchQueue.main.async {
-                let alert = NSAlert()
                 let failed = results.filter { $0.status == .fail }.count
-                alert.messageText = failed == 0 ? "Self-test passed" : "Self-test: \(failed) failed"
-                alert.informativeText = results.map { $0.line }.joined(separator: "\n")
-                alert.runModal()
+                let title = failed == 0 ? "Self-Test passed" : "Self-Test: \(failed) failed"
+                ReportWindow.show(title: title, text: results.map { $0.line }.joined(separator: "\n"))
             }
         }
+    }
+
+    /// About ten lines with no paths or names: safe to retype from an air-gapped Mac.
+    @objc private func shortReport(_ sender: Any?) {
+        let text = Stats.shortReport(version: AppDelegate.appVersion, brain: BrowserWindowController.brainText)
+        Log.info("short report shown")
+        ReportWindow.show(title: "Short Report", text: text)
     }
 
     @objc private func saveReport(_ sender: Any?) {

@@ -33,6 +33,7 @@ final class BrainClient {
     private var fd: Int32 = -1
     private var nextID = 1
     private var buffer = LineBuffer()
+    private var stopping = false
 
     /// Main queue.
     var onStateChange: ((State) -> Void)?
@@ -70,6 +71,7 @@ final class BrainClient {
 
     func stop() {
         queue.sync {
+            stopping = true
             if fd >= 0 {
                 _ = sendRequestOnQueue(method: "shutdown", params: [:], timeout: 1.0)
                 close(fd)
@@ -112,10 +114,14 @@ final class BrainClient {
             }
         }
         p.terminationHandler = { [weak self] proc in
-            Log.warn("brain exited with status \(proc.terminationStatus)")
             self?.queue.async {
                 guard let s = self else { return }
                 if s.fd >= 0 { close(s.fd); s.fd = -1 }
+                if s.stopping {
+                    Log.info("brain stopped")
+                    return
+                }
+                Log.warn("W-BRAIN-1 brain exited unexpectedly with status \(proc.terminationStatus)")
                 s.setState(.unavailable(reason: "brain stopped (status \(proc.terminationStatus))"))
             }
         }

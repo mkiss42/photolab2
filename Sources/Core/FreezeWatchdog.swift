@@ -30,12 +30,16 @@ enum FreezeWatchdog {
             let sem = DispatchSemaphore(value: 0)
             while true {
                 Thread.sleep(forTimeInterval: 0.1)
-                DispatchQueue.main.async { sem.signal() }
+                // Ask the main run loop in all common modes (menus, scrolling, sheets), not just the
+                // default mode, so menu tracking is not mistaken for a freeze.
+                CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) { sem.signal() }
+                CFRunLoopWakeUp(CFRunLoopGetMain())
                 if sem.wait(timeout: .now() + threshold) == .timedOut {
                     let t0 = Date()
                     let what = Activity.text
                     sem.wait()
                     let secs = Date().timeIntervalSince(t0) + threshold
+                    Stats.noteFreeze(secs)
                     Log.warn(String(format: "FREEZE %.2f s while: ", secs) + what)
                 }
             }

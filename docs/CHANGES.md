@@ -1,5 +1,20 @@
 # Changes
 
+## 0.1.2 — bulk listing fixed for folders on SMB and HFS+
+
+- Cause found from the 0.1.1 log: for folders, smbfs (and HFS+ on 10.13) leave out the 8-byte size
+  field, so the record is 112 bytes, not 116. That is valid; PhotoLab wrongly called it broken.
+  Shares now list in bulk. The three records from the lab's servers are permanent self-test cases.
+- Help -> Short Report: ~8 lines, no paths or names - safe to retype from an air-gapped Mac.
+- Self-test results open in a normal window (the old modal box was logged as a 35-second FREEZE).
+- The freeze watchdog no longer mistakes an open menu for a freeze.
+- "brain exited with status 15" was PhotoLab stopping its own test brain; it is no longer a warning.
+
+Test checklist (3 minutes, one of the Intel Macs is enough):
+[ ] 1  Browse a few SMB folders, including a share's top folder. Status line should say "bulk".
+[ ] 2  Help -> Run Self-Test (shares mounted): listing-network-shares and listing-smb-records OK.
+[ ] 3  Help -> Short Report: type those lines back to me.
+
 ## 0.1.1 — bulk listing on shares
 
 - A broken bulk-listing record no longer switches fast listing off for the whole session. An odd

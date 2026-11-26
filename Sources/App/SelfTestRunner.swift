@@ -12,6 +12,7 @@ enum SelfTestRunner {
         results += ListingSelfTest.run()
         results.append(brainPing())
         results.append(architecture())
+        Stats.noteSelfTest(results)
         return results
     }
 

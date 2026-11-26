@@ -10,8 +10,8 @@ enum Log {
     static var echo = false
 
     static func info(_ text: String) { write("INFO", text) }
-    static func warn(_ text: String) { write("WARN", text) }
-    static func error(_ text: String) { write("ERROR", text) }
+    static func warn(_ text: String) { Stats.noteLogLine(text); write("WARN", text) }
+    static func error(_ text: String) { Stats.noteLogLine(text); write("ERROR", text) }
 
     private static let stampFormatter: DateFormatter = {
         let f = DateFormatter()
