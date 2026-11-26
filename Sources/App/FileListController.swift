@@ -51,6 +51,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
     let scroll = NSScrollView()
     let table = FileTableView()
     private let message = NSTextField(labelWithString: "")
+    private let spinner = NSProgressIndicator()
     private(set) var entries: [FileEntry] = []
 
     var sortKey: EntrySort.Key = .name
@@ -103,7 +104,14 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         message.translatesAutoresizingMaskIntoConstraints = false
         message.isHidden = true
         scroll.addSubview(message)
+        spinner.style = .spinning
+        spinner.controlSize = .regular
+        spinner.isDisplayedWhenStopped = false
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        scroll.addSubview(spinner)
         NSLayoutConstraint.activate([
+            spinner.centerXAnchor.constraint(equalTo: scroll.centerXAnchor),
+            spinner.bottomAnchor.constraint(equalTo: message.topAnchor, constant: -10),
             message.centerXAnchor.constraint(equalTo: scroll.centerXAnchor),
             message.centerYAnchor.constraint(equalTo: scroll.centerYAnchor),
             message.widthAnchor.constraint(lessThanOrEqualTo: scroll.widthAnchor, constant: -40),
@@ -125,9 +133,10 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         else if select != nil { table.scrollRowToVisible(0) }
     }
 
-    func showMessage(_ text: String?) {
+    func showMessage(_ text: String?, spinning: Bool = false) {
         message.stringValue = text ?? ""
         message.isHidden = text == nil
+        if spinning { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
     }
 
     func selectedEntries() -> [FileEntry] {

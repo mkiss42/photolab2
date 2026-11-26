@@ -1,5 +1,20 @@
 # Changes
 
+## 0.1.3 — empty-folder safety net, spinners
+
+- A bulk listing that comes back empty is checked once with readdir; if readdir finds items they
+  are shown and W-LIST-3 is logged (appears in the Short Report CODES line).
+- Empty listings are never remembered, so revisiting a folder always reads it again.
+- A folder made only of hidden items now says how many there are.
+- Spinners after 0.15 s: big one in the list when entering a slow folder, small one in the status
+  line while the folder on screen is re-read.
+- Short Report LIST lines add the item count of the slowest folder and how many were empty.
+
+Test checklist (2 minutes):
+[ ] 1  Go back to the folder that showed 0 items. Does it list now? What does the status line say?
+[ ] 2  Enter a slow share folder: a spinner shows until the list appears.
+[ ] 3  Help -> Short Report: type the LIST share and CODES lines.
+
 ## 0.1.2 — bulk listing fixed for folders on SMB and HFS+
 
 - Cause found from the 0.1.1 log: for folders, smbfs (and HFS+ on 10.13) leave out the 8-byte size

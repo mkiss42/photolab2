@@ -7,16 +7,16 @@ import Foundation
 
 enum Stats {
     private static let lock = NSLock()
-    private static var listings: [Bool: [(ms: Double, bulk: Bool)]] = [true: [], false: []]
+    private static var listings: [Bool: [(ms: Double, bulk: Bool, entries: Int)]] = [true: [], false: []]
     private static var freezes: [Double] = []
     private static var codes: [String: Int] = [:]
     private static var selfTest: [SelfTestResult] = []
     static let started = Date()
 
-    static func noteListing(network: Bool, ms: Double, method: String) {
+    static func noteListing(network: Bool, ms: Double, method: String, entries: Int) {
         lock.lock(); defer { lock.unlock() }
         var a = listings[network] ?? []
-        a.append((ms: ms, bulk: method.hasPrefix("bulk")))
+        a.append((ms: ms, bulk: method.hasPrefix("bulk"), entries: entries))
         if a.count > 1000 { a.removeFirst(a.count - 1000) }
         listings[network] = a
     }
@@ -41,13 +41,15 @@ enum Stats {
         selfTest = results
     }
 
-    private static func line(_ label: String, _ a: [(ms: Double, bulk: Bool)]) -> String {
+    private static func line(_ label: String, _ a: [(ms: Double, bulk: Bool, entries: Int)]) -> String {
         if a.isEmpty { return "\(label) none" }
         let ms = a.map { $0.ms }.sorted()
         let median = ms[ms.count / 2]
         let bulk = a.filter { $0.bulk }.count
-        return String(format: "%@ n=%ld median %.0f ms, slowest %.0f ms, bulk %ld/%ld",
-                      label, a.count, median, ms.last ?? 0, bulk, a.count)
+        let slowest = a.max { $0.ms < $1.ms }!
+        let empty = a.filter { $0.entries == 0 }.count
+        return String(format: "%@ n=%ld median %.0f ms, slowest %.0f ms (%ld items), bulk %ld/%ld, empty %ld",
+                      label, a.count, median, slowest.ms, slowest.entries, bulk, a.count, empty)
     }
 
     /// About ten lines, no paths or names.

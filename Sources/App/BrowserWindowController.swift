@@ -37,6 +37,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private let forwardButton = NSButton()
     private let upButton = NSButton()
     private let statusLabel = NSTextField(labelWithString: "")
+    private let statusSpinner = NSProgressIndicator()
     private let brainLabel = NSTextField(labelWithString: "")
 
     static var showHidden: Bool {
@@ -127,7 +128,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         brainLabel.textColor = NSColor.secondaryLabelColor
         brainLabel.font = NSFont.systemFont(ofSize: 11)
         brainLabel.alignment = .right
-        let bottom = NSStackView(views: [statusLabel, brainLabel])
+        statusSpinner.style = .spinning
+        statusSpinner.controlSize = .small
+        statusSpinner.isDisplayedWhenStopped = false
+        let bottom = NSStackView(views: [statusSpinner, statusLabel, brainLabel])
         bottom.orientation = .horizontal
         bottom.edgeInsets = NSEdgeInsets(top: 3, left: 10, bottom: 4, right: 10)
         statusLabel.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(rawValue: 100), for: .horizontal)
@@ -181,11 +185,17 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         let gen = generation.next()
         let path = currentPath
         let started = Date()
-        // A placeholder only if the listing takes noticeable time.
+        // Spinners only if the listing takes noticeable time (no flicker for quick folders):
+        // a new folder gets a big one in the list, a re-read of the folder on screen a small one
+        // in the status line (its contents stay visible meanwhile).
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            guard let me = self, me.generation.current == gen, me.lastListingPath != path else { return }
-            me.list.setEntries([], select: [])
-            me.list.showMessage("Reading \(Paths.name(path))...")
+            guard let me = self, me.generation.current == gen else { return }
+            if me.lastListingPath != path {
+                me.list.setEntries([], select: [])
+                me.list.showMessage("Reading \(Paths.name(path))...", spinning: true)
+                me.statusLabel.stringValue = "Reading..."
+            }
+            me.statusSpinner.startAnimation(nil)
         }
         let isNetwork = Volumes.isNetwork(path)
         listQueue.async { [weak self] in
@@ -205,7 +215,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             if listing.cancelled { return }
             let ms = Date().timeIntervalSince(started) * 1000
             if !cached && listing.error == 0 {
-                Stats.noteListing(network: isNetwork, ms: ms, method: listing.method)
+                Stats.noteListing(network: isNetwork, ms: ms, method: listing.method, entries: listing.entries.count)
             }
             if !cached {
                 Log.info(String(format: "list %@ %ld entries %.1f ms via %@%@%@", path, listing.entries.count, ms,
@@ -223,6 +233,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     private func apply(_ listing: FolderListing, path: String, cached: Bool, select: [String]?) {
         Activity.set("show: \(path)")
+        statusSpinner.stopAnimation(nil)
         lastListing = listing
         lastListingPath = path
         fromCache = cached
@@ -233,7 +244,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         if listing.error != 0 {
             list.showMessage("Can't open this folder: \(listing.errorText) (E-LIST-\(listing.error))")
         } else if visible.isEmpty {
-            list.showMessage(listing.entries.isEmpty ? "Empty folder" : "Only hidden items (Cmd-Shift-. shows them)")
+            list.showMessage(listing.entries.isEmpty ? "Empty folder"
+                : "\(listing.entries.count) hidden item\(listing.entries.count == 1 ? "" : "s") only (Cmd-Shift-. shows them)")
         } else {
             list.showMessage(nil)
         }

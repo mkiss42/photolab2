@@ -41,7 +41,9 @@ final class ListingCache {
     }
 
     func store(_ path: String, listing: FolderListing, folderMtime: Double?, now: Date = Date()) {
-        guard let m = folderMtime, listing.error == 0, !listing.cancelled else { return }
+        // Empty listings are not kept: they are cheap to re-read and an empty answer from a busy
+        // server must not stick.
+        guard let m = folderMtime, listing.error == 0, !listing.cancelled, !listing.entries.isEmpty else { return }
         lock.lock(); defer { lock.unlock() }
         remove(path)
         items[path] = Item(listing: listing, folderMtime: m, storedAt: now)

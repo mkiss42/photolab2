@@ -92,6 +92,17 @@ enum DirectoryReader {
         } else {
             result = classic(dir, isCancelled: isCancelled)
         }
+        // An empty bulk answer is double-checked: a busy server can end an enumeration early.
+        // Empty folders are cheap to read twice.
+        if method == .auto && result.method.hasPrefix("bulk") && result.entries.isEmpty
+            && result.error == 0 && !result.cancelled {
+            let check = classic(dir, isCancelled: isCancelled)
+            if !check.entries.isEmpty || check.error != 0 {
+                Log.warn("W-LIST-3 bulk listing returned nothing but readdir found \(check.entries.count) item(s) (error \(check.error)) in \(dir)")
+                result = check
+                result.method = "readdir (bulk was empty)"
+            }
+        }
         result.milliseconds = Date().timeIntervalSince(t0) * 1000
         return result
     }

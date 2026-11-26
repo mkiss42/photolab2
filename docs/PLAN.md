@@ -174,7 +174,9 @@ Each phase ends in something the lab can use. Exit criteria are tested on all th
    Rosetta, on a native Intel runner, and with the modern profile.
 1. **Browser core** — 1a (0.1.0): volumes + sidebar, list view, navigation, bulk listing,
    watching, listing cache, logs, freeze watchdog — read-only. 1b (0.2.0): Trash, rename, new
-   folder, undo, recovery journal.
+   folder, undo, recovery journal. Before 1b: 0.1.4 makes the list expandable (Finder list view
+   with disclosure triangles, as PhotoLab 1's tree): "Loading..." placeholder row with a small
+   spinner under an expanding folder, after 0.15 s.
 2. **Contact sheet & preview** — thumbnail grid, embedded RAW previews, fast preview, Quick
    Look, ratings/labels/color classes with safe writes, filter bar, raw+jpg grouping.
 3. **Brain & shared cache** — brain process, protocol, exif cache, thumbnail sharing,
