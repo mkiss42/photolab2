@@ -1,10 +1,33 @@
 // FileListController.swift
-// The list view of a folder: Name / Date Modified / Size / Kind. No disk access on the main
-// thread: icons and kinds come from the file extension only.
+// Finder-style list view with disclosure triangles: Name / Date Modified / Size / Kind.
+// - Expanding a folder asks the window to list it in the background; if that takes longer than
+//   0.15 s a "Loading..." row with a small spinner appears under the folder.
+// - Re-listing keeps expanded subfolders open and the selection (by path): folder nodes are
+//   reused by path, so NSOutlineView keeps their state.
+// - No disk access on the main thread: icons and kinds come from the file extension only.
 
 import AppKit
 
-final class FileTableView: NSTableView {
+final class FileNode: NSObject {
+    var entry: FileEntry
+    /// nil = never listed; otherwise the listed children (unfiltered, unsorted).
+    var allChildren: [FileEntry]?
+    /// Sorted + filtered children shown in the outline (may hold the placeholder).
+    var shown: [FileNode] = []
+    var loading = false
+    var showPlaceholder = false
+    var error: String?
+    let isPlaceholder: Bool
+
+    init(entry: FileEntry, placeholder: Bool = false) {
+        self.entry = entry
+        self.isPlaceholder = placeholder
+    }
+
+    var isExpandableFolder: Bool { return !isPlaceholder && entry.isDirectory && !entry.isPackage }
+}
+
+final class FileOutlineView: NSOutlineView {
     var onOpen: (() -> Void)?
 
     override func keyDown(with event: NSEvent) {
@@ -25,9 +48,12 @@ enum FileIcons {
         if e.isDirectory && !e.isPackage { return NSImage(named: NSImage.folderName) }
         let key = e.isPackage ? e.ext : (e.ext.isEmpty ? "public.data" : e.ext)
         if let i = byExt[key] { return i }
+        let t0 = Date()
         let i = NSWorkspace.shared.icon(forFileType: key)
         i.size = NSSize(width: 16, height: 16)
         byExt[key] = i
+        let ms = Date().timeIntervalSince(t0) * 1000
+        if ms > 50 { Log.info(String(format: "slow icon: .%@ took %.0f ms", key, ms)) }
         return i
     }
 
@@ -47,20 +73,28 @@ enum FileIcons {
     }
 }
 
-final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate {
     let scroll = NSScrollView()
-    let table = FileTableView()
+    let table = FileOutlineView()
     private let message = NSTextField(labelWithString: "")
     private let spinner = NSProgressIndicator()
-    private(set) var entries: [FileEntry] = []
+    private var roots: [FileNode] = []
+    private var rootEntries: [FileEntry] = []
+    /// Folder path -> node, for every folder node currently in the tree.
+    private var nodesByPath: [String: FileNode] = [:]
 
     var sortKey: EntrySort.Key = .name
     var ascending = true
     var foldersFirst = true
+    var showHidden = false
 
     /// Double-click, Return.
     var onOpen: (([FileEntry]) -> Void)?
     var onSelectionChange: (() -> Void)?
+    /// The window lists `path` in the background and then calls setChildren(...).
+    var onNeedChildren: ((String) -> Void)?
+    /// The set of expanded folders changed (the window watches them).
+    var onExpandedChange: ((Set<String>) -> Void)?
 
     private let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -73,7 +107,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
     override init() {
         super.init()
         let columns: [(String, String, CGFloat, EntrySort.Key)] = [
-            ("name", "Name", 320, .name), ("modified", "Date Modified", 170, .modified),
+            ("name", "Name", 340, .name), ("modified", "Date Modified", 170, .modified),
             ("size", "Size", 80, .size), ("kind", "Kind", 140, .kind)]
         for (id, title, width, key) in columns {
             let c = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
@@ -82,11 +116,14 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
             c.minWidth = 50
             c.sortDescriptorPrototype = NSSortDescriptor(key: key.rawValue, ascending: true)
             table.addTableColumn(c)
+            if id == "name" { table.outlineTableColumn = c }
         }
         table.allowsMultipleSelection = true
         table.usesAlternatingRowBackgroundColors = true
         table.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
         table.rowHeight = 20
+        table.indentationPerLevel = 14
+        table.autoresizesOutlineColumn = false
         table.dataSource = self
         table.delegate = self
         table.target = self
@@ -118,19 +155,112 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         ])
     }
 
-    // MARK: Content
+    // MARK: Nodes
 
-    /// Replace the rows. Keeps the selection by name unless `select` is given.
-    func setEntries(_ new: [FileEntry], select: [String]? = nil) {
-        let keep = select ?? selectedEntries().map { $0.name }
-        entries = EntrySort.sort(new, by: sortKey, ascending: ascending, foldersFirst: foldersFirst)
+    private func visible(_ entries: [FileEntry]) -> [FileEntry] {
+        let v = showHidden ? entries : entries.filter { !$0.isHidden }
+        return EntrySort.sort(v, by: sortKey, ascending: ascending, foldersFirst: foldersFirst)
+    }
+
+    /// Nodes for `entries`, reusing existing folder nodes with the same path (keeps their
+    /// expansion and children).
+    private func nodes(for entries: [FileEntry]) -> [FileNode] {
+        return visible(entries).map { e -> FileNode in
+            if e.isDirectory, let prev = nodesByPath[e.path] {
+                prev.entry = e
+                return prev
+            }
+            return FileNode(entry: e)
+        }
+    }
+
+    private func refreshShown(_ n: FileNode) {
+        let ph = n.showPlaceholder ? [placeholder(for: n)] : []
+        guard let all = n.allChildren else { n.shown = ph; return }
+        n.shown = nodes(for: all) + ph
+        for c in n.shown where c.isExpandableFolder { refreshShown(c) }
+    }
+
+    private func rebuildIndex() {
+        var index: [String: FileNode] = [:]
+        func walk(_ list: [FileNode]) {
+            for n in list where n.isExpandableFolder {
+                index[n.entry.path] = n
+                walk(n.shown)
+            }
+        }
+        walk(roots)
+        nodesByPath = index
+    }
+
+    private func placeholder(for parent: FileNode) -> FileNode {
+        let e = FileEntry.make(name: "Loading...", dir: parent.entry.path, mode: 0o100000, size: 0,
+                               modified: 0, created: 0, added: 0, flags: 0, device: 0, inode: 0)
+        return FileNode(entry: e, placeholder: true)
+    }
+
+    /// Expanded folders, parents first.
+    var expandedFolderPaths: [String] {
+        return nodesByPath.filter { table.isItemExpanded($0.value) }.map { $0.key }.sorted { $0.count < $1.count }
+    }
+
+    private func reexpand(_ paths: [String]) {
+        for p in paths {
+            if let n = nodesByPath[p], !table.isItemExpanded(n) { table.expandItem(n) }
+        }
+    }
+
+    // MARK: Content API (main thread)
+
+    /// The folder on screen. Keeps expanded subfolders and the selection, unless `select`
+    /// (names in this folder) is given.
+    func setEntries(_ entries: [FileEntry], select: [String]? = nil) {
+        let wasExpanded = expandedFolderPaths
+        let keep: Set<String>
+        if let names = select {
+            keep = Set(entries.filter { names.contains($0.name) }.map { $0.path })
+        } else {
+            keep = Set(selectedEntries().map { $0.path })
+        }
+        rootEntries = entries
+        roots = nodes(for: entries)
+        for n in roots where n.isExpandableFolder { refreshShown(n) }
+        rebuildIndex()
         table.reloadData()
-        let wanted = Set(keep)
+        reexpand(wasExpanded)
         var rows = IndexSet()
-        for (i, e) in entries.enumerated() where wanted.contains(e.name) { rows.insert(i) }
+        for r in 0..<table.numberOfRows {
+            if let n = table.item(atRow: r) as? FileNode, !n.isPlaceholder, keep.contains(n.entry.path) { rows.insert(r) }
+        }
         table.selectRowIndexes(rows, byExtendingSelection: false)
         if let first = rows.first { table.scrollRowToVisible(first) }
         else if select != nil { table.scrollRowToVisible(0) }
+        onExpandedChange?(Set(expandedFolderPaths))
+    }
+
+    /// Children of an expanded folder arrived (error text when it could not be read).
+    func setChildren(path: String, entries: [FileEntry], error: String?) {
+        guard let n = nodesByPath[path] else { return }
+        let wasExpanded = expandedFolderPaths
+        n.loading = false
+        n.showPlaceholder = false
+        n.allChildren = entries
+        n.error = error
+        refreshShown(n)
+        rebuildIndex()
+        table.reloadItem(n, reloadChildren: true)
+        reexpand(wasExpanded)
+        onExpandedChange?(Set(expandedFolderPaths))
+    }
+
+    /// Re-list an expanded folder (watcher event, refresh).
+    func relist(path: String) {
+        guard let n = nodesByPath[path], table.isItemExpanded(n) else { return }
+        onNeedChildren?(path)
+    }
+
+    func reapplyFilterAndSort() {
+        setEntries(rootEntries)
     }
 
     func showMessage(_ text: String?, spinning: Bool = false) {
@@ -140,8 +270,13 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
     }
 
     func selectedEntries() -> [FileEntry] {
-        return table.selectedRowIndexes.compactMap { $0 < entries.count ? entries[$0] : nil }
+        return table.selectedRowIndexes.compactMap { r -> FileEntry? in
+            guard let n = table.item(atRow: r) as? FileNode, !n.isPlaceholder else { return nil }
+            return n.entry
+        }
     }
+
+    var selectionCount: Int { return selectedEntries().count }
 
     // MARK: Actions
 
@@ -155,20 +290,65 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         if !sel.isEmpty { onOpen?(sel) }
     }
 
-    // MARK: Data source / delegate
+    // MARK: Data source
 
-    func numberOfRows(in tableView: NSTableView) -> Int {
-        return entries.count
+    func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
+        guard let n = item as? FileNode else { return roots.count }
+        return n.shown.count
     }
 
-    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard let col = tableColumn, row < entries.count else { return nil }
-        let e = entries[row]
+    func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
+        guard let n = item as? FileNode else { return roots[index] }
+        return n.shown[index]
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
+        return (item as? FileNode)?.isExpandableFolder ?? false
+    }
+
+    // MARK: Expansion
+
+    func outlineViewItemWillExpand(_ notification: Notification) {
+        guard let n = notification.userInfo?["NSObject"] as? FileNode, n.isExpandableFolder, !n.loading else { return }
+        n.loading = true
+        let path = n.entry.path
+        // "Loading..." only if the folder is slow: no flicker for quick folders.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard let me = self, let node = me.nodesByPath[path], node.loading, me.table.isItemExpanded(node) else { return }
+            node.showPlaceholder = true
+            me.refreshShown(node)
+            me.table.reloadItem(node, reloadChildren: true)
+        }
+        onNeedChildren?(path)
+    }
+
+    func outlineViewItemDidExpand(_ notification: Notification) {
+        onExpandedChange?(Set(expandedFolderPaths))
+    }
+
+    func outlineViewItemDidCollapse(_ notification: Notification) {
+        onExpandedChange?(Set(expandedFolderPaths))
+    }
+
+    // MARK: Cells
+
+    func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
+        guard let col = tableColumn, let n = item as? FileNode else { return nil }
         let id = col.identifier
-        let cell = (tableView.makeView(withIdentifier: id, owner: self) as? NSTableCellView) ?? makeCell(id)
+        let cell = (outlineView.makeView(withIdentifier: id, owner: self) as? FileCell) ?? FileCell(id: id)
+        let e = n.entry
+        if n.isPlaceholder {
+            cell.textField?.stringValue = id.rawValue == "name" ? "Loading..." : ""
+            cell.textField?.textColor = NSColor.secondaryLabelColor
+            cell.imageView?.image = nil
+            cell.spinning = id.rawValue == "name"
+            return cell
+        }
+        cell.spinning = false
         switch id.rawValue {
         case "name":
-            cell.textField?.stringValue = e.name
+            if let err = n.error { cell.textField?.stringValue = "\(e.name)  (\(err))" }
+            else { cell.textField?.stringValue = e.name }
             cell.imageView?.image = FileIcons.icon(for: e)
             cell.textField?.textColor = e.isHidden ? NSColor.secondaryLabelColor : NSColor.labelColor
         case "modified":
@@ -181,50 +361,75 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         return cell
     }
 
-    private func makeCell(_ id: NSUserInterfaceItemIdentifier) -> NSTableCellView {
-        let cell = NSTableCellView()
-        cell.identifier = id
-        let tf = NSTextField(labelWithString: "")
-        tf.lineBreakMode = .byTruncatingMiddle
-        tf.translatesAutoresizingMaskIntoConstraints = false
-        cell.addSubview(tf)
-        cell.textField = tf
-        if id.rawValue == "name" {
-            let iv = NSImageView()
-            iv.translatesAutoresizingMaskIntoConstraints = false
-            cell.addSubview(iv)
-            cell.imageView = iv
-            NSLayoutConstraint.activate([
-                iv.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
-                iv.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-                iv.widthAnchor.constraint(equalToConstant: 16), iv.heightAnchor.constraint(equalToConstant: 16),
-                tf.leadingAnchor.constraint(equalTo: iv.trailingAnchor, constant: 5),
-            ])
-        } else {
-            tf.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2).isActive = true
-            if id.rawValue == "size" { tf.alignment = .right }
-            if id.rawValue != "name" { tf.textColor = NSColor.secondaryLabelColor }
-        }
-        NSLayoutConstraint.activate([
-            tf.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -2),
-            tf.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-        ])
-        return cell
+    func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
+        return !((item as? FileNode)?.isPlaceholder ?? true)
     }
 
-    func tableView(_ tableView: NSTableView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]) {
-        guard let d = tableView.sortDescriptors.first, let k = d.key, let key = EntrySort.Key(rawValue: k) else { return }
+    func outlineView(_ outlineView: NSOutlineView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]) {
+        guard let d = outlineView.sortDescriptors.first, let k = d.key, let key = EntrySort.Key(rawValue: k) else { return }
         sortKey = key
         ascending = d.ascending
-        setEntries(entries)
+        reapplyFilterAndSort()
     }
 
-    func tableViewSelectionDidChange(_ notification: Notification) {
+    func outlineViewSelectionDidChange(_ notification: Notification) {
         onSelectionChange?()
     }
 
-    func tableView(_ tableView: NSTableView, typeSelectStringFor tableColumn: NSTableColumn?, row: Int) -> String? {
-        guard tableColumn?.identifier.rawValue == "name", row < entries.count else { return nil }
-        return entries[row].name
+    func outlineView(_ outlineView: NSOutlineView, typeSelectStringFor tableColumn: NSTableColumn?, item: Any) -> String? {
+        guard tableColumn?.identifier.rawValue == "name", let n = item as? FileNode, !n.isPlaceholder else { return nil }
+        return n.entry.name
     }
+}
+
+/// Table cell with icon, text and an optional small spinner (for the "Loading..." row).
+final class FileCell: NSTableCellView {
+    private let spinner = NSProgressIndicator()
+
+    var spinning: Bool = false {
+        didSet {
+            if spinning == oldValue { return }
+            if spinning { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
+        }
+    }
+
+    init(id: NSUserInterfaceItemIdentifier) {
+        super.init(frame: .zero)
+        identifier = id
+        let tf = NSTextField(labelWithString: "")
+        tf.lineBreakMode = .byTruncatingMiddle
+        tf.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(tf)
+        textField = tf
+        if id.rawValue == "name" {
+            let iv = NSImageView()
+            iv.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(iv)
+            imageView = iv
+            spinner.style = .spinning
+            spinner.controlSize = .small
+            spinner.isDisplayedWhenStopped = false
+            spinner.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(spinner)
+            NSLayoutConstraint.activate([
+                iv.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
+                iv.centerYAnchor.constraint(equalTo: centerYAnchor),
+                iv.widthAnchor.constraint(equalToConstant: 16), iv.heightAnchor.constraint(equalToConstant: 16),
+                spinner.centerXAnchor.constraint(equalTo: iv.centerXAnchor),
+                spinner.centerYAnchor.constraint(equalTo: iv.centerYAnchor),
+                spinner.widthAnchor.constraint(equalToConstant: 14), spinner.heightAnchor.constraint(equalToConstant: 14),
+                tf.leadingAnchor.constraint(equalTo: iv.trailingAnchor, constant: 5),
+            ])
+        } else {
+            tf.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2).isActive = true
+            if id.rawValue == "size" { tf.alignment = .right }
+            tf.textColor = NSColor.secondaryLabelColor
+        }
+        NSLayoutConstraint.activate([
+            tf.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
+            tf.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
 }

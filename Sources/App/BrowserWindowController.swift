@@ -25,8 +25,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private var backStack: [String] = []
     private var forwardStack: [String] = []
     private let generation = Generation()
+    /// Bumped only when the window changes folder; child listings of the old folder are dropped.
+    private let folderGeneration = Generation()
     private let listQueue = DispatchQueue(label: "photolab.list", qos: .userInitiated, attributes: .concurrent)
     private var watcher: FolderWatcher?
+    /// Watchers for expanded subfolders, by path.
+    private var childWatchers: [String: FolderWatcher] = [:]
     private var lastListing: FolderListing?
     private var fromCache = false
 
@@ -121,6 +125,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         list.foldersFirst = BrowserWindowController.foldersFirst
         list.onOpen = { [weak self] sel in self?.open(sel) }
         list.onSelectionChange = { [weak self] in self?.updateStatus() }
+        list.onNeedChildren = { [weak self] p in self?.loadChildren(p) }
+        list.onExpandedChange = { [weak self] set in self?.watchExpanded(set) }
+        list.showHidden = BrowserWindowController.showHidden
 
         statusLabel.textColor = NSColor.secondaryLabelColor
         statusLabel.font = NSFont.systemFont(ofSize: 11)
@@ -167,6 +174,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             forwardStack.removeAll()
         }
         currentPath = path
+        _ = folderGeneration.next()
         UserDefaults.standard.set(path, forKey: "lastFolder")
         let vol = Volumes.volume(for: path)
         window?.title = (path == vol?.mountPoint ? vol?.displayName : nil) ?? Paths.name(path)
@@ -177,6 +185,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         sidebar.reflect(path: path)
         watcher?.stop()
         watcher = FolderWatcher(path: path) { [weak self] change in self?.watchFired(change, for: path) }
+        watchExpanded([])
         load(select: select ?? [], useCache: true)
     }
 
@@ -240,7 +249,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         let showHidden = BrowserWindowController.showHidden
         let visible = showHidden ? listing.entries : listing.entries.filter { !$0.isHidden }
         list.foldersFirst = BrowserWindowController.foldersFirst
-        list.setEntries(visible, select: select)
+        list.showHidden = showHidden
+        list.setEntries(listing.entries, select: select)
         if listing.error != 0 {
             list.showMessage("Can't open this folder: \(listing.errorText) (E-LIST-\(listing.error))")
         } else if visible.isEmpty {
@@ -260,7 +270,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         let shown = BrowserWindowController.showHidden ? l.entries.count : l.entries.count - hidden
         var parts = ["\(shown) item\(shown == 1 ? "" : "s")"]
         if hidden > 0 && !BrowserWindowController.showHidden { parts.append("\(hidden) hidden") }
-        let sel = list.table.selectedRowIndexes.count
+        let sel = list.selectionCount
         if sel > 0 { parts.append("\(sel) selected") }
         parts.append(fromCache ? "from memory" : String(format: "%@ %.0f ms", l.method, l.milliseconds))
         if !l.problems.isEmpty { parts.append("\(l.problems.count) unreadable") }
@@ -383,6 +393,62 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     @objc func refresh(_ sender: Any?) {
         ListingCache.shared.invalidate(currentPath)
         load(select: nil, useCache: false)
+        for p in list.expandedFolderPaths {
+            ListingCache.shared.invalidate(p)
+            list.relist(path: p)
+        }
+    }
+
+    // MARK: Expanded subfolders
+
+    /// List an expanded subfolder in the background (same cache and reader as the main listing).
+    private func loadChildren(_ path: String) {
+        let gen = folderGeneration.current
+        let isNetwork = Volumes.isNetwork(path)
+        listQueue.async { [weak self] in
+            let started = Date()
+            let mtime = ListingCache.folderMtime(path)
+            var listing: FolderListing
+            var cached = false
+            if let c = ListingCache.shared.lookup(path, currentMtime: mtime) {
+                listing = c
+                cached = true
+            } else {
+                listing = DirectoryReader.read(path, isCancelled: { [weak self] in self?.folderGeneration.current != gen })
+                if !listing.cancelled { ListingCache.shared.store(path, listing: listing, folderMtime: mtime) }
+            }
+            if listing.cancelled { return }
+            let ms = Date().timeIntervalSince(started) * 1000
+            if !cached {
+                if listing.error == 0 {
+                    Stats.noteListing(network: isNetwork, ms: ms, method: listing.method, entries: listing.entries.count)
+                }
+                Log.info(String(format: "expand %@ %ld entries %.1f ms via %@%@", path, listing.entries.count, ms,
+                                listing.method, listing.error != 0 ? " error \(listing.error) \(listing.errorText)" : ""))
+            }
+            let result = listing
+            DispatchQueue.main.async {
+                guard let me = self, me.folderGeneration.current == gen else { return }
+                me.list.setChildren(path: path, entries: result.entries,
+                                    error: result.error != 0 ? result.errorText : nil)
+            }
+        }
+    }
+
+    /// One watcher per expanded subfolder; an event re-lists just that folder.
+    private func watchExpanded(_ paths: Set<String>) {
+        for (p, w) in childWatchers where !paths.contains(p) {
+            w.stop()
+            childWatchers.removeValue(forKey: p)
+        }
+        for p in paths where childWatchers[p] == nil {
+            childWatchers[p] = FolderWatcher(path: p) { [weak self] change in
+                guard let me = self else { return }
+                ListingCache.shared.invalidate(p)
+                if change == .contents { me.list.relist(path: p) }
+                // .gone: the parent's watcher sees it disappear and re-lists the parent.
+            }
+        }
     }
 
     @objc func toggleHidden(_ sender: Any?) {
@@ -404,7 +470,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         case #selector(goBack(_:))?: return !backStack.isEmpty
         case #selector(goForward(_:))?: return !forwardStack.isEmpty
         case #selector(goEnclosingFolder(_:))?: return currentPath != "/"
-        case #selector(openSelected(_:))?: return list.table.selectedRowIndexes.count > 0
+        case #selector(openSelected(_:))?: return list.selectionCount > 0
         case #selector(toggleHidden(_:))?:
             item.state = BrowserWindowController.showHidden ? .on : .off
             return true
@@ -430,6 +496,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     func windowWillClose(_ notification: Notification) {
         watcher?.stop()
         watcher = nil
+        watchExpanded([])
         _ = generation.next()
         NotificationCenter.default.removeObserver(self)
         BrowserWindowController.open.removeAll { $0 === self }

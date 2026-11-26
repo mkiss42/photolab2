@@ -1,5 +1,23 @@
 # Changes
 
+## 0.1.4 — expandable list
+
+- Folders in the list have disclosure triangles (click, or Right/Left arrow; Option-click a
+  triangle is Finder's "expand all" and is not supported yet). Double-click a folder to go into it.
+- Expanding a folder that takes longer than 0.15 s shows a "Loading..." row with a small spinner
+  directly under it.
+- Expanded folders stay open when the list is re-read, and each one is watched: changes inside
+  an expanded folder update just that folder. Cmd-R re-reads the folder and every expanded one.
+- Diagnostics for the ~0.3 s freeze seen in every session: slow icon loads are logged.
+
+Test checklist (4 minutes):
+[ ] 1  On a share, expand a few folders, including a slow one: "Loading..." row with spinner, then
+       its contents. Expand a folder inside an expanded folder.
+[ ] 2  Have someone add a file inside an expanded folder: it appears within ~5 s, nothing collapses.
+[ ] 3  Sort by another column with folders expanded: they stay expanded, sorted inside too.
+[ ] 4  Double-click an expanded folder's subfolder: the window goes into it.
+[ ] 5  Help -> Short Report: type it back.
+
 ## 0.1.3 — empty-folder safety net, spinners
 
 - A bulk listing that comes back empty is checked once with readdir; if readdir finds items they

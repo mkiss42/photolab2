@@ -60,7 +60,12 @@ final class SidebarController: NSObject, NSOutlineViewDataSource, NSOutlineViewD
             let icon: NSImage?
             if v.isNetwork { icon = NSImage(named: NSImage.networkName) }
             else if v.isRoot { icon = NSImage(named: NSImage.computerName) }
-            else { icon = NSWorkspace.shared.icon(forFile: v.mountPoint) }   // local disk: cheap
+            else {
+                let t0 = Date()
+                icon = NSWorkspace.shared.icon(forFile: v.mountPoint)   // local disk
+                let ms = Date().timeIntervalSince(t0) * 1000
+                if ms > 50 { Log.info(String(format: "slow volume icon: %@ took %.0f ms", v.displayName, ms)) }
+            }
             vols.append(SidebarItem(title: v.displayName, path: v.mountPoint, icon: icon))
         }
         let volumes = SidebarItem(title: "VOLUMES", path: nil, icon: nil, children: vols)
