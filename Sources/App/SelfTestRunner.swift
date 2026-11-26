@@ -8,6 +8,8 @@ import Foundation
 enum SelfTestRunner {
     /// Never call on the main thread when the brain test is included.
     static func runAll() -> [SelfTestResult] {
+        Stats.selfTestRunning(true)
+        defer { Stats.selfTestRunning(false) }
         var results = CoreSelfTest.run()
         results += ListingSelfTest.run()
         results += FileOpsSelfTest.run()

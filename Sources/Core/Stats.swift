@@ -19,6 +19,13 @@ enum Stats {
     private static var transfers: [Bool: (jobs: Int, files: Int, bytes: Int64, seconds: Double)] = [:]
     private static var transferFailures = 0
     static let started = Date()
+    /// > 0 while the self-test runs: its deliberate warnings (simulated stops, permanent delete
+    /// of its own fixture) must not show up in CODES as if they were the user's.
+    private static var selfTestDepth = 0
+
+    static func selfTestRunning(_ running: Bool) {
+        lock.lock(); selfTestDepth += running ? 1 : -1; lock.unlock()
+    }
 
     static func noteListing(network: Bool, ms: Double, method: String, entries: Int) {
         lock.lock(); defer { lock.unlock() }
@@ -55,6 +62,7 @@ enum Stats {
         let parts = token.split(separator: "-")
         guard parts.count == 3, parts[0] == "W" || parts[0] == "E", Int(parts[2]) != nil else { return }
         lock.lock(); defer { lock.unlock() }
+        if selfTestDepth > 0 { return }
         codes[token, default: 0] += 1
     }
 

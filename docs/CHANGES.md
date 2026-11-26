@@ -21,7 +21,9 @@
 - Progress window (appears for copies longer than 0.6 s): bar, files, bytes, MB/s, Stop.
 - Undo: copy (the copies go to the Trash; on a share, after the delete warning), move on one
   volume (moved back). A move to another volume can't be undone.
-- Short Report: new COPY line (jobs, files, MB, MB/s per local/share, failures).
+- Short Report: new COPY line (jobs, files, MB, MB/s per local/share, failures). Warnings the
+  self-test causes on purpose (its own test delete, simulated stops) no longer count in CODES -
+  the W-OPS-2 in your 0.2.1 report was most likely the self-test, not your share delete.
 
 Test checklist (5 minutes; scratch folders, one local, one on a share):
 [ ] 1  Select a RAW with JPG+XMP, Cmd-C, click into another folder, Cmd-V: all three copied.
