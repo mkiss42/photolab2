@@ -15,9 +15,10 @@ final class Generation {
 extension Notification.Name {
     static let volumesChanged = Notification.Name("PhotoLabVolumesChanged")
     static let brainStateChanged = Notification.Name("PhotoLabBrainStateChanged")
+    static let layoutSettingsChanged = Notification.Name("PhotoLabLayoutSettingsChanged")
 }
 
-final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
+final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation, NSSplitViewDelegate {
     static var open: [BrowserWindowController] = []
     static var brainText = "Brain: not started"
 
@@ -61,6 +62,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             w.setFrameTopLeftPoint(NSPoint(x: last.frame.minX + 24, y: last.frame.maxY - 24))
         }
         c.showWindow(nil)
+        // Let the Name column take the free width now that the window has its real size.
+        DispatchQueue.main.async { c.list.table.sizeToFit() }
         return c
     }
 
@@ -76,6 +79,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         buildUI(in: w)
         NotificationCenter.default.addObserver(self, selector: #selector(volumesChanged(_:)), name: .volumesChanged, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(brainChanged(_:)), name: .brainStateChanged, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(layoutSettingsChanged(_:)), name: .layoutSettingsChanged, object: nil)
         brainLabel.stringValue = BrowserWindowController.brainText
         navigate(to: path, record: false)
     }
@@ -84,21 +88,32 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     // MARK: Layout
 
+    private let split = NSSplitView()
+    private let rightStack = NSStackView()
+    private let navBar = NSStackView()
+    private let statusBar = NSStackView()
+    private let sidebarButton = NSButton()
+
+    static let defaultSidebarWidth: CGFloat = 160
+    static var sidebarVisible: Bool {
+        get { return UserDefaults.standard.bool(forKey: "sidebarVisible") }      // hidden by default
+        set { UserDefaults.standard.set(newValue, forKey: "sidebarVisible") }
+    }
+    static var sidebarWidth: CGFloat {
+        get { let w = UserDefaults.standard.double(forKey: "sidebarWidth"); return w > 0 ? CGFloat(w) : defaultSidebarWidth }
+        set { UserDefaults.standard.set(Double(newValue), forKey: "sidebarWidth") }
+    }
+    static var pathBarAtBottom: Bool {
+        get { return UserDefaults.standard.bool(forKey: "pathBarAtBottom") }
+        set { UserDefaults.standard.set(newValue, forKey: "pathBarAtBottom") }
+    }
+
     private func buildUI(in w: NSWindow) {
-        let split = NSSplitView()
         split.isVertical = true
         split.dividerStyle = .thin
-        split.autosaveName = "BrowserSplit"
-
-        let side = sidebar.scroll
-        side.translatesAutoresizingMaskIntoConstraints = false
-        side.widthAnchor.constraint(greaterThanOrEqualToConstant: 140).isActive = true
-        let sideWidth = side.widthAnchor.constraint(equalToConstant: 190)
-        sideWidth.priority = NSLayoutConstraint.Priority(rawValue: 200)
-        sideWidth.isActive = true
+        split.delegate = self
         sidebar.onSelect = { [weak self] p in self?.navigate(to: p) }
 
-        let right = NSView()
         for (b, img, sel, tip) in [(backButton, NSImage.goLeftTemplateName, #selector(goBack(_:)), "Back"),
                                    (forwardButton, NSImage.goRightTemplateName, #selector(goForward(_:)), "Forward")] {
             b.bezelStyle = .texturedRounded
@@ -112,15 +127,21 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         upButton.target = self
         upButton.action = #selector(goEnclosingFolder(_:))
         upButton.toolTip = "Enclosing folder (Cmd-Up)"
+        sidebarButton.bezelStyle = .texturedRounded
+        sidebarButton.title = "Sidebar"
+        sidebarButton.setButtonType(.pushOnPushOff)
+        sidebarButton.target = self
+        sidebarButton.action = #selector(toggleSidebar(_:))
+        sidebarButton.toolTip = "Show or hide the sidebar (Cmd-Option-S)"
 
         pathBar.orientation = .horizontal
         pathBar.spacing = 0
         pathBar.alignment = .centerY
         pathBar.setHuggingPriority(NSLayoutConstraint.Priority(rawValue: 100), for: .horizontal)
-        let top = NSStackView(views: [backButton, forwardButton, upButton, pathBar])
-        top.orientation = .horizontal
-        top.spacing = 6
-        top.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
+        for v in [sidebarButton, backButton, forwardButton, upButton, pathBar] as [NSView] { navBar.addArrangedSubview(v) }
+        navBar.orientation = .horizontal
+        navBar.spacing = 6
+        navBar.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
 
         list.foldersFirst = BrowserWindowController.foldersFirst
         list.onOpen = { [weak self] sel in self?.open(sel) }
@@ -138,32 +159,59 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         statusSpinner.style = .spinning
         statusSpinner.controlSize = .small
         statusSpinner.isDisplayedWhenStopped = false
-        let bottom = NSStackView(views: [statusSpinner, statusLabel, brainLabel])
-        bottom.orientation = .horizontal
-        bottom.edgeInsets = NSEdgeInsets(top: 3, left: 10, bottom: 4, right: 10)
+        for v in [statusSpinner, statusLabel, brainLabel] as [NSView] { statusBar.addArrangedSubview(v) }
+        statusBar.orientation = .horizontal
+        statusBar.edgeInsets = NSEdgeInsets(top: 3, left: 10, bottom: 4, right: 10)
         statusLabel.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(rawValue: 100), for: .horizontal)
 
-        for v in [top, list.scroll, bottom] as [NSView] {
-            v.translatesAutoresizingMaskIntoConstraints = false
-            right.addSubview(v)
-        }
-        NSLayoutConstraint.activate([
-            top.topAnchor.constraint(equalTo: right.topAnchor),
-            top.leadingAnchor.constraint(equalTo: right.leadingAnchor),
-            top.trailingAnchor.constraint(equalTo: right.trailingAnchor),
-            list.scroll.topAnchor.constraint(equalTo: top.bottomAnchor),
-            list.scroll.leadingAnchor.constraint(equalTo: right.leadingAnchor),
-            list.scroll.trailingAnchor.constraint(equalTo: right.trailingAnchor),
-            list.scroll.bottomAnchor.constraint(equalTo: bottom.topAnchor),
-            bottom.leadingAnchor.constraint(equalTo: right.leadingAnchor),
-            bottom.trailingAnchor.constraint(equalTo: right.trailingAnchor),
-            bottom.bottomAnchor.constraint(equalTo: right.bottomAnchor),
-        ])
+        rightStack.orientation = .vertical
+        rightStack.spacing = 0
+        rightStack.alignment = .leading
+        rightStack.distribution = .fill
+        list.scroll.setContentHuggingPriority(NSLayoutConstraint.Priority(rawValue: 1), for: .vertical)
+        arrangeRightStack()
+
+        let side = sidebar.scroll
         split.addSubview(side)
-        split.addSubview(right)
+        split.addSubview(rightStack)
         split.setHoldingPriority(NSLayoutConstraint.Priority(rawValue: 260), forSubviewAt: 0)
         w.contentView = split
         w.initialFirstResponder = list.table
+        setSidebar(visible: BrowserWindowController.sidebarVisible)
+    }
+
+    /// Path bar above the list (default) or below it, from Settings.
+    private func arrangeRightStack() {
+        for v in rightStack.arrangedSubviews { rightStack.removeArrangedSubview(v); v.removeFromSuperview() }
+        let order: [NSView] = BrowserWindowController.pathBarAtBottom
+            ? [list.scroll, navBar, statusBar] : [navBar, list.scroll, statusBar]
+        for v in order {
+            rightStack.addArrangedSubview(v)
+            v.widthAnchor.constraint(equalTo: rightStack.widthAnchor).isActive = true
+        }
+    }
+
+    private var sidebarShown = false
+
+    private func setSidebar(visible: Bool) {
+        sidebarShown = visible
+        sidebarButton.state = visible ? .on : .off
+        let side = sidebar.scroll
+        side.isHidden = !visible
+        if visible {
+            split.adjustSubviews()
+            split.setPosition(BrowserWindowController.sidebarWidth, ofDividerAt: 0)
+        } else {
+            split.adjustSubviews()
+        }
+    }
+
+    @objc func toggleSidebar(_ sender: Any?) {
+        setSidebar(visible: !sidebarShown)
+    }
+
+    @objc private func layoutSettingsChanged(_ n: Notification) {
+        arrangeRightStack()
     }
 
     // MARK: Navigation
@@ -279,16 +327,16 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     private func rebuildPathBar() {
         for v in pathBar.arrangedSubviews { pathBar.removeArrangedSubview(v); v.removeFromSuperview() }
-        let vol = Volumes.volume(for: currentPath)
-        let root = vol?.mountPoint ?? "/"
-        let chain = Paths.ancestry(currentPath).filter { $0 == root || $0.hasPrefix(root == "/" ? "/" : root + "/") }
+        // The whole chain from "/" (Macintosh HD > Volumes > Share > ...), every level clickable.
+        let chain = Paths.ancestry(currentPath)
+        let mounts = Dictionary(Volumes.all.map { ($0.mountPoint, $0.displayName) }, uniquingKeysWith: { a, _ in a })
         for (i, p) in chain.enumerated() {
             if i > 0 {
                 let sep = NSTextField(labelWithString: "\u{203A}")
                 sep.textColor = NSColor.tertiaryLabelColor
                 pathBar.addArrangedSubview(sep)
             }
-            let title = p == root ? (vol?.displayName ?? "/") : Paths.name(p)
+            let title = p == "/" ? "Macintosh HD" : (mounts[p] ?? Paths.name(p))
             let b = NSButton(title: title, target: self, action: #selector(pathClicked(_:)))
             b.bezelStyle = .recessed
             b.isBordered = false
@@ -474,11 +522,39 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         case #selector(toggleHidden(_:))?:
             item.state = BrowserWindowController.showHidden ? .on : .off
             return true
+        case #selector(toggleSidebar(_:))?:
+            item.title = sidebarShown ? "Hide Sidebar" : "Show Sidebar"
+            return true
         case #selector(toggleFoldersFirst(_:))?:
             item.state = BrowserWindowController.foldersFirst ? .on : .off
             return true
         default: return true
         }
+    }
+
+    // MARK: Split view (sidebar width: 160 by default, remembered, snaps to 160)
+
+    func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        return 110
+    }
+
+    func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        return min(420, splitView.bounds.width - 300)
+    }
+
+    func splitView(_ splitView: NSSplitView, constrainSplitPosition proposedPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        let snap = BrowserWindowController.defaultSidebarWidth
+        return abs(proposedPosition - snap) <= 10 ? snap : proposedPosition
+    }
+
+    func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool {
+        return false
+    }
+
+    func splitViewDidResizeSubviews(_ notification: Notification) {
+        guard sidebarShown, !sidebar.scroll.isHidden, window?.inLiveResize == false else { return }
+        let w = sidebar.scroll.frame.width
+        if w >= 100 { BrowserWindowController.sidebarWidth = w }
     }
 
     // MARK: Notifications / window
@@ -494,6 +570,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     func windowWillClose(_ notification: Notification) {
+        // The last window closed decides the sidebar state of the next launch.
+        BrowserWindowController.sidebarVisible = sidebarShown
         watcher?.stop()
         watcher = nil
         watchExpanded([])

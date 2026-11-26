@@ -82,6 +82,15 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     private var rootEntries: [FileEntry] = []
     /// Folder path -> node, for every folder node currently in the tree.
     private var nodesByPath: [String: FileNode] = [:]
+    /// > 0 while the app itself reloads or re-expands rows. AppKit posts "will expand" for those
+    /// too; answering them with a new listing caused an endless reload loop (0.1.4).
+    private var quiet = 0
+
+    private func quietly(_ work: () -> Void) {
+        quiet += 1
+        work()
+        quiet -= 1
+    }
 
     var sortKey: EntrySort.Key = .name
     var ascending = true
@@ -107,8 +116,8 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     override init() {
         super.init()
         let columns: [(String, String, CGFloat, EntrySort.Key)] = [
-            ("name", "Name", 340, .name), ("modified", "Date Modified", 170, .modified),
-            ("size", "Size", 80, .size), ("kind", "Kind", 140, .kind)]
+            ("name", "Name", 300, .name), ("modified", "Date Modified", 165, .modified),
+            ("size", "Size", 75, .size), ("kind", "Kind", 130, .kind)]
         for (id, title, width, key) in columns {
             let c = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
             c.title = title
@@ -120,7 +129,9 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         }
         table.allowsMultipleSelection = true
         table.usesAlternatingRowBackgroundColors = true
-        table.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
+        // The Name column takes all free width; the others keep their size. Widths are not saved:
+        // a user's resizing lasts as long as the window, new windows start from these defaults.
+        table.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
         table.rowHeight = 20
         table.indentationPerLevel = 14
         table.autoresizesOutlineColumn = false
@@ -205,8 +216,10 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     }
 
     private func reexpand(_ paths: [String]) {
-        for p in paths {
-            if let n = nodesByPath[p], !table.isItemExpanded(n) { table.expandItem(n) }
+        quietly {
+            for p in paths {
+                if let n = nodesByPath[p], !table.isItemExpanded(n) { table.expandItem(n) }
+            }
         }
     }
 
@@ -226,7 +239,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         roots = nodes(for: entries)
         for n in roots where n.isExpandableFolder { refreshShown(n) }
         rebuildIndex()
-        table.reloadData()
+        quietly { table.reloadData() }
         reexpand(wasExpanded)
         var rows = IndexSet()
         for r in 0..<table.numberOfRows {
@@ -248,7 +261,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         n.error = error
         refreshShown(n)
         rebuildIndex()
-        table.reloadItem(n, reloadChildren: true)
+        quietly { table.reloadItem(n, reloadChildren: true) }
         reexpand(wasExpanded)
         onExpandedChange?(Set(expandedFolderPaths))
     }
@@ -309,6 +322,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     // MARK: Expansion
 
     func outlineViewItemWillExpand(_ notification: Notification) {
+        if quiet > 0 { return }
         guard let n = notification.userInfo?["NSObject"] as? FileNode, n.isExpandableFolder, !n.loading else { return }
         n.loading = true
         let path = n.entry.path
@@ -317,7 +331,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
             guard let me = self, let node = me.nodesByPath[path], node.loading, me.table.isItemExpanded(node) else { return }
             node.showPlaceholder = true
             me.refreshShown(node)
-            me.table.reloadItem(node, reloadChildren: true)
+            me.quietly { me.table.reloadItem(node, reloadChildren: true) }
         }
         onNeedChildren?(path)
     }

@@ -105,6 +105,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let app = submenu(main, "PhotoLab")
         item(app, "About PhotoLab 2", #selector(NSApplication.orderFrontStandardAboutPanel(_:)))
         app.addItem(NSMenuItem.separator())
+        item(app, "Settings...", #selector(showSettings(_:)), ",", [.command], target: self)
+        app.addItem(NSMenuItem.separator())
         item(app, "Hide PhotoLab", #selector(NSApplication.hide(_:)), "h")
         item(app, "Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option])
         item(app, "Show All", #selector(NSApplication.unhideAllApplications(_:)))
@@ -123,6 +125,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item(edit, "Select All", #selector(NSText.selectAll(_:)), "a")
 
         let view = submenu(main, "View")
+        item(view, "Show Sidebar", #selector(BrowserWindowController.toggleSidebar(_:)), "s", [.command, .option])
+        view.addItem(NSMenuItem.separator())
         item(view, "Show Hidden Files", #selector(BrowserWindowController.toggleHidden(_:)), ".", [.command, .shift])
         item(view, "Keep Folders on Top", #selector(BrowserWindowController.toggleFoldersFirst(_:)))
         view.addItem(NSMenuItem.separator())
@@ -151,6 +155,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item(help, "Show Logs Folder", #selector(showLogs(_:)), "", [], target: self)
 
         NSApp.mainMenu = main
+    }
+
+    @objc private func showSettings(_ sender: Any?) {
+        SettingsWindow.show()
     }
 
     @objc private func newWindow(_ sender: Any?) {
