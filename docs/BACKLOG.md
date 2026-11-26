@@ -29,4 +29,4 @@ early even if its feature comes late, so nothing has to be rebuilt.
 | 15 | Cmd-Option-S sidebar toggle did not work | user 2026-11-25 | bug | done 0.1.6 |
 | 16 | Sidebar button as an icon | user 2026-11-25 | UI | done 0.1.6 |
 | 17 | "/" shown as Computer; computer icon only in the path bar | user 2026-11-25 | UI | done 0.1.6 |
-| 18 | Cmd-Shift-C copies selected paths; path bar right-click: Copy Path / Copy Full Path | user 2026-11-25 | UI | done 0.1.6 |
+| 18 | Cmd-Option-C copies selected paths; path bar right-click: Copy Path / Copy Full Path | user 2026-11-25 | UI | done 0.1.6 |

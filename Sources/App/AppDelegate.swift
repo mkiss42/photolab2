@@ -129,7 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         item(edit, "Paste", #selector(NSText.paste(_:)), "v")
         item(edit, "Select All", #selector(NSText.selectAll(_:)), "a")
         edit.addItem(NSMenuItem.separator())
-        item(edit, "Copy Path", #selector(BrowserWindowController.copyPaths(_:)), "c", [.command, .shift])
+        item(edit, "Copy Path", #selector(BrowserWindowController.copyPaths(_:)), "c", [.command, .option])
 
         let view = submenu(main, "View")
         item(view, "Show Sidebar", #selector(toggleSidebarMenu(_:)), "s", [.command, .option], target: self)
@@ -144,7 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         item(go, "Forward", #selector(BrowserWindowController.goForward(_:)), "]")
         item(go, "Enclosing Folder", #selector(BrowserWindowController.goEnclosingFolder(_:)), up)
         go.addItem(NSMenuItem.separator())
-        item(go, "Computer", #selector(BrowserWindowController.goComputer(_:)))
+        item(go, "Computer", #selector(BrowserWindowController.goComputer(_:)), "c", [.command, .shift])
         item(go, "Home", #selector(BrowserWindowController.goHome(_:)), "h", [.command, .shift])
         item(go, "Volumes", #selector(BrowserWindowController.goVolumes(_:)), "v", [.command, .shift])
         go.addItem(NSMenuItem.separator())
@@ -168,16 +168,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private var keyMonitor: Any?
 
-    /// Cmd-Option-S is caught here, before the menu: the menu key equivalent alone did not fire on
-    /// the lab's Macs (0.1.5).
+    /// Cmd-Option shortcuts are caught here by physical key, before the menu: the menu key
+    /// equivalent alone did not fire on the lab's Macs (0.1.5; Option changes the typed character
+    /// on some keyboard layouts).
     private func installKeyMonitor() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
             let mods = e.modifierFlags.intersection([.command, .option, .control, .shift])
-            if e.keyCode == 1 && mods == [.command, .option] {     // kVK_ANSI_S
-                self?.toggleSidebarMenu(nil)
-                return nil
+            guard mods == [.command, .option], let me = self else { return e }
+            switch e.keyCode {
+            case 1:  me.toggleSidebarMenu(nil); return nil                  // S
+            case 8:  me.keyBrowser?.copyPaths(nil); return nil              // C
+            default: return e
             }
-            return e
         }
     }
 
