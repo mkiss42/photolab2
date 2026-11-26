@@ -190,7 +190,9 @@ Each phase ends in something the lab can use. Exit criteria are tested on all th
    Rosetta, on a native Intel runner, and with the modern profile.
 1. **Browser core** — 1a (0.1.0): volumes + sidebar, list view, navigation, bulk listing,
    watching, listing cache, logs, freeze watchdog — read-only. 1b (0.2.0): Trash, rename, new
-   folder, undo, recovery journal. Before 1b: 0.1.4 makes the list expandable (Finder list view
+   folder, undo, recovery journal (done 0.2.x). 1c: copy/move engine (0.3.x: clipboard, drag and
+   drop, queue with progress, verified copies), then set rows + Ext column and the remaining
+   browser parity items in docs/PARITY.md. Before 1b: 0.1.4 makes the list expandable (Finder list view
    with disclosure triangles, as PhotoLab 1's tree): "Loading..." placeholder row with a small
    spinner under an expanding folder, after 0.15 s.
 2. **Contact sheet & preview** — thumbnail grid, embedded RAW previews, fast preview, Quick
@@ -232,3 +234,4 @@ Each phase ends in something the lab can use. Exit criteria are tested on all th
 - 2026-11-25 — Conflict rule: the winner is taken as a whole; emptied fields propagate (user: clearing a field is intentional).
 - 2026-11-25 — 0.2.0 file operations: sets = PhotoLab 1's GROUPABLE_EXTENSIONS (raws + jpg/jpeg/heic/heif + xmp/acr), a Settings switch, default on. Keys: Return/M rename, Cmd-E/Cmd-Down open, Backspace/Delete/Cmd-Backspace trash at once with undo. Shares without a Trash: items stay, never deleted.
 - 2026-11-25 — Shares without a Trash: permanent delete after an explicit Finder-style confirmation (W-OPS-2 logged per item). Local volumes keep Trash + undo.
+- 2026-11-25 — List shows one row per set while sets are on (Ext column after Name). Next work: copy/move engine, then browser parity, then contact sheet.

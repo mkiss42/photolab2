@@ -15,7 +15,7 @@ Status: **done** · **part** (exists, something missing) · **todo** (phase in b
 | Path bar menu: Copy Path / Copy Full Path | done | new in PL2 |
 | Path bar menu: Paste Into, Open in New Tree | todo (1c) | Paste Into needs the copy engine |
 | Sorting: name / ext / modified, folders on top | done | PL2 adds size and kind |
-| **One row per set** (raw+jpg+xmp as one row, Ext column "CR3+JPG+XMP") | todo (1c) | **decision needed**, see below |
+| One row per set (raw+jpg+xmp as one row) while Settings > Files sets are on; an Ext column right after Name shows "CR3+JPG+XMP" | todo (0.3.x) | decided 2026-11-25 |
 | Display modes: folders only / current folder's files / expanded folders' files / all | todo (1c) | "folders only" is the useful one |
 | Quick mode (name only), icon style Pretty/Generic/None, show ext / modified columns | todo (1c) | columns show/hide via header menu |
 | Finder colour tag dots on rows | todo (1c) | |
@@ -98,7 +98,9 @@ search_dialog, star_widget, color_widget, tag_menu, open_with, ftp_tree, ftp_cli
 ingest_dialog, server_config_dialog, app_prefs + settings_config.json, style, splash.
 Each is audited at the start of the phase that ports it.
 
-## Decisions needed
+## Decisions
 
-1. **One row per set in the list** (PhotoLab 1 behaviour: "IMG_1" with Ext "CR3+JPG+XMP"), at
-   least while Settings > Files "treat as one set" is on?
+1. 2026-11-25 — One row per set while sets are on, with the set's extensions in an Ext column
+   right after Name (PhotoLab 1 style). Sets off: every file is its own row.
+2. 2026-11-25 — Order: copy/move engine first (Cmd-C/V, drag and drop, progress, verification),
+   then the remaining browser items, then the contact sheet.
