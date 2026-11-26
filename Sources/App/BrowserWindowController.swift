@@ -58,6 +58,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         set { UserDefaults.standard.set(newValue, forKey: "foldersFirst") }
     }
 
+    /// A new window at `path` with `select` (names) selected - for items dropped on the app icon.
+    @discardableResult
+    static func openWindow(at path: String, select: [String]) -> BrowserWindowController {
+        let c = openWindow(at: path)
+        if !select.isEmpty { c.navigate(to: path, record: false, select: select) }
+        return c
+    }
+
     @discardableResult
     static func openWindow(at path: String) -> BrowserWindowController {
         let c = BrowserWindowController(path: path)
@@ -120,6 +128,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         split.dividerStyle = .thin
         split.delegate = self
         sidebar.onSelect = { [weak self] p in self?.navigate(to: p) }
+        sidebar.onOpenInNewWindow = { p in BrowserWindowController.openWindow(at: p) }
 
         for (b, img, sel, tip) in [(backButton, NSImage.goLeftTemplateName, #selector(goBack(_:)), "Back"),
                                    (forwardButton, NSImage.goRightTemplateName, #selector(goForward(_:)), "Forward")] {
@@ -483,7 +492,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             navigate(to: e.path)
             return
         }
-        let urls = entries.map { URL(fileURLWithPath: $0.path) }
+        let urls = entries.map { URL(fileURLWithPath: $0.path, isDirectory: $0.isDirectory) }   // isDirectory: no stat
         Log.info("open \(urls.count) item(s) with their default apps")
         DispatchQueue.global(qos: .userInitiated).async {
             for u in urls { NSWorkspace.shared.open(u) }
@@ -691,12 +700,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// Cmd-C: the selected items (with their set members) go on the clipboard as files, so they
     /// paste in PhotoLab and in Finder.
     @objc func copy(_ sender: Any?) {
-        let paths = list.withSetMembers(list.selectedEntries())
+        let sel = list.selectedEntries()
+        let paths = list.withSetMembers(sel)
         guard !paths.isEmpty else { NSSound.beep(); return }
+        let folders = Set(sel.filter { $0.isDirectory }.map { $0.path })
         Activity.during("clipboard: copy") {
             let pb = NSPasteboard.general
             pb.clearContents()
-            pb.writeObjects(paths.map { NSURL(fileURLWithPath: $0) })
+            // isDirectory given: NSURL would otherwise stat each path (on a share, on the main thread).
+            pb.writeObjects(paths.map { NSURL(fileURLWithPath: $0, isDirectory: folders.contains($0)) })
         }
         Log.info("clipboard: \(paths.count) item(s)")
     }
@@ -918,6 +930,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         p.beginSheetModal(for: w) { r in
             if r == .OK, let app = p.url { FinderActions.open(paths, with: app) }
         }
+    }
+
+    /// Selected folders go to the end of Favorites (Finder: Ctrl-Cmd-T).
+    @objc func addToSidebar(_ sender: Any?) {
+        let dirs = list.selectedEntries().filter { $0.isDirectory && !$0.isPackage }.map { $0.path }
+        let paths = dirs.isEmpty ? [currentPath] : dirs
+        Favorites.all = Favorites.inserting(paths, at: Favorites.all.count, into: Favorites.all)
+        Log.info("sidebar: added \(paths.count) favorite(s)")
     }
 
     @objc func openInNewWindow(_ sender: Any?) {

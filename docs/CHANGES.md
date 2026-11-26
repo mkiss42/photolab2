@@ -1,5 +1,34 @@
 # Changes
 
+## 0.6.0 — menu bar icon, editable sidebar, Dock drops
+
+- Menu bar icon (top right, always there while PhotoLab runs): Favorites and Volumes, like the
+  sidebar. A place opens in the front window; Option-click opens a new window. Also New Window
+  and Quit. FTP will join it later.
+- PhotoLab keeps running when the last window closes (the menu bar icon stays). Quit with
+  Cmd-Q or from the icon. Clicking the Dock icon with no window open opens one.
+- Sidebar Favorites are yours now: drag folders in (from the list or Finder), drag them to
+  reorder, right-click > Remove from Sidebar / Open in New Window / Show in Finder. Folders in
+  the list: right-click > Add to Sidebar (Ctrl-Cmd-T). Volumes: right-click > Eject.
+- Drop folders or files on the Dock icon (or Finder > Open With > PhotoLab): a folder opens in a
+  new window; files open their folder in a new window with them selected. (A setting for
+  "open in the contact sheet" comes with the contact sheet.)
+- Ext column 10 px wider (NEF+JPG+XMP fits); Kind hidden by default (header right-click shows it).
+- Fixed: several places asked the disk on the main thread whether an item is a folder (Cmd-C,
+  dragging, Show in Finder, Open, Open With) - a possible source of the short "idle" freezes on
+  slow shares.
+
+Test checklist (4 minutes):
+[ ] 1  Menu bar icon: Favorites + Volumes; pick one: the front window goes there; Option-pick:
+       a new window.
+[ ] 2  Close all windows: PhotoLab stays (icon still there). Click the Dock icon: a window.
+[ ] 3  Drag a folder from Finder into the sidebar Favorites; drag it up; right-click > Remove.
+[ ] 4  Drag a folder and then a file from Finder onto the Dock icon: new windows, file selected.
+[ ] 5  A NEF+JPG+XMP row: Ext fits. Kind column hidden (first launch of this version only if
+       you never changed the columns).
+[ ] 6  Short Report: FREEZE count on the share compared with before.
+
+
 ## 0.5.1 — live tags, tag dots in the menu, nearest-name jump
 
 - Long names truncate in the middle again (0.5.0 wrapped them onto a second line).

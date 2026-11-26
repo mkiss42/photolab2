@@ -49,9 +49,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             ws.addObserver(self, selector: #selector(volumesChanged(_:)), name: name, object: nil)
         }
 
+        statusMenu = StatusMenu()
         let last = UserDefaults.standard.string(forKey: "lastFolder")
         Activity.set("launch: window")
-        openFirstWindow(preferred: last)
+        if !openedWithItems { openFirstWindow(preferred: last) }
         DispatchQueue.main.async { Activity.set("idle") }
 
         brain = BrainClient(socketPath: AppFiles.brainSocketPath)
@@ -94,8 +95,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         Log.flush()
     }
 
+    /// PhotoLab keeps running with no window (the menu bar icon stays); Cmd-Q or the icon's
+    /// Quit ends it.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        return false
+    }
+
+    /// Dock icon clicked with no window open: open one.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if BrowserWindowController.open.isEmpty { openFirstWindow(preferred: UserDefaults.standard.string(forKey: "lastFolder")) }
         return true
+    }
+
+    private var statusMenu: StatusMenu?
+    private var openedWithItems = false
+
+    /// Items dropped on the Dock icon (or "Open With > PhotoLab" in Finder): a folder opens in a
+    /// new window; files open their folder in a new window with them selected. Checking which is
+    /// which touches the disk, so it runs in the background.
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        openedWithItems = true
+        sender.reply(toOpenOrPrint: .success)
+        Log.info("open from Finder/Dock: \(filenames.count) item(s)")
+        DispatchQueue.global(qos: .userInitiated).async {
+            var folders: [String] = []
+            var files: [String: [String]] = [:]
+            for p in filenames {
+                var st = stat()
+                if stat(p, &st) == 0 && UInt32(st.st_mode) & UInt32(S_IFMT) == UInt32(S_IFDIR) && !FileEntry.packageExtensions.contains(FileOperations.split(Paths.name(p)).ext.lowercased()) {
+                    folders.append(p)
+                } else {
+                    files[Paths.parent(p), default: []].append(Paths.name(p))
+                }
+            }
+            DispatchQueue.main.async {
+                NSApp.activate(ignoringOtherApps: true)
+                for f in folders { BrowserWindowController.openWindow(at: f) }
+                for (dir, names) in files.sorted(by: { $0.key < $1.key }) { BrowserWindowController.openWindow(at: dir, select: names) }
+            }
+        }
     }
 
     @objc private func volumesChanged(_ n: Notification) {
@@ -148,6 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         item(file, "Open", #selector(BrowserWindowController.openSelected(_:)), down)
         item(file, "Open in New Window", #selector(BrowserWindowController.openInNewWindow(_:)), down, [.command, .option])
         item(file, "Show in Finder", #selector(BrowserWindowController.revealInFinder(_:)), "r", [.command, .shift])
+        item(file, "Add to Sidebar", #selector(BrowserWindowController.addToSidebar(_:)), "t", [.command, .control])
         item(file, "Get Info", #selector(BrowserWindowController.getInfo(_:)), "i")
         item(file, "Rename", #selector(BrowserWindowController.renameSelected(_:)), "", [])
         item(file, "Duplicate", #selector(BrowserWindowController.duplicate(_:)), "d")

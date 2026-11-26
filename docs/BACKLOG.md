@@ -10,6 +10,10 @@ early even if its feature comes late, so nothing has to be rebuilt.
 
 ## Open
 
+- **Setting: items dropped on the app icon open in the tree or in the contact sheet** (Phase 2).
+- **Text paths dropped on the app icon:** macOS only delivers files/folders to a Dock icon;
+  a typed/pasted path works through Go > Go to Folder (Cmd-Shift-G). Revisit with Services.
+
 - **Folder merge on copy** (copy engine, later): copying a folder onto one with the same name
   could offer "Merge" (add missing files, keep both on file clashes). 0.3.0 offers Keep Both / Skip.
 

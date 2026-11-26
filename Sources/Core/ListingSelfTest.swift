@@ -6,7 +6,7 @@ import Foundation
 
 enum ListingSelfTest {
     static func run() -> [SelfTestResult] {
-        var out: [SelfTestResult] = [paths(), naturalSort(), setRows(), cache(), volumes(), realRecords()]
+        var out: [SelfTestResult] = [paths(), naturalSort(), setRows(), favorites(), cache(), volumes(), realRecords()]
         guard let dir = AppFiles.makeListingFixture() else {
             out.append(SelfTestResult(name: "listing-fixture", status: .fail, detail: "could not create fixture"))
             return out
@@ -55,6 +55,19 @@ enum ListingSelfTest {
             return SelfTestResult(name: n, status: .fail, detail: rows.map { "\($0.entry.name)/\($0.members.count)" }.joined(separator: " "))
         }
         return SelfTestResult(name: n, status: .ok, detail: "")
+    }
+
+    /// Favorites: add at a position, re-add moves (no duplicates), reorder, remove.
+    static func favorites() -> SelfTestResult {
+        let n = "sidebar-favorites"
+        let a = Favorite(title: "A", path: "/a"), b = Favorite(title: "B", path: "/b"), c = Favorite(title: "C", path: "/c")
+        var l = Favorites.inserting(["/x/Job"], at: 1, into: [a, b, c])
+        guard l.map({ $0.title }) == ["A", "Job", "B", "C"] else { return SelfTestResult(name: n, status: .fail, detail: "insert") }
+        l = Favorites.inserting(["/a"], at: 3, into: l)                    // drag A below B
+        guard l.map({ $0.title }) == ["Job", "B", "A", "C"] else { return SelfTestResult(name: n, status: .fail, detail: l.map { $0.title }.joined()) }
+        l = Favorites.removing("/b", from: l)
+        return l.map({ $0.title }) == ["Job", "A", "C"] ? SelfTestResult(name: n, status: .ok, detail: "")
+            : SelfTestResult(name: n, status: .fail, detail: "remove")
     }
 
     static func naturalSort() -> SelfTestResult {

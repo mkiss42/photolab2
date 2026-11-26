@@ -178,7 +178,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     override init() {
         super.init()
         let columns: [(String, String, CGFloat, EntrySort.Key)] = [
-            ("name", "Name", 300, .name), ("ext", "Ext", 90, .ext), ("modified", "Date Modified", 165, .modified),
+            ("name", "Name", 300, .name), ("ext", "Ext", 100, .ext), ("modified", "Date Modified", 165, .modified),
             ("size", "Size", 75, .size), ("kind", "Kind", 130, .kind)]
         for (id, title, width, key) in columns {
             let c = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
@@ -402,6 +402,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
             ow.submenu = FinderActions.openWithMenu(for: sel[0])
             m.addItem(ow)
             if sel.count == 1 && sel[0].isDirectory && !sel[0].isPackage { add("Open in New Window", "openInNewWindow:") }
+            if sel.contains(where: { $0.isDirectory && !$0.isPackage }) { add("Add to Sidebar", "addToSidebar:") }
             add("Show in Finder", "revealInFinder:")
             add("Get Info", "getInfo:")
             if !FinderActions.ejectable(sel.map { $0.path }).isEmpty { add("Eject", "ejectVolume:") }
@@ -630,7 +631,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     // MARK: Columns (right-click the header; hidden columns are remembered)
 
     private static var hiddenColumns: Set<String> {
-        get { return Set(UserDefaults.standard.stringArray(forKey: "hiddenColumns") ?? []) }
+        get { return Set(UserDefaults.standard.stringArray(forKey: "hiddenColumns") ?? ["kind"]) }   // Kind hidden by default
         set { UserDefaults.standard.set(Array(newValue).sorted(), forKey: "hiddenColumns") }
     }
 
@@ -700,7 +701,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
         guard editing == nil, let n = item as? FileNode, !n.isPlaceholder else { return nil }
-        return NSURL(fileURLWithPath: n.entry.path)
+        return NSURL(fileURLWithPath: n.entry.path, isDirectory: n.entry.isDirectory)   // isDirectory: no stat
     }
 
     /// A set row drags as one row; the other files of the set are added to the drag, so Finder
@@ -709,7 +710,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         Activity.set("drag: out")
         let extra = draggedItems.compactMap { $0 as? FileNode }.flatMap { n in n.members.filter { $0.path != n.entry.path } }
         if extra.isEmpty { return }
-        let ok = session.draggingPasteboard.writeObjects(extra.map { NSURL(fileURLWithPath: $0.path) })
+        let ok = session.draggingPasteboard.writeObjects(extra.map { NSURL(fileURLWithPath: $0.path, isDirectory: false) })
         Log.info("drag: \(extra.count) set member(s) added to the drag: \(ok ? "ok" : "refused")")
     }
 

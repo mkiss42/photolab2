@@ -40,7 +40,7 @@ Status: **done** · **part** (exists, something missing) · **todo** (phase in b
 | Status line: files / folders / selected, counting expanded folders | done (0.4.1) | rows on screen incl. expanded, sets counted |
 | Tooltip: folder's asset count, file path | done (0.5.0) | folder count when listed (memory only, no extra reads) |
 | Eject from /Volumes (PL1 TODO: Cmd-E ejects there) | done (0.4.1) | menu / context menu (Cmd-E stays Open) |
-| Dock-icon drops / Finder "Open With PhotoLab": open folders, select dropped files | todo (2) | in contact sheet tabs, as PL1 |
+| Dock-icon drops / Finder "Open With PhotoLab": open folders, select dropped files | part (0.6.0) | opens in a window; "open in contact sheet" setting with Phase 2 |
 | Window geometry remembered | done | |
 | Watching only active (visible/expanded) folders | done | |
 

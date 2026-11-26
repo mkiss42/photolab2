@@ -46,9 +46,9 @@ enum FinderActions {
     }
 
     static func open(_ paths: [String], with app: URL) {
-        let urls = paths.map { URL(fileURLWithPath: $0) }
-        Log.info("open \(urls.count) item(s) with \(app.lastPathComponent)")
+        Log.info("open \(paths.count) item(s) with \(app.lastPathComponent)")
         DispatchQueue.global(qos: .userInitiated).async {
+            let urls = paths.map { URL(fileURLWithPath: $0) }
             do {
                 _ = try NSWorkspace.shared.open(urls, withApplicationAt: app, options: [], configuration: [:])
             } catch {
@@ -58,7 +58,10 @@ enum FinderActions {
     }
 
     static func reveal(_ paths: [String]) {
-        NSWorkspace.shared.activateFileViewerSelecting(paths.map { URL(fileURLWithPath: $0) })
+        DispatchQueue.global(qos: .userInitiated).async {
+            let urls = paths.map { URL(fileURLWithPath: $0) }
+            DispatchQueue.main.async { NSWorkspace.shared.activateFileViewerSelecting(urls) }
+        }
     }
 
     /// Finder's Get Info windows (at most 10), through osascript in the background. The first use

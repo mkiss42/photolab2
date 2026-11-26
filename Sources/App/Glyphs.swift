@@ -26,6 +26,23 @@ enum Glyphs {
         return img
     }()
 
+    /// Menu bar icon: a contact sheet (2 x 2 frames). Template image: macOS colours it.
+    static let menuBar: NSImage = {
+        let img = NSImage(size: NSSize(width: 18, height: 16))
+        img.lockFocus()
+        NSColor.black.setStroke()
+        let outer = NSBezierPath(roundedRect: NSRect(x: 1.5, y: 1.5, width: 15, height: 13), xRadius: 2, yRadius: 2)
+        outer.lineWidth = 1.4
+        outer.stroke()
+        NSColor.black.setFill()
+        for (x, y) in [(4.0, 8.5), (10.0, 8.5), (4.0, 3.5), (10.0, 3.5)] {
+            NSBezierPath(rect: NSRect(x: x, y: y, width: 4, height: 3.5)).fill()
+        }
+        img.unlockFocus()
+        img.isTemplate = true
+        return img
+    }()
+
     static var computer: NSImage? {
         guard let i = NSImage(named: NSImage.computerName)?.copy() as? NSImage else { return nil }
         i.size = NSSize(width: 16, height: 16)
