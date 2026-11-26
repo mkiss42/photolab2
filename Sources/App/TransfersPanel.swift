@@ -57,6 +57,10 @@ final class TransfersPanel: NSObject, NSWindowDelegate {
     }
 
     private func tick() {
+        Activity.during("copy: panel") { tickNow() }
+    }
+
+    private func tickNow() {
         let jobs = TransferController.shared.jobs
         let now = Date()
         for job in jobs {

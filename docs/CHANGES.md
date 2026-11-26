@@ -1,5 +1,15 @@
 # Changes
 
+## 0.3.1 — Short Report fixes
+
+- "up N min" counts from launch (it showed 0 min: the clock started when the report opened).
+- Freezes during copying, dragging and the clipboard are now named in the FREEZE line
+  (copy, drag, clipboard) instead of "idle", so the 0.3 s stalls can be found.
+
+Test checklist (1 minute): use PhotoLab for a few minutes with some copies and drags, then
+Short Report: "up" shows the real minutes; FREEZE names what it was during.
+
+
 ## 0.3.0 — copy, paste, drag and drop, duplicate
 
 - Cmd-C copies the selected files (with their whole set) to the clipboard; they paste in PhotoLab

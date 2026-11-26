@@ -13,6 +13,13 @@ enum Activity {
         lock.lock(); current = text; lock.unlock()
     }
 
+    /// Name a piece of main-thread work for the freeze log, then put the old name back.
+    static func during<T>(_ text: String, _ work: () -> T) -> T {
+        lock.lock(); let old = current; current = text; lock.unlock()
+        defer { lock.lock(); current = old; lock.unlock() }
+        return work()
+    }
+
     static var text: String {
         lock.lock(); defer { lock.unlock() }
         return current

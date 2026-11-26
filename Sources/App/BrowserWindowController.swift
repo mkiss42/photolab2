@@ -644,9 +644,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     @objc func copy(_ sender: Any?) {
         let paths = list.withSetMembers(list.selectedEntries())
         guard !paths.isEmpty else { NSSound.beep(); return }
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.writeObjects(paths.map { NSURL(fileURLWithPath: $0) })
+        Activity.during("clipboard: copy") {
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.writeObjects(paths.map { NSURL(fileURLWithPath: $0) })
+        }
         Log.info("clipboard: \(paths.count) item(s)")
     }
 
@@ -663,7 +665,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// Paste goes into the folder of the selection (an expanded subfolder's row pastes there), or
     /// into the window's folder when nothing is selected.
     private func pasteFiles(kind: TransferKind) {
-        let paths = BrowserWindowController.clipboardFiles
+        let paths = Activity.during("clipboard: paste") { BrowserWindowController.clipboardFiles }
         guard !paths.isEmpty else { NSSound.beep(); return }
         let dest = list.selectedEntries().first.map { Paths.parent($0.path) } ?? currentPath
         TransferController.shared.start(paths, to: dest, kind: kind, from: self)

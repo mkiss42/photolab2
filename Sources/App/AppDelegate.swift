@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        _ = Stats.started            // a static let starts lazily: start the uptime clock now
         AppFiles.ensureDirectories()
         Log.info("PhotoLab \(AppDelegate.appVersion) starting, \(SystemInfo.summary)")
         FreezeWatchdog.start()

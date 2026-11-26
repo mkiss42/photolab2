@@ -80,6 +80,10 @@ final class TransferController {
     }
 
     private func finished(_ job: TransferJob, window: BrowserWindowController?) {
+        Activity.during("copy: finished") { finishedNow(job, window: window) }
+    }
+
+    private func finishedNow(_ job: TransferJob, window: BrowserWindowController?) {
         let p = job.progress
         var dirs = Set([job.destination])
         for it in job.items { dirs.insert(Paths.parent(it.source)) }

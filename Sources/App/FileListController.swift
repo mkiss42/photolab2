@@ -460,6 +460,14 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         return NSURL(fileURLWithPath: n.entry.path)
     }
 
+    func outlineView(_ outlineView: NSOutlineView, draggingSession session: NSDraggingSession, willBeginAt screenPoint: NSPoint, forItems draggedItems: [Any]) {
+        Activity.set("drag: out")
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, draggingSession session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        Activity.set("idle")
+    }
+
     private func droppedPaths(_ info: NSDraggingInfo) -> [String] {
         let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
         return urls.map { $0.path }
@@ -493,6 +501,10 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     }
 
     func outlineView(_ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo, proposedItem item: Any?, proposedChildIndex index: Int) -> NSDragOperation {
+        return Activity.during("drag: hover") { validateDropNow(outlineView, info, item, index) }
+    }
+
+    private func validateDropNow(_ outlineView: NSOutlineView, _ info: NSDraggingInfo, _ item: Any?, _ index: Int) -> NSDragOperation {
         let paths = droppedPaths(info)
         guard !paths.isEmpty, editing == nil else { return [] }
         let dest = dropFolder(outlineView, item, index)
@@ -503,6 +515,10 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     }
 
     func outlineView(_ outlineView: NSOutlineView, acceptDrop info: NSDraggingInfo, item: Any?, childIndex index: Int) -> Bool {
+        return Activity.during("drag: drop") { acceptDropNow(info, item) }
+    }
+
+    private func acceptDropNow(_ info: NSDraggingInfo, _ item: Any?) -> Bool {
         let paths = droppedPaths(info)
         let dest = (item as? FileNode)?.entry.path ?? rootPath
         guard !paths.isEmpty, let kind = dropKind(info, paths, dest) else { return false }
