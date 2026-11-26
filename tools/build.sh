@@ -76,7 +76,7 @@ for pair in "x86_64:$TARGET_X86_64" "arm64:$TARGET_ARM64"; do
   ARCH="${pair%%:*}"; TARGET="${pair#*:}"
   if "$SWIFTC" -O -wmo -swift-version 5 -module-name PhotoLab \
       -sdk "$SDK" -target "$TARGET" \
-      -framework AppKit -framework Quartz \
+      -framework AppKit -framework Quartz -framework NetFS -framework QuickLook \
       ${RPATH_FLAGS[@]+"${RPATH_FLAGS[@]}"} \
       "${SOURCES[@]}" -o "$OBJ/PhotoLab-$ARCH" >> "$RAW" 2>&1; then
     note "compile $ARCH ($TARGET): ok"

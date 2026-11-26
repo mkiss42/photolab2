@@ -127,7 +127,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         split.isVertical = true
         split.dividerStyle = .thin
         split.delegate = self
-        sidebar.onSelect = { [weak self] p in self?.navigate(to: p) }
+        sidebar.onSelect = { [weak self] p in
+            if p == SidebarController.networkPath { NetworkWindow.show(for: self); self?.sidebar.reflect(path: self?.currentPath ?? ""); return }
+            self?.navigate(to: p)
+        }
         sidebar.onOpenInNewWindow = { p in BrowserWindowController.openWindow(at: p) }
 
         for (b, img, sel, tip) in [(backButton, NSImage.goLeftTemplateName, #selector(goBack(_:)), "Back"),
@@ -526,6 +529,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     @objc func goHome(_ sender: Any?) { navigate(to: NSHomeDirectory()) }
     @objc func goComputer(_ sender: Any?) { navigate(to: "/") }
     @objc func goVolumes(_ sender: Any?) { navigate(to: "/Volumes") }
+
+    @objc func connectToServer(_ sender: Any?) { NetworkWindow.show(for: self) }
 
     @objc func goToFolder(_ sender: Any?) {
         let alert = NSAlert()

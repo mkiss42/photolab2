@@ -10,6 +10,10 @@ early even if its feature comes late, so nothing has to be rebuilt.
 
 ## Open
 
+- **Split panes like Find** (two or more file panes in one window, side by side / stacked).
+- **Combo window**: folder tree left, contact sheet middle, metadata inspector + tools right.
+  To be discussed when we get there (Phase 2/4).
+
 - **Setting: items dropped on the app icon open in the tree or in the contact sheet** (Phase 2).
 - **Text paths dropped on the app icon:** macOS only delivers files/folders to a Dock icon;
   a typed/pasted path works through Go > Go to Folder (Cmd-Shift-G). Revisit with Services.

@@ -1,7 +1,7 @@
 // StatusMenu.swift
 // The menu bar icon (always there while PhotoLab runs): Favorites and Volumes like the sidebar
-// (FTP later), New Window, Quit. Choosing a place shows it in the front window, or in a new one
-// when no window is open or Option is held. Built when opened, from memory only (mount table,
+// (FTP later), Network, New Window, Quit. Choosing a place opens it in a new window; Option-click
+// shows it in the front window instead. Built when opened, from memory only (mount table,
 // favorites): opening it never waits on a share.
 
 import AppKit
@@ -42,13 +42,18 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         for v in Volumes.browsable {
             place(v.displayName, v.mountPoint, NSImage(named: v.isNetwork ? NSImage.networkName : (v.isRoot ? NSImage.computerName : NSImage.folderName)))
         }
+        let net = NSMenuItem(title: "Network...", action: #selector(network(_:)), keyEquivalent: "")
+        net.target = self
+        net.image = NSImage(named: NSImage.networkName)?.copy() as? NSImage
+        net.image?.size = NSSize(width: 16, height: 16)
+        menu.addItem(net)
         menu.addItem(NSMenuItem.separator())
         let nw = NSMenuItem(title: "New Window", action: #selector(newWindow(_:)), keyEquivalent: "")
         nw.target = self
         menu.addItem(nw)
         let q = NSMenuItem(title: "Quit PhotoLab", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
         menu.addItem(q)
-        let hint = NSMenuItem(title: "Option-click a place: new window", action: nil, keyEquivalent: "")
+        let hint = NSMenuItem(title: "Option-click a place: use the front window", action: nil, keyEquivalent: "")
         hint.isEnabled = false
         menu.addItem(hint)
     }
@@ -57,12 +62,17 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         guard let p = sender.representedObject as? String else { return }
         NSApp.activate(ignoringOtherApps: true)
         let front = BrowserWindowController.open.first { $0.window?.isKeyWindow == true } ?? BrowserWindowController.open.last
-        if let w = front, !NSEvent.modifierFlags.contains(.option) {
+        if let w = front, NSEvent.modifierFlags.contains(.option) {
             w.window?.makeKeyAndOrderFront(nil)
             w.navigate(to: p)
         } else {
             BrowserWindowController.openWindow(at: p)
         }
+    }
+
+    @objc private func network(_ sender: Any?) {
+        NSApp.activate(ignoringOtherApps: true)
+        NetworkWindow.show(for: nil)
     }
 
     @objc private func newWindow(_ sender: Any?) {

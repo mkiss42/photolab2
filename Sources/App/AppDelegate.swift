@@ -233,6 +233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         item(go, "Volumes", #selector(BrowserWindowController.goVolumes(_:)), "v", [.command, .shift])
         go.addItem(NSMenuItem.separator())
         item(go, "Go to Folder...", #selector(BrowserWindowController.goToFolder(_:)), "g", [.command, .shift])
+        item(go, "Network / Connect to Server...", #selector(BrowserWindowController.connectToServer(_:)), "k")
 
         let window = submenu(main, "Window")
         item(window, "Minimize", #selector(NSWindow.performMiniaturize(_:)), "m")

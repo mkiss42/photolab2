@@ -23,6 +23,7 @@ final class SidebarItem: NSObject {
 
 final class SidebarController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate {
     static let favoriteType = NSPasteboard.PasteboardType("com.smp.photolab2.favorite")
+    static let networkPath = "photolab:network"
     let scroll = NSScrollView()
     let outline = NSOutlineView()
     private var groups: [SidebarItem] = []
@@ -76,6 +77,8 @@ final class SidebarController: NSObject, NSOutlineViewDataSource, NSOutlineViewD
             }
             vols.append(SidebarItem(title: v.displayName, path: v.mountPoint, icon: icon))
         }
+        // "Network" (like Finder's): browse and connect to servers. Not a folder: a special path.
+        vols.append(SidebarItem(title: "Network", path: SidebarController.networkPath, icon: NSImage(named: NSImage.networkName)))
         let volumes = SidebarItem(title: "VOLUMES", path: nil, icon: nil, children: vols)
         groups = [favorites, volumes]
         outline.reloadData()
@@ -209,7 +212,7 @@ final class SidebarController: NSObject, NSOutlineViewDataSource, NSOutlineViewD
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        guard let it = outline.item(atRow: outline.clickedRow) as? SidebarItem, let p = it.path else { return }
+        guard let it = outline.item(atRow: outline.clickedRow) as? SidebarItem, let p = it.path, p != SidebarController.networkPath else { return }
         func add(_ title: String, _ action: Selector) {
             let i = NSMenuItem(title: title, action: action, keyEquivalent: "")
             i.target = self

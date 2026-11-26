@@ -1,5 +1,19 @@
 # Changes
 
+## 0.6.1 — Network, menu bar clicks reversed
+
+- Sidebar > Network (also Go > Network / Connect to Server, Cmd-K, and in the menu bar icon):
+  file servers announced on the network (SMB, AFP), an address field (smb://server/share or just
+  a server name) and recent servers. Connecting uses macOS's own sign-in dialog and keychain;
+  the mounted share opens in PhotoLab.
+- Menu bar icon: a place opens in a new window; Option-click uses the front window.
+
+Test checklist (2 minutes):
+[ ] 1  Sidebar > Network: servers listed (those that announce themselves); double-click one or
+       type an address + Return: sign-in (if needed), then the share opens in the window.
+[ ] 2  Menu bar icon > a favorite: new window. Option + favorite: the front window goes there.
+
+
 ## 0.6.0 — menu bar icon, editable sidebar, Dock drops
 
 - Menu bar icon (top right, always there while PhotoLab runs): Favorites and Volumes, like the
