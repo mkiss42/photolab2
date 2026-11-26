@@ -156,9 +156,9 @@ and JPEGs, so raw+jpg+xmp never disagree; a setting switches RAWs to sidecar-onl
   swap. It reads the whole RAW twice more over the network, hence opt-in.
 - RAW writes run in a background queue with progress; the UI updates at once.
 - Group members that disagree (written by another app): the most recently changed one wins -
-  XMP MetadataDate when present, else file modification time; on a tie the sidecar wins. Per
-  field: a field that is empty in the winner but set in another member is kept (never lose data).
-  Then all members are rewritten to match. Every multi-step operation is journaled; the next start finishes or rolls
+  XMP MetadataDate when present, else file modification time; on a tie the sidecar wins. The
+  winner's metadata is taken as a whole, emptied fields included (an empty field was probably
+  cleared on purpose, so the emptiness propagates). Then all members are rewritten to match. Every multi-step operation is journaled; the next start finishes or rolls
 it back and says so.
 
 ## 8. How we work (vibe coding, with guard rails)
@@ -226,4 +226,5 @@ Each phase ends in something the lab can use. Exit criteria are tested on all th
 - 2026-11-25 — getattrlistbulk: fixed part is 108 bytes; the file-size field is present only for files (smbfs/HFS+ omit it for folders). Fallback is per item / per folder / per volume, never session-wide.
 - 2026-11-25 — Metadata is written into RAWs too (default; setting for sidecar-only), all group members kept identical; safeguards in section 7. Replaces "RAW files are never written".
 - 2026-11-25 — Tools/plugins live in the brain and return proposed changes; the app is the only writer.
-- 2026-11-25 — RAW writes default to ExifTool -overwrite_original without image-data verification (speed; years of clean use in the lab); "Verified RAW writes" is an opt-in setting. Conflicts: newest MetadataDate/mtime wins, sidecar on ties, empty fields never wipe set ones.
+- 2026-11-25 — RAW writes default to ExifTool -overwrite_original without image-data verification (speed; years of clean use in the lab); "Verified RAW writes" is an opt-in setting. Conflicts: newest MetadataDate/mtime wins, sidecar on ties.
+- 2026-11-25 — Conflict rule: the winner is taken as a whole; emptied fields propagate (user: clearing a field is intentional).
