@@ -51,6 +51,16 @@ enum Stats {
         thumbsMade += 1; thumbMs += ms; thumbSlowest = max(thumbSlowest, ms)
     }
 
+    private static var sheetDraws = 0, sheetSlow = 0, sheetSlowest: Double = 0
+
+    /// Contact sheet draw passes; over 16 ms is a dropped frame while scrolling.
+    static func noteSheetDraw(_ ms: Double) {
+        lock.lock(); defer { lock.unlock() }
+        sheetDraws += 1
+        if ms > 16 { sheetSlow += 1 }
+        sheetSlowest = max(sheetSlowest, ms)
+    }
+
     static func noteTransfer(files: Int, bytes: Int64, seconds: Double, network: Bool, failed: Int) {
         lock.lock(); defer { lock.unlock() }
         var t = transfers[network] ?? (0, 0, 0, 0)
@@ -125,6 +135,8 @@ enum Stats {
         out.append(thumbsMade + thumbsFromDisk == 0 ? "THUMBS none" :
             String(format: "THUMBS made %ld (avg %.0f ms, slowest %.0f ms), from cache %ld", thumbsMade,
                    thumbsMade > 0 ? thumbMs / Double(thumbsMade) : 0, thumbSlowest, thumbsFromDisk))
+        out.append(sheetDraws == 0 ? "SHEET no draws" :
+            String(format: "SHEET %ld draw(s), %ld over 16 ms, slowest %.0f ms", sheetDraws, sheetSlow, sheetSlowest))
         if transfers.isEmpty {
             out.append("COPY none")
         } else {

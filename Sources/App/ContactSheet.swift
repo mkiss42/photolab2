@@ -2,8 +2,10 @@
 // The contact sheet: a hand-drawn grid of tiles (thumbnail, name, extensions). Only tiles on
 // screen are drawn and asked for; thumbnails come from Core/Thumbnails (background, cached).
 // One tile per set while sets are on (same rule as the list). Selection, keys and drag and drop
-// follow the list: click / Cmd-click / Shift-click, arrows (Shift extends), Cmd-A, Return or
-// double-click opens, M renames, Backspace trashes, Space on a folder opens it in the sheet.
+// follow the list: click / Cmd-click / Shift-click, arrows (Shift extends), Cmd-A; double-click,
+// Cmd-E, Cmd-O, Cmd-Down open; Return or M renames; Backspace trashes; Space on a folder opens it.
+// Drawing: each thumbnail is scaled once (background) to the tile's pixel size and drawn 1:1,
+// so scrolling only copies pixels (AppKit draws a screen ahead while scrolling).
 
 import AppKit
 
@@ -39,6 +41,7 @@ final class ContactSheetController: NSObject {
     let scroll = NSScrollView()
     let grid = ContactSheetView()
     private let message = NSTextField(labelWithString: "")
+    private let spinner = NSProgressIndicator()
 
     var showHidden = false
     var foldersOnly = false
@@ -65,11 +68,18 @@ final class ContactSheetController: NSObject {
         message.translatesAutoresizingMaskIntoConstraints = false
         message.isHidden = true
         view.addSubview(message)
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        spinner.isDisplayedWhenStopped = false
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(spinner)
         NSLayoutConstraint.activate([
             scroll.topAnchor.constraint(equalTo: view.topAnchor), scroll.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor), scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             message.centerXAnchor.constraint(equalTo: view.centerXAnchor), message.centerYAnchor.constraint(equalTo: view.centerYAnchor),
             message.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, constant: -40),
+            spinner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            spinner.bottomAnchor.constraint(equalTo: message.topAnchor, constant: -8),
         ])
         grid.tile = ContactSheetController.tileSize
         scroll.contentView.postsBoundsChangedNotifications = true
@@ -87,6 +97,7 @@ final class ContactSheetController: NSObject {
     }
 
     func setTileSize(_ s: CGFloat) {
+        if s == grid.tile { return }
         ContactSheetController.tileSize = s
         grid.tile = s
         grid.relayout()
@@ -106,9 +117,10 @@ final class ContactSheetController: NSObject {
         grid.setItems(items, select: select)
     }
 
-    func showMessage(_ text: String?) {
+    func showMessage(_ text: String?, spinning: Bool = false) {
         message.stringValue = text ?? ""
         message.isHidden = text == nil
+        if spinning { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
     }
 
     func selectedEntries() -> [FileEntry] { return grid.selectedItems.map { $0.entry } }
@@ -143,6 +155,10 @@ final class ContactSheetView: NSView, NSDraggingSource {
     private var downPoint: NSPoint?
     private var downIndex: Int?
     private var lastTyped = Date.distantPast
+    /// Thumbnails scaled to the tile's pixel size: key -> (pixel size, image).
+    private var scaled: [String: (px: Int, image: CGImage)] = [:]
+    private var scaling = Set<String>()
+    private static let scaleQueue = DispatchQueue(label: "photolab.sheet.scale", qos: .userInitiated)
 
     var onOpen: (([FileEntry]) -> Void)?
     var onTrash: (() -> Void)?
@@ -170,6 +186,7 @@ final class ContactSheetView: NSView, NSDraggingSource {
         else { keepPaths = Set(selectedItems.map { $0.entry.path }) }
         let cursorPath = cursor.flatMap { $0 < items.count ? items[$0].entry.path : nil }
         items = new
+        if scaled.count > 3000 { scaled.removeAll() }
         indexByKey = [:]
         for (i, it) in items.enumerated() { if let k = it.request?.key { indexByKey[k, default: []].append(i) } }
         selection = Set(items.indices.filter { keepPaths.contains(items[$0].entry.path) })
@@ -237,6 +254,49 @@ final class ContactSheetView: NSView, NSDraggingSource {
         }
     }
 
+    private var tilePixels: Int { return Int((tile * (window?.backingScaleFactor ?? 2)).rounded()) }
+
+    /// The tile-sized copy of a thumbnail, or nil (then it is being made: drawn when ready).
+    private func scaledImage(_ key: String, _ cg: CGImage) -> CGImage? {
+        let px = tilePixels
+        if let s = scaled[key], s.px == px { return s.image }
+        if max(cg.width, cg.height) <= px { return cg }            // already small enough: 1:1
+        if !scaling.contains(key) {
+            scaling.insert(key)
+            ContactSheetView.scaleQueue.async { [weak self] in
+                let s = CGFloat(px) / CGFloat(max(cg.width, cg.height))
+                let w = max(1, Int(CGFloat(cg.width) * s)), h = max(1, Int(CGFloat(cg.height) * s))
+                var out: CGImage?
+                if let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                       space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue) {
+                    ctx.interpolationQuality = .high
+                    ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+                    out = ctx.makeImage()
+                }
+                DispatchQueue.main.async {
+                    guard let me = self else { return }
+                    me.scaling.remove(key)
+                    if let o = out, me.tilePixels == px { me.scaled[key] = (px, o); me.redraw(key) }
+                }
+            }
+        }
+        return nil
+    }
+
+    private func redraw(_ key: String) {
+        let vis = visibleRange(extra: visibleRect.height)
+        for i in indexByKey[key] ?? [] where vis.contains(i) { setNeedsDisplay(imageRect(i)) }
+    }
+
+    private var iconCache: [String: NSImage] = [:]
+    private func icon(for it: SheetItem) -> NSImage? {
+        let k = it.isFolder ? "/folder" : (it.entry.ext.isEmpty ? "public.data" : it.entry.ext)
+        if let i = iconCache[k] { return i }
+        let i = it.isFolder ? NSImage(named: NSImage.folderName) : NSWorkspace.shared.icon(forFileType: k)
+        iconCache[k] = i
+        return i
+    }
+
     func thumbnailsArrived(_ keys: [String]) {
         let vis = visibleRange()
         for k in keys { for i in indexByKey[k] ?? [] where vis.contains(i) { setNeedsDisplay(imageRect(i)) } }
@@ -251,7 +311,11 @@ final class ContactSheetView: NSView, NSDraggingSource {
         return p
     }()
 
+    override var isOpaque: Bool { return true }
+
     override func draw(_ dirtyRect: NSRect) {
+        let t0 = Date()
+        defer { Stats.noteSheetDraw(Date().timeIntervalSince(t0) * 1000) }
         NSColor.controlBackgroundColor.setFill()
         dirtyRect.fill()
         guard !items.isEmpty else { return }
@@ -275,13 +339,21 @@ final class ContactSheetView: NSView, NSDraggingSource {
             if let k = it.request?.key, let cg = Thumbnails.shared.image(k) {
                 let w = CGFloat(cg.width), h = CGFloat(cg.height)
                 let s = min(ir.width / w, ir.height / h)
-                let fit = NSRect(x: ir.midX - w * s / 2, y: ir.maxY - h * s, width: w * s, height: h * s)
-                NSImage(cgImage: cg, size: .zero).draw(in: fit, from: .zero, operation: .sourceOver, fraction: 1,
-                                                       respectFlipped: true, hints: [.interpolation: NSNumber(value: NSImageInterpolation.high.rawValue)])
+                let fit = NSRect(x: (ir.midX - w * s / 2).rounded(), y: (ir.maxY - h * s).rounded(), width: (w * s).rounded(), height: (h * s).rounded())
+                if let ctx = NSGraphicsContext.current?.cgContext {
+                    // Tile-sized copy drawn 1:1 (cheap); until it exists, the 512 px one at low quality.
+                    let img = scaledImage(k, cg)
+                    ctx.saveGState()
+                    ctx.interpolationQuality = img == nil ? .low : .none
+                    ctx.translateBy(x: fit.minX, y: fit.maxY)
+                    ctx.scaleBy(x: 1, y: -1)
+                    ctx.draw(img ?? cg, in: CGRect(x: 0, y: 0, width: fit.width, height: fit.height))
+                    ctx.restoreGState()
+                }
                 NSColor.black.withAlphaComponent(0.15).setStroke()
                 NSBezierPath(rect: fit.insetBy(dx: 0.5, dy: 0.5)).stroke()
             } else if it.request == nil || Thumbnails.shared.hasNoPicture(it.request!.key) {
-                let icon = it.isFolder ? NSImage(named: NSImage.folderName) : NSWorkspace.shared.icon(forFileType: it.entry.ext.isEmpty ? "public.data" : it.entry.ext)
+                let icon = self.icon(for: it)
                 let s = min(ir.width, ir.height) * 0.6
                 icon?.draw(in: NSRect(x: ir.midX - s / 2, y: ir.midY - s / 2, width: s, height: s), from: .zero, operation: .sourceOver,
                            fraction: 1, respectFlipped: true, hints: nil)
@@ -409,13 +481,14 @@ final class ContactSheetView: NSView, NSDraggingSource {
             else if mods.contains(.command) { super.keyDown(with: event) }       // Cmd-Up / Cmd-Down: menus
             else { anchor = n; select([n], cursor: n) }
         // (`case a, b where x` would apply x to b only: plain checks instead.)
-        case 36, 76:                                               // Return, Enter: open
-            if mods.isEmpty { onOpen?(selectedItems.map { $0.entry }) } else { super.keyDown(with: event) }
+        case 36, 76:                                               // Return, Enter: rename (like the list)
+            if mods.isEmpty { onRename?() } else { super.keyDown(with: event) }
         case 51, 117:                                              // Backspace, Delete: Trash
             if mods.isEmpty || mods == [.command] { onTrash?() } else { super.keyDown(with: event) }
         case 49:                                                   // Space
             if mods.isEmpty { onSpace?() } else { super.keyDown(with: event) }
         default:
+            if mods == [.command] && chars == "e" { onOpen?(selectedItems.map { $0.entry }); return }   // Cmd-E (Cmd-O, Cmd-Down: menu)
             if mods.isEmpty && chars == "m" && Date().timeIntervalSince(lastTyped) > 1 { onRename?(); return }
             if mods.isEmpty, let ch = chars.first, ch.isLetter || ch.isNumber { lastTyped = Date(); typeSelect(String(ch)); return }
             super.keyDown(with: event)

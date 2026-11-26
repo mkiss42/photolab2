@@ -1,5 +1,22 @@
 # Changes
 
+## 0.7.1 — sheet keys, spinner, smoother scrolling
+
+- Contact sheet keys like the list: Return or M renames; Cmd-E, Cmd-O, Cmd-Down or a double-click
+  opens. (Cmd-O opens in the list too.)
+- The "Reading..." spinner shows in the contact sheet too.
+- Scrolling: each thumbnail is now scaled once, in the background, to the tile's exact pixel
+  size and drawn 1:1. Before, every tile was re-scaled at the highest quality each time it was
+  drawn - and macOS draws a screen ahead while scrolling, hence the stutter every screenful.
+- Short Report: SHEET line (draw passes, how many took longer than one frame, slowest).
+
+Test checklist (2 minutes):
+[ ] 1  Scroll a loaded contact sheet up and down: no stutter at the start or every screenful.
+[ ] 2  Return on a tile: rename; Cmd-O: opens.
+[ ] 3  Open a big folder on the share in the sheet: spinner + "Reading...".
+[ ] 4  Short Report: SHEET line ("over 16 ms" should be a small number).
+
+
 ## 0.7.0 — contact sheet
 
 - Every window can show its folder as a list or as a contact sheet: the two buttons next to

@@ -274,6 +274,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     /// Path bar above the list (default) or below it, from Settings.
+    /// The message over the folder (Reading..., Empty folder...) with its spinner, in both views.
+    private func showMessage(_ text: String?, spinning: Bool = false) {
+        list.showMessage(text, spinning: spinning)
+        sheet.showMessage(text, spinning: spinning)
+    }
+
     private var content: NSView { return mode == .sheet ? sheet.view : list.view }
 
     /// List or contact sheet. Both always hold the folder's listing, so switching is instant.
@@ -376,7 +382,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             guard let me = self, me.generation.current == gen else { return }
             if me.lastListingPath != path {
                 me.list.setEntries([], select: [])
-                me.list.showMessage("Reading \(Paths.name(path))...", spinning: true)
+                me.showMessage("Reading \(Paths.name(path))...", spinning: true)
                 me.statusLabel.stringValue = "Reading..."
             }
             me.statusSpinner.startAnimation(nil)
@@ -437,15 +443,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         sheet.rootPath = path
         sheet.setEntries(listing.entries, select: select)
         if listing.error != 0 {
-            list.showMessage("Can't open this folder: \(listing.errorText) (E-LIST-\(listing.error))")
+            showMessage("Can't open this folder: \(listing.errorText) (E-LIST-\(listing.error))")
         } else if visible.isEmpty {
-            list.showMessage(listing.entries.isEmpty ? "Empty folder"
+            showMessage(listing.entries.isEmpty ? "Empty folder"
                 : "\(listing.entries.count) hidden item\(listing.entries.count == 1 ? "" : "s") only (Cmd-Shift-. shows them)")
         } else {
-            list.showMessage(nil)
+            showMessage(nil)
         }
         if listing.error == 0 && !list.filterText.isEmpty && shownCounts.rows == 0 {
-            list.showMessage("Nothing here matches \"\(list.filterText)\"")
+            showMessage("Nothing here matches \"\(list.filterText)\"")
         }
         updateStatus()
         Activity.set("idle")

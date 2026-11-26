@@ -189,6 +189,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         item(file, "New Window", #selector(newWindow(_:)), "n", [.command], target: self)
         item(file, "New Folder", #selector(BrowserWindowController.newFolder(_:)), "n", [.command, .shift])
         item(file, "Open", #selector(BrowserWindowController.openSelected(_:)), down)
+        // Cmd-O opens too (hidden: the key works, the menu shows Cmd-Down).
+        let cmdO = NSMenuItem(title: "Open", action: #selector(BrowserWindowController.openSelected(_:)), keyEquivalent: "o")
+        cmdO.isHidden = true
+        cmdO.allowsKeyEquivalentWhenHidden = true
+        file.addItem(cmdO)
         item(file, "Open in New Window", #selector(BrowserWindowController.openInNewWindow(_:)), down, [.command, .option])
         item(file, "Show in Finder", #selector(BrowserWindowController.revealInFinder(_:)), "r", [.command, .shift])
         item(file, "Add to Sidebar", #selector(BrowserWindowController.addToSidebar(_:)), "t", [.command, .control])

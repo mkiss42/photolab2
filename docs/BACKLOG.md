@@ -10,6 +10,13 @@ early even if its feature comes late, so nothing has to be rebuilt.
 
 ## Open
 
+- **Styling like PhotoLab 1** (colours, density, tile look) when we get to styles.
+- **Activity monitor** (nice to have; only if it stays cheap): a window with what PhotoLab is
+  doing now (listing, thumbnails, copies, tag checks, brain), counters, and a read-only tail of
+  the last log lines; plus a small activity light at the bottom right of every window (idle /
+  disk or share read / poll / change event received / writing). Cheap design: the light reads
+  the existing Activity label and counters twice a second; nothing new runs in the file paths.
+
 - **Split panes like Find** (two or more file panes in one window, side by side / stacked).
 - **Combo window**: folder tree left, contact sheet middle, metadata inspector + tools right.
   To be discussed when we get there (Phase 2/4).
