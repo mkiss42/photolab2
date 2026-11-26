@@ -15,7 +15,7 @@ verdicts, the phases and the Decision Log. `docs/PROTOCOL.md` is the app↔brain
 3. **File safety:** only `Sources/Core/FileOperations.swift`, `Sources/Core/AppFiles.swift`
    and `Sources/Platform/Platform.swift` may change files. `tools/check_mutations.sh`
    enforces it; never weaken the script to make a build pass. Trash, never delete. Never
-   overwrite. Verify, then swap. Journal multi-step operations. Never write RAW files.
+   overwrite. Verify, then swap. Journal multi-step operations. RAW metadata writes only as PLAN.md section 7 describes.
 4. **Main thread:** never touches a network volume. Long work → background queue, with
    cancellation.
 5. **Done means CI is green.** Push, read the workflow result (`gh run list`, `gh run view

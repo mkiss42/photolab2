@@ -143,8 +143,15 @@ cache dir, volume marker).
 
 Nothing is deleted permanently (Trash only). Nothing is overwritten (exclusive renames).
 Copies land under hidden temp names, are verified, then renamed. Metadata writes go to a
-copy, are verified (requested values present, image data identical), then swapped. RAW files
-are never written. Every multi-step operation is journaled; the next start finishes or rolls
+copy, are verified (requested values present, image data identical), then swapped.
+
+RAW files (lab decision 2026-11-25): metadata is written into RAWs as well as into sidecars
+and JPEGs, so raw+jpg+xmp never disagree; a setting switches RAWs to sidecar-only. Safeguards:
+ExifTool only writes formats it declares writable (others fall back to sidecar, logged); the
+image-data hash must be identical before and after; copy -> write -> verify -> swap like every
+other write. Cost: a RAW write rewrites the whole file over the network, so the UI updates at
+once from the sidecar/JPEG write and RAW writes run in a background queue with progress.
+Open: which copy wins when the group members already disagree on read (decide in Phase 2). Every multi-step operation is journaled; the next start finishes or rolls
 it back and says so.
 
 ## 8. How we work (vibe coding, with guard rails)
@@ -180,10 +187,15 @@ Each phase ends in something the lab can use. Exit criteria are tested on all th
 2. **Contact sheet & preview** — thumbnail grid, embedded RAW previews, fast preview, Quick
    Look, ratings/labels/color classes with safe writes, filter bar, raw+jpg grouping.
 3. **Brain & shared cache** — brain process, protocol, exif cache, thumbnail sharing,
-   sync port, status badge.
+   sync port, status badge. Groundwork for tools: `tools.list` / `tools.run` / job progress
+   events; a tool is a Python module in a tools folder that reads assets through the brain
+   (thumbnails, previews, exif, embeddings) and returns *proposed changes* (labels, ratings,
+   keywords, collections) which the app applies through its one safe metadata writer.
 4. **Lab tools** — copy/move with verification and queue, ingest, stationery, metadata
    editor, search.
-5. **AI** — embeddings, semantic search, faces, culling, server mode as launchd job.
+5. **AI** — embeddings, semantic search, faces, culling, server mode as launchd job. First
+   tools: "Goodbye Drill" (bad facial expressions -> colour label from settings), then the
+   user's existing Python tools.
 6. **Workflow** — saved workspaces/layouts, FTP, virtual collections.
 
 ## 10. Open questions
@@ -205,3 +217,5 @@ Each phase ends in something the lab can use. Exit criteria are tested on all th
 - 2026-11-25 — Phase 0 done. Brain runtime = python-build-standalone 3.11 per architecture (x86_64 runs on 10.13, verified on the lab's 10.13 Mac). Nested binaries are signed one by one (codesign --deep rejects non-bundle folders).
 - 2026-11-25 — Lab Macs are air-gapped; feedback is retyped. Short Report (no paths) is the primary channel; captured real-world data becomes self-test vectors.
 - 2026-11-25 — getattrlistbulk: fixed part is 108 bytes; the file-size field is present only for files (smbfs/HFS+ omit it for folders). Fallback is per item / per folder / per volume, never session-wide.
+- 2026-11-25 — Metadata is written into RAWs too (default; setting for sidecar-only), all group members kept identical; safeguards in section 7. Replaces "RAW files are never written".
+- 2026-11-25 — Tools/plugins live in the brain and return proposed changes; the app is the only writer.
