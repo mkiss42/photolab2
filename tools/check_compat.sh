@@ -3,7 +3,7 @@
 # Code needing a newer API must use `if #available(macOS X, *)` with a fallback; this script
 # only catches whole frameworks/features that cannot be fenced that way.
 cd "$(dirname "$0")/.."
-PATTERN='^[[:space:]]*import[[:space:]]+(SwiftUI|Combine|Network|UniformTypeIdentifiers)|[^a-zA-Z_]async[[:space:]]+(func|let|throws)|[^a-zA-Z_]await[[:space:]]|[^a-zA-Z_]actor[[:space:]]+[A-Z]|@MainActor|Task[[:space:]]*\{|Task\.detached|AsyncStream|@Observable|@Published'
+PATTERN='^[[:space:]]*import[[:space:]]+(SwiftUI|Combine|Network|UniformTypeIdentifiers)|[^a-zA-Z_]async[[:space:]]+(func|let|throws)|[^a-zA-Z_]await[[:space:]]|[^a-zA-Z_]actor[[:space:]]+[A-Z]|@MainActor|(^|[^a-zA-Z_])Task[[:space:]]*\{|(^|[^a-zA-Z_])Task\.detached|AsyncStream|@Observable|@Published'
 BAD=0
 while IFS= read -r f; do
   hits=$(grep -nE "$PATTERN" "$f" | grep -vE '^[0-9]+:[[:space:]]*//' || true)
