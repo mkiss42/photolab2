@@ -77,6 +77,23 @@ enum ThumbnailSelfTest {
             let img2 = EmbeddedPreview.thumbnail(rr, ext: "raf", maxPixels: 256).image, img2.width == 256 else {
             return SelfTestResult(name: n, status: .fail, detail: "RAF preview not found")
         }
-        return SelfTestResult(name: n, status: .ok, detail: "TIFF \(tiffReads) reads, RAF \(rr.reads) reads")
+        // PSD: header, empty colour mode data, resources with a dummy block and the 1036 thumbnail,
+        // then 2 MB standing in for the composite (must not be read).
+        guard let thumb = jpeg(160, 107) else { return SelfTestResult(name: n, status: .fail, detail: "psd jpeg") }
+        var psd = Data(Array("8BPS".utf8) + [0, 1] + [UInt8](repeating: 0, count: 6) + [0, 3] + be32(107) + be32(160) + [0, 8, 0, 3])
+        psd.append(contentsOf: be32(0))                                              // colour mode data
+        func block(_ id: Int, _ payload: [UInt8]) -> [UInt8] {
+            var b: [UInt8] = Array("8BIM".utf8) + [UInt8(id >> 8), UInt8(id & 0xFF)] + [0, 0] + be32(payload.count) + payload
+            if payload.count % 2 == 1 { b.append(0) }
+            return b
+        }
+        let res = block(1005, [UInt8](repeating: 1, count: 15)) + block(1036, [UInt8](repeating: 0, count: 28) + [UInt8](thumb))
+        psd.append(contentsOf: be32(res.count) + res)
+        psd.append(Data(count: 2 << 20))
+        guard AppFiles.makeTestFile(dir + "/fake.psd", data: psd), let pr = BlockReader(dir + "/fake.psd"),
+            let img3 = EmbeddedPreview.thumbnail(pr, ext: "psd", maxPixels: 256).image, img3.width == 160, pr.bytes < 512 << 10 else {
+            return SelfTestResult(name: n, status: .fail, detail: "PSD thumbnail not found or too much read")
+        }
+        return SelfTestResult(name: n, status: .ok, detail: "TIFF \(tiffReads) reads, RAF \(rr.reads) reads, PSD \(pr.reads) reads \(pr.bytes / 1024) KB")
     }
 }

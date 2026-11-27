@@ -120,7 +120,11 @@ enum EmbeddedPreview {
         guard let head = r.read(0, 64), head.count >= 16 else { return (nil, "short-file") }
         var cands: [Candidate] = []
         var orientation = 1
-        if head[0] == 0xFF && head[1] == 0xD8 {                                   // JPEG: EXIF + MPF previews
+        let layered = ["psd", "psb", "tif", "tiff"].contains(ext)
+        if Array(head[0..<4]) == Array("8BPS".utf8) {                             // PSD / PSB: thumbnail resource
+            guard let c = psd(r) else { return (nil, "psd-no-thumbnail") }
+            cands = [c]
+        } else if head[0] == 0xFF && head[1] == 0xD8 {                            // JPEG: EXIF + MPF + Photoshop previews
             let j = jpegPreviews(r)
             cands = j.candidates
             orientation = j.orientation
@@ -140,7 +144,7 @@ enum EmbeddedPreview {
             return (nil, "unknown-format")
         }
         var jpeg = pick(r, cands, minSide: maxPixels)
-        if jpeg == nil || (jpegLongSide(jpeg!) ?? 0) < maxPixels / 2, ext != "jpg", ext != "jpeg" {
+        if jpeg == nil || (jpegLongSide(jpeg!) ?? 0) < maxPixels / 2, ext != "jpg", ext != "jpeg", !layered {
             // PwCarve's idea, as the last resort: JPEGs in the first 2 MB, found by their markers.
             let carved = carve(r, window: 2 << 20)
             if let c = pick(r, carved, minSide: maxPixels) { jpeg = c }
@@ -176,6 +180,8 @@ enum EmbeddedPreview {
                 orientation = t.orientation
             } else if marker == 0xE2, let id = r.read(pos + 4, 4), Array(id) == Array("MPF\0".utf8) {
                 cands += mpf(r, base: pos + 8)
+            } else if marker == 0xED, let id = r.read(pos + 4, 14), Array(id) == Array("Photoshop 3.0\0".utf8) {
+                if let c = photoshopThumbnail(r, start: pos + 18, end: pos + 2 + len) { cands.append(c) }   // exports from Photoshop
             }
             pos += 2 + len
         }
@@ -207,6 +213,37 @@ enum EmbeddedPreview {
             return out
         }
         return []
+    }
+
+    // MARK: Photoshop (PSD, PSB, and the same resources inside TIFF and JPEG files)
+
+    /// PSD/PSB: 26-byte header, colour mode data (length + data), then the image resources -
+    /// all near the start; the big composite and layers come after and are never read.
+    static func psd(_ r: BlockReader) -> Candidate? {
+        guard let cm = r.read(26, 4), cm.count == 4 else { return nil }
+        let resLenAt = 26 + 4 + Int64(be32(cm, 0))
+        guard let rl = r.read(resLenAt, 4), rl.count == 4 else { return nil }
+        return photoshopThumbnail(r, start: resLenAt + 4, end: resLenAt + 4 + Int64(be32(rl, 0)))
+    }
+
+    /// Image resource 1036 (the thumbnail Photoshop saves, a JFIF JPEG up to ~160 px) among the
+    /// "8BIM" blocks in [start, end). Big-endian; names and data are padded to even lengths.
+    static func photoshopThumbnail(_ r: BlockReader, start: Int64, end: Int64) -> Candidate? {
+        var pos = start
+        for _ in 0..<400 {
+            guard pos + 12 <= end, let h = r.read(pos, 8 + 256), h.count >= 12, Array(h[0..<4]) == Array("8BIM".utf8) else { return nil }
+            let id = Int(h[4]) << 8 | Int(h[5])
+            let nameLen = Int(h[6])
+            let nameField = (1 + nameLen + 1) & ~1                             // length byte + name, even
+            guard 6 + nameField + 4 <= h.count else { return nil }
+            let size = Int64(be32(h, 6 + nameField))
+            let data = pos + 6 + Int64(nameField) + 4
+            if id == 1036 && size > 28 {
+                return Candidate(offset: data + 28, length: Int(size - 28))      // 28-byte header, then the JPEG
+            }
+            pos = data + ((size + 1) & ~1)
+        }
+        return nil
     }
 
     // MARK: Carving (last resort)
@@ -311,6 +348,10 @@ enum EmbeddedPreview {
             if (comp == 6 || comp == 7), photo != 32803, photo != 34892,
                 let so = tags[0x0111], let sc = tags[0x0117], so.count == 1, sc.count == 1 {
                 cands.append(Candidate(offset: base + so.value, length: Int(sc.value)))
+            }
+            // Photoshop's image resources inside a TIFF (tag 34377): its thumbnail.
+            if let ps = tags[34377], ps.count > 12, let c = photoshopThumbnail(r, start: base + ps.value, end: base + ps.value + ps.count) {
+                cands.append(c)
             }
             // Panasonic RW2: the JPEG is the value of tag 0x002E itself.
             if let p = tags[0x002E], p.count > 2048 { cands.append(Candidate(offset: base + p.value, length: Int(p.count))) }

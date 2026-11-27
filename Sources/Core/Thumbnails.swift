@@ -186,7 +186,8 @@ final class Thumbnails {
     ///   raw      our embedded-preview reader, then ImageIO (embedded only), then Quick Look
     ///   jpeg     the camera's MPF/EXIF preview if >= 128 px, else a reduced-size decode (whole file)
     ///   heic     ImageIO's embedded thumbnail, else a decode
-    ///   layered  PSD/PSB/TIFF: ImageIO's embedded thumbnail, else Quick Look (never the full composite)
+    ///   layered  PSD/PSB/TIFF: Photoshop's thumbnail resource / TIFF previews via our reader, else
+    ///            Quick Look (never the full composite)
     ///   plain    PNG/GIF/BMP/WebP...: a reduced-size decode
     ///   other    PDF, video, documents...: Quick Look (it reads only what the first page/frame needs)
     static func route(_ ext: String) -> Route {
@@ -230,8 +231,12 @@ final class Thumbnails {
                 if let r2 = BlockReader(path), let d = imageIO(true, r2) { return (d, "decode", r.bytes + r2.bytes, r.reads + r2.reads) }
             }
         case .layered:
-            if let r = BlockReader(path), let t = imageIO(false, r), max(t.width, t.height) >= 128 {
-                return (t, "imageio-thumb", r.bytes, r.reads)
+            // Photoshop's own thumbnail (or a TIFF's embedded preview), read directly - ImageIO
+            // read the whole file for it (216 MB per PSD in the 0.7.3 report).
+            if let r = BlockReader(path) {
+                let e = EmbeddedPreview.thumbnail(r, ext: ext, maxPixels: maxPixels)
+                if let img = e.image { return (img, "embedded", r.bytes, r.reads) }
+                Stats.noteThumbMiss(ext: ext, reason: e.miss)
             }
         case .plain:
             if let r = BlockReader(path), let t = imageIO(true, r) { return (t, "decode", r.bytes, r.reads) }

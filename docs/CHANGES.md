@@ -1,5 +1,19 @@
 # Changes
 
+## 0.7.4 — fast PSD thumbnails
+
+- PSD/PSB: the thumbnail Photoshop saves in every file (image resource 1036) is read directly
+  from the start of the file. 0.7.3 let ImageIO read the whole file for it - 216 MB per PSD on
+  average in your report. Now a few hundred KB at most.
+- The same Photoshop thumbnail is used for TIFFs saved by Photoshop and for JPEGs exported from
+  Photoshop (the "jpg no-preview" files that were decoded whole, 37 MB each).
+- Photoshop's thumbnail is at most ~160 px: those tiles are a little softer at large sizes.
+
+Test checklist (2 minutes):
+[ ] 1  A folder of PSDs on the share: thumbnails in about the time of the NEFs.
+[ ] 2  Short Report: psd/embedded line, and fewer jpg/decode.
+
+
 ## 0.7.3 — thumbnails by file type, Space fix
 
 - Each file type gets the method that suits it (numbers from your 0.7.2 report: our RAW reader
