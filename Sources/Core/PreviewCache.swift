@@ -74,9 +74,6 @@ final class PreviewCache {
 
     /// Remove least recently used previews until the cache is under 90% of the limit.
     /// Change the size limit (any thread).
-    /// How many are stored (Short Report; lists the folder, local).
-    var count: Int { return files.list(dir).count }
-
     func setLimit(_ bytes: Int64) {
         lock.lock()
         limitBytes = bytes

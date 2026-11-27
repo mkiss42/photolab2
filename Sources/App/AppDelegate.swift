@@ -518,11 +518,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// PhotoLab: a few path-free lines short enough to retype from an air-gapped Mac.
     @objc func shortReport(_ sender: Any?) {
         let up = Int(Date().timeIntervalSince(App.launched) / 60)
-        let lines = [
-            "PL \(App.version) | \(Ascii.clean(App.systemInfo.split(separator: ",").first.map(String.init) ?? App.systemInfo)) | up \(up) min",
+        let sys: String = App.systemInfo.components(separatedBy: ",").first ?? App.systemInfo
+        let thumbs: Int = App.thumbs?.count ?? 0
+        let lines: [String] = [
+            "PL " + App.version + " | " + Ascii.clean(sys) + " | up \(up) min",
             FileReads.reportLine,
             StallWatch.reportLine,
-            "THUMBS on disk \(App.thumbs?.count ?? 0)",
+            "THUMBS on disk \(thumbs)",
         ]
         let text = lines.joined(separator: "\n")
         App.log.info("Short report: " + lines.joined(separator: " / "))
