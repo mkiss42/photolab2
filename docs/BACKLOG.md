@@ -10,6 +10,10 @@ early even if its feature comes late, so nothing has to be rebuilt.
 
 ## Open
 
+- **Ratings/labels**: XMP:ColorClass is the master; xmp:Label is kept in step (Photo Mechanic
+  first, Bridge/Lightroom compatible). Preview + sheet keys (PL1: Cmd+digit stars, digit colours,
+  modifiers configurable).
+
 - **Metadata under thumbnails** (selectable fields, stars, colour labels): lazy, tiles on screen
   first, then the whole folder in the background, with a progress indicator like PhotoLab 1's.
 

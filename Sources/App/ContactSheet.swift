@@ -189,6 +189,10 @@ final class ContactSheetView: NSView, NSDraggingSource {
     var selectedItems: [SheetItem] { return selection.sorted().compactMap { $0 < items.count ? items[$0] : nil } }
 
     func setItems(_ new: [SheetItem], select: [String]?) {
+        Activity.during("sheet: items") { setItemsNow(new, select: select) }
+    }
+
+    private func setItemsNow(_ new: [SheetItem], select: [String]?) {
         let keepPaths: Set<String>
         if let names = select { keepPaths = Set(new.filter { it in names.contains(it.entry.name) || it.members.contains { names.contains($0.name) } }.map { $0.entry.path }) }
         else { keepPaths = Set(selectedItems.map { $0.entry.path }) }
@@ -279,7 +283,9 @@ final class ContactSheetView: NSView, NSDraggingSource {
             // The rest of the folder, nearest first, on the low-priority track.
             let center = now.isEmpty ? 0 : now.lowerBound
             let rest = me.items.indices.filter { !ahead.contains($0) }.sorted { abs($0 - center) < abs($1 - center) }
-            Thumbnails.shared.request(order.compactMap { me.items[$0].request }, background: rest.compactMap { me.items[$0].request }, owner: me)
+            Activity.during("sheet: thumbnail request") {
+                Thumbnails.shared.request(order.compactMap { me.items[$0].request }, background: rest.compactMap { me.items[$0].request }, owner: me)
+            }
             me.updateTiles()
         }
     }
@@ -520,6 +526,8 @@ final class ContactSheetView: NSView, NSDraggingSource {
             if mods.isEmpty || mods == [.command] { onTrash?() } else { super.keyDown(with: event) }
         case 49:                                                   // Space
             if mods.isEmpty { onSpace?() } else { super.keyDown(with: event) }
+        case 53:                                                   // Esc: closes the preview
+            if PreviewWindow.shared.isOpen { PreviewWindow.shared.closeAndReturn() } else { super.keyDown(with: event) }
         default:
             if mods == [.command] && chars == "e" { onOpen?(selectedItems.map { $0.entry }); return }   // Cmd-E (Cmd-O, Cmd-Down: menu)
             if mods.isEmpty && chars == "m" && Date().timeIntervalSince(lastTyped) > 1 { onRename?(); return }

@@ -1,5 +1,33 @@
 # Changes
 
+## 0.8.1 — preview for review (zoom, pan), documents inside the preview
+
+- The preview works like PhotoLab 1's: Z or double-click toggles fit / 100%; Cmd + / Cmd -
+  step the zoom; Cmd 0 fits; Cmd-scroll or pinch zooms at the pointer; drag or scroll pans.
+  Zoom and pan stay put while sharper versions arrive and when you go to the next shot.
+  When the zoom needs more pixels than the screen-size picture has, the full-size one loads
+  (RAW: the largest embedded JPEG; others: full decode). Cmd-E opens the file.
+- The preview is the key window now: arrows, Space and Esc work in it directly. Esc closes it
+  from the browser too.
+- PDFs (every page), Word/Excel/text, video and other documents show inside the preview
+  (macOS's Quick Look view), so a mixed folder needs no second window. Cmd-Y still opens the
+  separate Quick Look panel.
+- PDF thumbnails: page 1 drawn directly, reading only what it needs (Quick Look averaged 18 s).
+  Quick Look thumbnails (IDML etc.) run one at a time on their own lane and no longer hold up
+  the image thumbnails.
+- PSD/TIFF composites are no longer prefetched for the next shot (hundreds of MB each), and a
+  slow one can no longer block the preview of the next file.
+- Freeze log: the contact sheet, preview and Quick Look name what they were doing.
+
+Test checklist (5 minutes):
+[ ] 1  Preview a NEF: Z = 100% (sharp after a moment), drag to pan, right arrow: next shot at
+       the same zoom and spot. Cmd 0: fit.
+[ ] 2  Esc closes the preview (from the preview and from the browser).
+[ ] 3  Arrow onto a PDF: its pages scroll inside the preview; a Word/Excel file shows too.
+[ ] 4  Big PDFs and IDMLs in the sheet: image thumbnails not held up; PDFs much faster.
+[ ] 5  Short Report: FREEZE line names (no 3 s "idle").
+
+
 ## 0.8.0 — preview and Quick Look
 
 - Space on a file (list or contact sheet) opens the preview window; Space again (or Esc) closes

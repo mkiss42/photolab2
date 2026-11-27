@@ -40,6 +40,7 @@ final class FileOutlineView: NSOutlineView {
     var onRename: (() -> Void)?
     var onTrash: (() -> Void)?
     var onSpace: (() -> Void)?
+    var onEscape: (() -> Void)?
     var contextMenu: (() -> NSMenu?)?
     private var lastTypeSelect = Date.distantPast
 
@@ -55,6 +56,7 @@ final class FileOutlineView: NSOutlineView {
         }
         if mods == [.command] && chars == "e" { onOpen?(); return }
         if event.keyCode == 49 && mods.isEmpty && Date().timeIntervalSince(lastTypeSelect) > 1.0 { onSpace?(); return }   // Space
+        if event.keyCode == 53 && mods.isEmpty, PreviewWindow.shared.isOpen { onEscape?(); return }                       // Esc
         if mods.isEmpty && chars == "m" && Date().timeIntervalSince(lastTypeSelect) > 1.0 { onRename?(); return }
         // Only letters and digits are typing: an arrow key must not turn the next Space into a
         // type-select space (that jumped to the first row).
@@ -211,6 +213,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         table.onRename = { [weak self] in self?.onRenameRequest?() }
         table.onTrash = { [weak self] in self?.onTrashRequest?() }
         table.onSpace = { [weak self] in self?.onSpace?() }
+        table.onEscape = { PreviewWindow.shared.closeAndReturn() }
         table.contextMenu = { [weak self] in self?.contextMenu() }
         table.sortDescriptors = [NSSortDescriptor(key: EntrySort.Key.name.rawValue, ascending: true)]
         table.registerForDraggedTypes([.fileURL])

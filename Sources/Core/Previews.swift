@@ -20,11 +20,17 @@ final class Previews {
         init(_ i: CGImage, _ m: String, _ t: Double) { image = i; method = m; ms = t } }
     private let memory = NSCache<NSString, Box>()
     private let lock = NSLock()
-    private var queues: [String: DispatchQueue] = [:]
+    private var queues: [String: OperationQueue] = [:]
     private var wanted: [String] = []
     private var pending = Set<String>()
 
-    init() { memory.countLimit = 8 }
+    /// The full-size tier (`px` for request/cached): loaded only when the zoom needs it.
+    static let full = 16384
+
+    init() {
+        memory.countLimit = 10
+        memory.totalCostLimit = 900 << 20              // a few full-size pictures at most
+    }
 
     static func cacheKey(_ e: FileEntry, _ px: Int) -> String { return "\(e.path)|\(e.size)|\(Int64(e.modified * 1000))|\(px)" }
 
@@ -43,10 +49,11 @@ final class Previews {
         for e in todo {
             let vol = Volumes.volume(for: e.path)?.mountPoint ?? "/"
             lock.lock()
-            let q = queues[vol] ?? DispatchQueue(label: "photolab.preview.\(queues.count)", qos: .userInitiated)
+            // Two at a time per volume: one slow PSD composite cannot hold up the next shot.
+            let q = queues[vol] ?? { let o = OperationQueue(); o.maxConcurrentOperationCount = 2; o.qualityOfService = .userInitiated; return o }()
             queues[vol] = q
             lock.unlock()
-            q.async { [weak self] in
+            q.addOperation { [weak self] in
                 guard let me = self else { return }
                 let key = Previews.cacheKey(e, px)
                 me.lock.lock(); let still = me.wanted.contains(key); me.lock.unlock()
@@ -54,7 +61,8 @@ final class Previews {
                     let t0 = Date()
                     if let made = Previews.make(e.path, ext: e.ext, px: px) {
                         let ms = Date().timeIntervalSince(t0) * 1000
-                        me.memory.setObject(Box(made.image, made.method, ms), forKey: key as NSString)
+                        me.memory.setObject(Box(made.image, made.method, ms), forKey: key as NSString,
+                                            cost: made.image.bytesPerRow * made.image.height)
                         Stats.noteThumb(method: "preview " + e.ext + "/" + made.method, ms: ms, bytes: made.bytes, reads: made.reads)
                         DispatchQueue.main.async { NotificationCenter.default.post(name: .previewReady, object: nil, userInfo: ["path": e.path]) }
                     }
@@ -68,8 +76,11 @@ final class Previews {
         let route = Thumbnails.route(ext)
         if route == .raw || route == .jpeg, let r = BlockReader(path) {
             let e = EmbeddedPreview.thumbnail(r, ext: ext, maxPixels: px)
-            // Good enough when it covers most of the screen size asked for.
-            if let img = e.image, max(img.width, img.height) >= px * 3 / 4 { return (img, "embedded", r.bytes, r.reads) }
+            // Screen tier: good enough when it covers most of the screen. Full tier of a RAW: the
+            // largest embedded JPEG is the full picture we show (no RAW decode).
+            if let img = e.image, max(img.width, img.height) >= px * 3 / 4 || (px >= full && route == .raw) {
+                return (img, "embedded", r.bytes, r.reads)
+            }
         }
         guard route != .other, let r = BlockReader(path), let src = r.imageSource(), CGImageSourceGetCount(src) > 0 else { return nil }
         let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: px,

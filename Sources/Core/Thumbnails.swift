@@ -76,29 +76,33 @@ final class Thumbnails {
         wanted[id] = Set(reqs.map { $0.key })
         wantedLater[id] = Set(background.map { $0.key })
         // Background track: rebuilt from this request (nearest first = popped first).
-        var bg: [String: [ThumbRequest]] = [:]
+        var perLane: [ObjectIdentifier: (lane: Lane, items: [ThumbRequest])] = [:]
         for r in background where memory.object(forKey: r.key as NSString) == nil && !failed.contains(r.key) {
-            let vol = Volumes.volume(for: r.source)
-            bg[vol?.mountPoint ?? "/", default: []].append(r)
+            let lane = self.lane(for: r)
+            perLane[ObjectIdentifier(lane), default: (lane, [])].items.append(r)
         }
-        for (name, list) in bg {
-            let vol = Volumes.volume(for: list[0].source)
-            let lane = lanes[name] ?? Lane(max: (vol?.isNetwork ?? false) ? 2 : 4, label: "photolab.thumbs.\(lanes.count)")
-            lanes[name] = lane
-            lane.background = list.reversed()
-        }
+        for (_, v) in perLane { v.lane.background = v.items.reversed() }
         // Pushed in reverse, so the first rows on screen are popped first.
         for r in reqs.reversed() where memory.object(forKey: r.key as NSString) == nil && !failed.contains(r.key) && !queued.contains(r.key) {
-            let vol = Volumes.volume(for: r.source)
-            let name = vol?.mountPoint ?? "/"
-            let lane = lanes[name] ?? Lane(max: (vol?.isNetwork ?? false) ? 2 : 4, label: "photolab.thumbs.\(lanes.count)")
-            lanes[name] = lane
+            let lane = self.lane(for: r)
             lane.stack.append(r)
             queued.insert(r.key)
         }
         let all = Array(lanes.values)
         lock.unlock()
         for l in all { pump(l) }
+    }
+
+    /// Per volume: images (2 at a time on a share, 4 local) and, separately, one Quick Look /
+    /// document thumbnail at a time - those can take many seconds and must not hold up images.
+    private func lane(for r: ThumbRequest) -> Lane {
+        let vol = Volumes.volume(for: r.source)
+        let slow = Thumbnails.route(r.ext) == .other && r.ext != "pdf"
+        let name = (vol?.mountPoint ?? "/") + (slow ? "|slow" : "")
+        if let l = lanes[name] { return l }
+        let l = Lane(max: slow ? 1 : ((vol?.isNetwork ?? false) ? 2 : 4), label: "photolab.thumbs.\(lanes.count)")
+        lanes[name] = l
+        return l
     }
 
     func release(owner: AnyObject) {
@@ -241,13 +245,33 @@ final class Thumbnails {
         case .plain:
             if let r = BlockReader(path), let t = imageIO(true, r) { return (t, "decode", r.bytes, r.reads) }
         case .other:
-            break
+            // PDF: page 1 drawn by CoreGraphics, reading only what that page needs (Quick Look
+            // took 18 s on average for big PDFs on the share).
+            if ext == "pdf", let r = BlockReader(path), let t = pdfPage(r) { return (t, "pdf-page", r.bytes, r.reads) }
         }
         let t0 = Date()
         if let q = quickLook(url) { _ = t0; return (q, "quicklook", 0, 0) }
         // Quick Look had nothing: one ImageIO try from the file, then the type icon (drawn by the view).
         if route == .other || route == .raw, let t = imageIO(false, nil) { return (t, "imageio-thumb", 0, 0) }
         return nil
+    }
+
+    static func pdfPage(_ r: BlockReader) -> CGImage? {
+        guard let provider = r.dataProvider(), let doc = CGPDFDocument(provider), let page = doc.page(at: 1) else { return nil }
+        let box = page.getBoxRect(.cropBox)
+        let rot = (page.rotationAngle % 180 + 180) % 180 == 90
+        let pw = rot ? box.height : box.width, ph = rot ? box.width : box.height
+        guard pw > 0, ph > 0 else { return nil }
+        let s = CGFloat(maxPixels) / max(pw, ph)
+        let w = max(1, Int(pw * s)), h = max(1, Int(ph * s))
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+        ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        ctx.interpolationQuality = .medium
+        ctx.concatenate(page.getDrawingTransform(.cropBox, rect: CGRect(x: 0, y: 0, width: w, height: h), rotate: 0, preserveAspectRatio: true))
+        ctx.drawPDFPage(page)
+        return ctx.makeImage()
     }
 
     private static func quickLook(_ url: URL) -> CGImage? {

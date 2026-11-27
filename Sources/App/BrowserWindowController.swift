@@ -703,6 +703,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     /// Cmd-Y: Quick Look for the selection (any file type macOS can show).
     @objc func toggleQuickLook(_ sender: Any?) {
+        Activity.set("quicklook")
+        defer { Activity.set("idle") }
         guard let p = QLPreviewPanel.shared() else { return }
         if QLPreviewPanel.sharedPreviewPanelExists() && p.isVisible { p.orderOut(nil) } else { p.makeKeyAndOrderFront(nil) }
     }

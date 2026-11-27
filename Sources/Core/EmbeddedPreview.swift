@@ -98,6 +98,17 @@ final class BlockReader {
         return d.count
     }
 
+    /// A CGDataProvider reading through this reader (ImageIO, CGPDFDocument).
+    func dataProvider() -> CGDataProvider? {
+        var cb = CGDataProviderDirectCallbacks(version: 0, getBytePointer: nil, releaseBytePointer: nil,
+            getBytesAtPosition: { info, buffer, pos, count in
+                guard let info = info else { return 0 }
+                return Unmanaged<BlockReader>.fromOpaque(info).takeUnretainedValue().copy(into: buffer, offset: Int64(pos), count: count)
+            },
+            releaseInfo: { info in if let info = info { Unmanaged<BlockReader>.fromOpaque(info).release() } })
+        return CGDataProvider(directInfo: Unmanaged.passRetained(self).toOpaque(), size: off_t(size), callbacks: &cb)
+    }
+
     /// An ImageIO source reading through this reader.
     func imageSource() -> CGImageSource? {
         var cb = CGDataProviderDirectCallbacks(version: 0, getBytePointer: nil, releaseBytePointer: nil,
