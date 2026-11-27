@@ -127,6 +127,9 @@ final class PhotoSelfTest {
         check("T-LIST-3", "fast listing equals classic listing (home folder; warning only, it may change meanwhile)", d3.isEmpty, d3.joined(separator: " | "))
         let d4 = BulkLister.compareWithClassic("/Applications")
         check("T-LIST-4", "fast listing equals classic listing (/Applications; warning only)", d4.isEmpty, d4.joined(separator: " | "))
+        let d5 = BulkLister.checkCapturedRecords()
+        check("T-LIST-5", "folder records from the lab's SMB servers (108 bytes, no size field) parse as folders", d5.isEmpty,
+              d5.joined(separator: " | "), safety: true)
 
         // 10 Not an image inside: handled without a crash, says so.
         files.writeText("not really a raw file", to: p("fake.NEF"))

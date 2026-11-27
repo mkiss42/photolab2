@@ -1,5 +1,26 @@
 # Changes
 
+## 1.0.0-alpha.2 — PhotoLab = Find 0.18.16 + first PhotoLab 2 fix
+
+- The app is now Find 0.18.16 (your coworker's), renamed PhotoLab, built universal (Intel and
+  Apple Silicon) by CI with all four of Find's self-test suites passing on Apple Silicon, under
+  Rosetta and on a native Intel Mac. Fresh settings: PhotoLab keeps its own folders
+  (~/Library/Application Support/PhotoLab, Caches/PhotoLab, Logs/PhotoLab).
+- Fast folder listing on SMB shares fixed (PhotoLab 2's 0.1.x fix): Find rejected every folder
+  record on a share (108 bytes, no size field) and then switched fast listing off for the whole
+  session - every share was listed the slow way after the first folder with subfolders. Now a
+  bad record only affects its folder; a volume falls back only after 3 bad folders.
+  Self-test T-LIST-5 checks the three records captured from your servers.
+- Everything else is Find 0.18.16 as your coworker left it (see docs/FIND-0.18.16-README.txt for
+  its features and its own test lists). The PhotoLab 2 features come over one by one (PLAN.md 4).
+
+Test checklist (5 minutes, 12.6 Mac; 10.13 and M1 when you can):
+[ ] 1  Opens as "PhotoLab"; Help > Run Safety Self-Check: all passed.
+[ ] 2  Browse a share with many subfolders: listing speed like PhotoLab 2 (not like Find).
+       The log (Logs/PhotoLab) should have no "W-LIST-2".
+[ ] 3  Photography mode on a RAW folder: thumbnails, ratings - all as in Find.
+
+
 ## 0.9.2 — one preview mode, preview delay, Decode Full Image
 
 - Quick previews is gone - it is how the preview works now (your reports: the same 2.6 reads

@@ -1,6 +1,8 @@
 # PhotoLab 2 — instructions for Claude
 
-Read `docs/PLAN.md` before doing anything. It holds the architecture, the PhotoLab 1 feature
+Read `docs/PLAN.md` before doing anything. Since 2026-11-27 the code base is **Find 0.18.16**
+(a coworker's app, adopted as the one codebase) renamed PhotoLab; PhotoLab 2 0.9.2 is kept on the
+branch `archive/pl2-0.9.2` (also tag `pl2-0.9.2` locally) - port from it, don't merge it. It holds the architecture, the PhotoLab 1 feature
 verdicts, the phases and the Decision Log. `docs/PROTOCOL.md` is the app↔brain contract.
 
 ## Ground rules
@@ -13,7 +15,7 @@ verdicts, the phases and the Decision Log. `docs/PROTOCOL.md` is the app↔brain
    shared cache + sync, metadata DB/search, ingest, stationery/templates, AI. The app must
    work when the brain is down; every brain call has a timeout and a fallback.
 3. **File safety:** only `Sources/Core/FileOperations.swift`, `Sources/Core/AppFiles.swift`
-   and `Sources/Platform/Platform.swift` may change files. `tools/check_mutations.sh`
+   and `Sources/Darwin/DarwinPlatform.swift` may change files (Find's rule, kept). `tools/check_mutations.sh`
    enforces it; never weaken the script to make a build pass. Trash, never delete (exception: shares without a Trash, after
    explicit confirmation - PLAN.md section 7). Never overwrite. Verify, then swap. Journal multi-step operations. RAW metadata writes only as PLAN.md section 7 describes.
 4. **Main thread:** never touches a network volume. Long work → background queue, with
@@ -26,8 +28,9 @@ verdicts, the phases and the Decision Log. `docs/PROTOCOL.md` is the app↔brain
    a ≤5-minute test checklist for the user, covering the three test Macs when relevant.
 7. **Logs:** ASCII, one fact per line, stable codes `E-AREA-n` / `W-AREA-n`. User-visible
    errors say what happened and that nothing was lost (when true).
-8. **Self-tests** live in the app (`--self-test`) and run in CI. New core logic comes with a
-   self-test case.
+8. **Self-tests** live in the app and run in CI: `--selfcheck` (safety), `--searchtest`,
+   `--indextest`, `--phototest` (Find's). New core logic comes with a check in one of them; a
+   check marked `safety: true` fails the build.
 9. **Decisions:** any new architectural choice → entry in the Decision Log in PLAN.md.
 10. **The repo is public.** Never put real paths, share/server/host names, user names, IP
     addresses, file names from the lab or anything retyped from the lab Macs into code, docs,
@@ -46,10 +49,12 @@ verdicts, the phases and the Decision Log. `docs/PROTOCOL.md` is the app↔brain
 ## Layout
 
 ```
-Sources/App       AppKit UI (windows, views, menus)
-Sources/Core      platform-independent logic (models, listing, protocol, self-tests)
-Sources/Platform  the only Darwin-specific primitives that change files
-brain/            Python helper (package photolab_brain, tests/)
+Sources/App       AppKit UI (windows, panes, menus) - Find's
+Sources/Core      platform-independent logic (much of it tested on Linux by Find's author)
+Sources/Darwin    macOS-only code: BulkLister, DarwinPlatform (the only primitives that change
+                  files), ExifToolServer, ImageMeta, PhotoSelfTest
+Resources         exiftool (bundled, run by /usr/bin/perl), PhotoLab.iconset
+brain/            Python helper (package photolab_brain, tests/) - not wired into the Find base yet
 shared/           data shared by both sides (field definitions, test vectors)
 profiles/         build profiles
 tools/            build + guard scripts
