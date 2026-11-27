@@ -110,6 +110,19 @@ final class PhotoSelfTest {
               lv.contains { $0.0.local == "Label" && $0.1 == ["Green"] } && lv0.contains { $0.0.local == "Label" && $0.1.isEmpty },
               "\(lv.map { "\($0.0.local)=\($0.1)" }) / \(lv0.map { "\($0.0.local)=\($0.1)" })")
 
+        // 46 Opening a selection: one request per application (one Camera Raw session for many RAWs)
+        let fakeApps: [String: String] = ["nef": "/Applications/PS.app", "cr3": "/Applications/PS.app", "pdf": "/Applications/Acro.app"]
+        let og = OpenGroups.group(["/V/J/a.NEF", "/V/J/b.pdf", "/V/J/c.nef", "/V/J/d.CR3", "/V/J/e.xyz", "/V/J/f.xyz"],
+                                  appForExtension: { fakeApps[$0] })
+        let ogWant = [OpenGroup(app: "/Applications/PS.app", paths: ["/V/J/a.NEF", "/V/J/c.nef", "/V/J/d.CR3"]),
+                      OpenGroup(app: "/Applications/Acro.app", paths: ["/V/J/b.pdf"]),
+                      OpenGroup(app: nil, paths: ["/V/J/e.xyz"]),
+                      OpenGroup(app: nil, paths: ["/V/J/f.xyz"])]
+        let ogAll = OpenGroups.all(["/V/J/a.NEF", "/V/J/b.pdf"], app: "/Applications/PS.app")
+        check("T-PHOTO-46", "a selection opens with one request per application, in selection order",
+              og == ogWant && ogAll.count == 1 && ogAll[0].paths.count == 2 && OpenGroups.all([], app: "x").isEmpty,
+              "\(og.map { "\($0.app ?? "-"):\($0.paths.count)" })")
+
         // 20-22 Photography mode facts and the contact sheet
         let nf = PhotoFactsReader.readNative(path: jpg)
         check("T-PHOTO-20", "photo facts read by macOS (camera, size)",

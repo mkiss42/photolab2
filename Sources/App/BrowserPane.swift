@@ -357,7 +357,7 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
             if !s.syncingSelection && s.viewMode != "list" { s.grid.setSelection(paths: s.list.selectedPaths()) }
         }
         list.onRootsChanged = { [weak self] in self?.refreshGrid() }
-        list.onOpen = { [weak self] e in self?.open([e]) }
+        list.onOpen = { [weak self] e in self?.openClicked(e) }
         list.onFolderGone = { [weak self] p in self?.folderGone(p) }
         search.onSearch = { [weak self] in self?.startSearch() }
         search.onStop = { [weak self] in self?.stopSearch() }

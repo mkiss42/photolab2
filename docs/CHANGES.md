@@ -1,5 +1,30 @@
 # Changes
 
+## 1.0.0-alpha.4 — a range of RAWs opens in one Camera Raw session
+
+- Opening several files now sends them to their application in ONE request per application.
+  Before, each file was its own request, so Photoshop showed Camera Raw for one RAW, and only after
+  Done or Cancel the next one. Now a range of RAWs opens together in one Camera Raw window with the
+  filmstrip. Applies to Return / Cmd-O, double-click, Open With and Open With > Other.
+- Mixed selections are split by application (RAWs to Photoshop, PDFs to Acrobat, ...), each
+  application getting all of its files at once. The default application is found from the file
+  type, without reading the files (nothing extra touches the share).
+- Double-clicking a file that is part of a larger selection opens the whole selection (as in
+  Finder); Cmd-Down in the contact sheet does the same. Double-clicking a folder works as before.
+- Open With uses the exact copy of the application you picked, even when two Photoshop versions
+  are installed.
+- Log: "OPEN n file(s) in one request to <app>"; W-OPEN-1 if macOS refuses (then one by one, as before).
+- Self-test T-PHOTO-46 (grouping by application).
+
+Test checklist (5 minutes; 10.13 iMac and 12.6 Mac):
+[ ] 1  Select 5 RAWs (NEF) whose default app is Photoshop, Cmd-O: ONE Camera Raw window with all 5
+       in the filmstrip.
+[ ] 2  Same 5 RAWs, right-click > Open With > Photoshop: one Camera Raw window with all 5.
+[ ] 3  Select the 5 RAWs, double-click one of them: all 5 open in one Camera Raw window.
+[ ] 4  Contact sheet: select 5 RAWs, Cmd-Down: one Camera Raw window.
+[ ] 5  Select 3 RAWs and 1 PDF, Cmd-O: RAWs in one Camera Raw window, the PDF in its PDF app.
+[ ] 6  Double-click a single folder: still opens in the same window.
+
 ## 1.0.0-alpha.3 — PhotoLab 2's read economy, safety rules S1-S6
 
 - Thumbnails read far less from shares. Find took the LARGEST preview inside a RAW (the full-size

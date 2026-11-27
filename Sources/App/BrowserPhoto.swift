@@ -22,7 +22,7 @@ extension BrowserPane {
             s.syncingSelection = false
         }
         grid.quickLook = list.quickLook
-        grid.onOpen = { [weak self] e in self?.open([e]) }
+        grid.onOpen = { [weak self] e in self?.openClicked(e) }
         grid.onSpace = { [weak self] in self?.list.previewSelection() }
         // 0.18.16: the photo bar wraps onto more rows in a narrow pane and gets the height it needs.
         photoBar.onHeightNeeded = { [weak self] h in

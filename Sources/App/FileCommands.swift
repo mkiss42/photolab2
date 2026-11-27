@@ -141,11 +141,71 @@ extension BrowserPane {
         } else {
             for f in folders { newTab(path: f.path) }
         }
-        for f in others {
-            if !NSWorkspace.shared.open(URL(fileURLWithPath: f.path)) {
-                showMessage("\"\(f.name)\" could not be opened", "macOS has no application set to open it, or the application failed to start.")
+        openFiles(others, with: nil)
+    }
+
+    /// 1.0.0-alpha.4: a double-click (or Cmd-Down in the contact sheet) on a file that is part of a larger
+    /// selection opens all the selected files, as Finder does. Folders keep Find's behaviour.
+    func openClicked(_ e: FileEntry) {
+        let sel = selection
+        if !isPlainFolder(e), sel.count > 1, sel.contains(where: { $0.path == e.path }) {
+            open(sel.filter { !isPlainFolder($0) })
+        } else {
+            open([e])
+        }
+    }
+
+    /// 1.0.0-alpha.4: files go to their application in ONE request per application, so Photoshop opens
+    /// a range of RAWs in one Camera Raw session instead of one Camera Raw dialog after another.
+    /// `chosenApp` nil = each file's default application (looked up by type, never by reading the file).
+    func openFiles(_ files: [FileEntry], with chosenApp: String?) {
+        if files.isEmpty { return }
+        let paths = files.map { $0.path }
+        let groups = chosenApp.map { OpenGroups.all(paths, app: $0) }
+            ?? OpenGroups.group(paths, appForExtension: BrowserPane.defaultApp(forExtension:))
+        var failed: [String] = []
+        for g in groups {
+            // A single file with no chosen app keeps NSWorkspace.open (honours a per-file "Open with").
+            if let app = g.app, g.paths.count > 1 || chosenApp != nil {
+                if BrowserPane.openTogether(g.paths, app: app) {
+                    Log.shared?.info("OPEN \(g.paths.count) file(s) in one request to \(Paths.lastComponent(app))")
+                    continue
+                }
+                Log.shared?.warn("W-OPEN-1 one-request open refused by macOS (\(g.paths.count) files, \(Paths.lastComponent(app))); opening one by one")
+            }
+            for p in g.paths {
+                let ok = chosenApp.map { NSWorkspace.shared.openFile(p, withApplication: $0) }
+                    ?? NSWorkspace.shared.open(URL(fileURLWithPath: p))
+                if !ok { failed.append(Paths.lastComponent(p)) }
             }
         }
+        if failed.isEmpty { return }
+        let appPart = chosenApp.map { " with \(Paths.lastComponent($0))" } ?? ""
+        let why = chosenApp == nil ? "macOS has no application set to open \(failed.count == 1 ? "it" : "them"), or the application failed to start." : ""
+        let what = failed.count == 1 ? "\"\(failed[0])\"" : "\(failed.count) items"
+        showMessage("\(what) could not be opened\(appPart)", why)
+    }
+
+    /// The default application for a file extension, from the type alone (no file access, safe on shares).
+    static func defaultApp(forExtension ext: String) -> String? {
+        guard let uti = UTTypeCreatePreferredIdentifierForTag(kUTTagClassFilenameExtension, ext as CFString, nil)?.takeRetainedValue(),
+            let url = LSCopyDefaultApplicationURLForContentType(uti, .all, nil)?.takeRetainedValue() else { return nil }
+        return (url as URL).path
+    }
+
+    /// Opens all the paths with one application in a single request (one Apple Event listing every
+    /// file), by application path so the chosen copy of the app is used even when several versions
+    /// share a bundle id. Available since 10.0; returns false if macOS refused.
+    static func openTogether(_ paths: [String], app: String) -> Bool {
+        let appURL = NSURL(fileURLWithPath: app) as CFURL
+        let items = (paths.map { NSURL(fileURLWithPath: $0) } as NSArray) as CFArray
+        var spec = LSLaunchURLSpec(appURL: Unmanaged.passUnretained(appURL),
+                                   itemURLs: Unmanaged.passUnretained(items),
+                                   passThruParams: nil,
+                                   launchFlags: LSLaunchFlags(rawValue: 0x00000001),   // kLSLaunchDefaults
+                                   asyncRefCon: nil)
+        let status = withExtendedLifetime((appURL, items)) { LSOpenFromURLSpec(&spec, nil) }
+        return status == noErr
     }
 
     @objc func openSelectedInNewTab(_ sender: Any?) {
@@ -205,9 +265,7 @@ extension BrowserPane {
 
     @objc func openWithApp(_ sender: NSMenuItem) {
         guard let app = sender.representedObject as? String else { return }
-        for e in selection where !NSWorkspace.shared.openFile(e.path, withApplication: app) {
-            showMessage("\"\(e.name)\" could not be opened with \(Paths.lastComponent(app))", "")
-        }
+        openFiles(selection, with: app)
     }
 
     @objc func openWithOther(_ sender: Any?) {
@@ -222,7 +280,7 @@ extension BrowserPane {
         panel.prompt = "Open"
         panel.message = "Choose an application to open the selected item\(sel.count == 1 ? "" : "s")"
         if panel.runModal() == .OK, let app = panel.url?.path {
-            for e in sel { _ = NSWorkspace.shared.openFile(e.path, withApplication: app) }
+            openFiles(sel, with: app)
         }
     }
 
