@@ -33,7 +33,29 @@ enum ThumbnailSelfTest {
             return [SelfTestResult(name: n, status: .fail, detail: "disk cache did not round-trip")]
         }
         let ms = Date().timeIntervalSince(t0) * 1000
-        return [SelfTestResult(name: n, status: .ok, detail: String(format: "%.0f ms", ms)), embedded(dir, img)]
+        return [SelfTestResult(name: n, status: .ok, detail: String(format: "%.0f ms", ms)), embedded(dir, img), pdf(dir)]
+    }
+
+    /// A 2-page A4-landscape PDF made here: page 1 becomes a 256 px wide thumbnail.
+    static func pdf(_ dir: String) -> SelfTestResult {
+        let n = "thumbnails-pdf"
+        let data = NSMutableData()
+        var box = CGRect(x: 0, y: 0, width: 842, height: 595)
+        guard let consumer = CGDataConsumer(data: data as CFMutableData), let ctx = CGContext(consumer: consumer, mediaBox: &box, nil) else {
+            return SelfTestResult(name: n, status: .fail, detail: "pdf context")
+        }
+        for _ in 0..<2 {
+            ctx.beginPDFPage(nil)
+            ctx.setFillColor(CGColor(red: 0.8, green: 0.1, blue: 0.1, alpha: 1))
+            ctx.fill(CGRect(x: 100, y: 100, width: 300, height: 200))
+            ctx.endPDFPage()
+        }
+        ctx.closePDF()
+        guard AppFiles.makeTestFile(dir + "/doc.pdf", data: data as Data), let r = BlockReader(dir + "/doc.pdf"),
+            let t = Thumbnails.pdfPage(r), t.width == 256, abs(t.height - 181) <= 1 else {
+            return SelfTestResult(name: n, status: .fail, detail: "page 1 not rendered at 256 px")
+        }
+        return SelfTestResult(name: n, status: .ok, detail: "\(r.reads) reads")
     }
 
     /// A tiny fake RAW (TIFF: IFD0 with orientation 6 + a 2048 x 1365 JPEG preview, SubIFD with a
