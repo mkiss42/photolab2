@@ -220,9 +220,9 @@ final class LabelLoader {
                 o.qualityOfService = .utility; return o }()
             queues[vol] = q
             lock.unlock()
-            // Chunks of 20: one notification per chunk, and stale wishes are dropped between them.
-            stride(from: 0, to: items.count, by: 20).forEach { start in
-                let chunk = Array(items[start..<min(items.count, start + 20)])
+            // Chunks of 4: the counter follows what the tiles show; stale wishes are dropped between.
+            stride(from: 0, to: items.count, by: 4).forEach { start in
+                let chunk = Array(items[start..<min(items.count, start + 4)])
                 q.addOperation { [weak self] in
                     guard let me = self else { return }
                     var done: [String] = []

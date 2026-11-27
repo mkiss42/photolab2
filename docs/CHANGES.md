@@ -1,5 +1,33 @@
 # Changes
 
+## 0.9.2 — one preview mode, preview delay, Decode Full Image
+
+- Quick previews is gone - it is how the preview works now (your reports: the same 2.6 reads
+  per file, half the bytes, no visible difference). Screen size = the cheapest embedded preview
+  of at least ~1000 px; a RAW is never decoded for the screen (DNGs with small previews cost
+  31 MB and 1.7 s each before). JPEG/PNG without an embedded preview: decoded at screen size.
+- Settings > Preview delay (ms, default 150): the preview reads nothing until the selection has
+  rested that long. Holding the right arrow through 300 shots no longer queues 300 requests in
+  front of the one you stop on (the size checks were the culprit). The thumbnail still shows
+  instantly while you move.
+- When the biggest preview inside a RAW is smaller than the camera's real image, the bottom
+  line says so ("largest embedded preview 1200 x 800 is smaller than the image 6000 x 4000")
+  and a Decode Full Image button decodes the RAW itself (reads the whole file). Before, the
+  embedded preview was reported as "full size".
+- Z out to fit and Z in again: back to the same 1:1 spot.
+- PSD: Z goes to the final size at once (the size check now runs when the shot opens, nearly
+  free with the shared reader).
+- The Metadata counter follows the tiles (batches of 4 instead of 20).
+
+Test checklist (4 minutes):
+[ ] 1  Hold the right arrow through many RAWs, stop: the stopped shot sharpens promptly.
+[ ] 2  Z, drag to a detail, Z (fit), Z: same detail. Right arrow: same detail on the next.
+[ ] 3  A DNG/RAW with a small embedded preview: the note + Decode Full Image; press it:
+       sharp at the camera's resolution (slow on the share, that is expected).
+[ ] 4  PSD: Z goes straight to the final size. Small-preview files fill the window in Fit.
+[ ] 5  Short Report: READS line.
+
+
 ## 0.9.1 — fewer reads per file, Quick previews
 
 - One shared reader per file for everything PhotoLab reads from it (thumbnail, stars/colour,

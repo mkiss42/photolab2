@@ -32,7 +32,7 @@ struct ThumbRequest {
         self.size = size
         self.modified = modified
         // Quick previews make different (cheaper) thumbnails: kept apart in the cache.
-        self.key = "\(source)|\(size)|\(Int64(modified * 1000))|\(Thumbnails.maxPixels)" + (FileReads.quick ? "|q" : "")
+        self.key = "\(source)|\(size)|\(Int64(modified * 1000))|\(Thumbnails.maxPixels)"
         self.ext = FileOperations.split(Paths.name(source)).ext.lowercased()
     }
 }
@@ -218,7 +218,6 @@ final class Thumbnails {
         guard let r = FileReads.reader(path, size: size, modified: modified) else { return nil }
         let r0 = r.reads, b0 = r.bytes
         func done(_ img: CGImage, _ m: String) -> (image: CGImage, method: String, bytes: Int64, reads: Int) { return (img, m, r.bytes - b0, r.reads - r0) }
-        let quick = FileReads.quick
         func imageIO(_ always: Bool) -> CGImage? {
             var opts: [CFString: Any] = [kCGImageSourceCreateThumbnailWithTransform: true,
                                          kCGImageSourceThumbnailMaxPixelSize: maxPixels,
@@ -229,16 +228,14 @@ final class Thumbnails {
         }
         switch route {
         case .raw, .jpeg, .layered:
-            // Quick previews: the cheapest embedded picture that is still a thumbnail (often the
-            // EXIF one, inside the first read).
-            let e = EmbeddedPreview.thumbnail(r, ext: ext, maxPixels: maxPixels, minSide: quick ? 120 : maxPixels)
+            let e = EmbeddedPreview.thumbnail(r, ext: ext, maxPixels: maxPixels)
             if let img = e.image { return done(img, route == .jpeg ? "jpeg-preview" : "embedded") }
             Stats.noteThumbMiss(ext: ext, reason: e.miss)
             if route == .jpeg, let t = imageIO(true) { return done(t, "decode") }
             if route == .raw, let t = imageIO(false), max(t.width, t.height) >= maxPixels / 2 { return done(t, "imageio-thumb") }
         case .heic:
             if let t = imageIO(false) {
-                if quick || max(t.width, t.height) >= maxPixels * 3 / 4 { return done(t, "imageio-thumb") }
+                if max(t.width, t.height) >= maxPixels * 3 / 4 { return done(t, "imageio-thumb") }
                 if let d = imageIO(true) { return done(d, "decode") }
             }
         case .plain:

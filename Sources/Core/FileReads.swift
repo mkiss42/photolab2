@@ -35,9 +35,12 @@ enum FileReads {
         lock.unlock()
     }
 
-    /// Quick previews (Settings): fewest reads - cheapest usable embedded pictures, full size
-    /// only when zoomed in.
-    static var quick: Bool { return UserDefaults.standard.bool(forKey: "quickPreviews") }
+    /// Settings > Preview delay: the selection must rest this long before the preview asks for
+    /// anything (arrowing past 300 shots at key-repeat speed queues nothing). Milliseconds.
+    static var previewDelayMs: Int {
+        let v = UserDefaults.standard.integer(forKey: "previewDelayMs")
+        return v > 0 ? v : 150
+    }
 
     /// The shared reader for a file (size/modified from the listing tell a changed file apart).
     static func reader(_ path: String, size: Int64? = nil, modified: Double? = nil) -> BlockReader? {
@@ -79,7 +82,7 @@ enum FileReads {
         lock.lock(); defer { lock.unlock() }
         guard !perFile.isEmpty else { return "READS none" }
         let n = Double(perFile.count)
-        return String(format: "READS %ld files, %.1f reads/file, %.0f KB/file%@", perFile.count, Double(totalReads) / n,
-                      Double(totalBytes) / n / 1024, quick ? " (quick previews)" : "")
+        return String(format: "READS %ld files, %.1f reads/file, %.0f KB/file", perFile.count, Double(totalReads) / n,
+                      Double(totalBytes) / n / 1024)
     }
 }

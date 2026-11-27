@@ -21,6 +21,8 @@ final class PreviewWindow: NSWindowController, NSWindowDelegate {
 
     private let canvas = PreviewCanvas()
     private let info = NSTextField(labelWithString: "")
+    private let decodeButton = NSButton(title: "Decode Full Image", target: nil, action: nil)
+    private var requestToken = 0
     private var quickLook: QLPreviewView?
     private weak var source: BrowserWindowController?
     private var entry: FileEntry?
@@ -45,13 +47,24 @@ final class PreviewWindow: NSWindowController, NSWindowDelegate {
         info.lineBreakMode = .byTruncatingMiddle
         info.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(info)
+        decodeButton.bezelStyle = .rounded
+        decodeButton.controlSize = .small
+        decodeButton.font = NSFont.systemFont(ofSize: 11)
+        decodeButton.target = self
+        decodeButton.action = #selector(decodeFull(_:))
+        decodeButton.isHidden = true
+        decodeButton.toolTip = "Decode the RAW itself (reads the whole file): the camera's full resolution"
+        decodeButton.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(decodeButton)
         NSLayoutConstraint.activate([
+            decodeButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -8),
+            decodeButton.centerYAnchor.constraint(equalTo: info.centerYAnchor),
             canvas.topAnchor.constraint(equalTo: content.topAnchor),
             canvas.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             canvas.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             canvas.bottomAnchor.constraint(equalTo: info.topAnchor, constant: -4),
             info.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 10),
-            info.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -10),
+            info.trailingAnchor.constraint(lessThanOrEqualTo: decodeButton.leadingAnchor, constant: -8),
             info.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -6),
         ])
         w.contentView = content
@@ -86,13 +99,18 @@ final class PreviewWindow: NSWindowController, NSWindowDelegate {
                 showQuickLook(e)
             } else {
                 hideQuickLook()
-                // Neighbours are prefetched - but not PSD/TIFF composites (hundreds of MB each).
+                refresh()                                   // what is in memory shows at once
+                // Reads wait until the selection rests (Settings > Preview delay): arrowing past
+                // shots at key-repeat speed queues nothing in front of the one you stop on.
+                requestToken += 1
+                let token = requestToken
                 let pre = neighbours.filter { let r = Thumbnails.route($0.ext); return r != .other && r != .layered }
-                Previews.shared.request([e] + pre, px: screenPixels)
-                // The final size (for Z): at once normally; with Quick previews only on zoom.
-                if !FileReads.quick { Previews.shared.probeSize(e) }
-                if canvas.wantsFull { loadFull() }
-                refresh()
+                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(FileReads.previewDelayMs)) { [weak self] in
+                    guard let me = self, me.requestToken == token, me.entry?.path == e.path else { return }
+                    // Neighbours are prefetched - but not PSD/TIFF composites (hundreds of MB each).
+                    Previews.shared.request([e] + pre, px: me.screenPixels, probe: true)
+                    if me.canvas.wantsFull { me.loadFull() }
+                }
             }
             window?.title = e.name
             if !isOpen { showWindow(nil) }
@@ -103,13 +121,41 @@ final class PreviewWindow: NSWindowController, NSWindowDelegate {
 
     private func loadFull() {
         guard let e = entry, Thumbnails.route(e.ext) != .other else { return }
-        Previews.shared.probeSize(e)
-        Previews.shared.request([e], px: Previews.full)
+        Previews.shared.request([e], px: Previews.full, probe: true)
+    }
+
+    /// The button: the RAW itself decoded (expensive: the whole file), at the sensor's size.
+    @objc private func decodeFull(_ sender: Any?) {
+        guard let e = entry else { return }
+        decodeButton.isEnabled = false
+        decodeButton.title = "Decoding..."
+        Log.info("preview: full RAW decode asked for \(e.name)")
+        Previews.shared.request([e], px: Previews.rawDecode)
     }
 
     private func refresh() {
         guard let e = entry, quickLook?.isHidden ?? true else { return }
-        if let s = Previews.shared.knownSize(e) { canvas.setFinalSize(s) }
+        let sizes = Previews.shared.knownSizes(e)
+        if let d = Previews.shared.cached(e, px: Previews.rawDecode) {
+            canvas.setFinalSize(CGSize(width: d.image.width, height: d.image.height))
+            canvas.setImage(d.image, isFull: true)
+            lastMethod = "full RAW decode, \(Int(d.ms)) ms"
+            decodeButton.isHidden = true
+            updateInfo()
+            return
+        }
+        if let s = sizes { canvas.setFinalSize(s.picture) }
+        // The camera's real resolution is bigger than any preview inside the file: say so, and
+        // offer the (expensive) real decode.
+        if let real = sizes?.image {
+            decodeButton.isHidden = false
+            decodeButton.isEnabled = true
+            decodeButton.title = "Decode Full Image"
+            imageNote = "largest embedded preview \(Int(sizes!.picture.width)) x \(Int(sizes!.picture.height)) is smaller than the image \(Int(real.width)) x \(Int(real.height))"
+        } else {
+            decodeButton.isHidden = true
+            imageNote = ""
+        }
         if let f = Previews.shared.cached(e, px: Previews.full) {
             canvas.setImage(f.image, isFull: true)
             lastMethod = "\(f.method), \(Int(f.ms)) ms (full size)"
@@ -126,6 +172,7 @@ final class PreviewWindow: NSWindowController, NSWindowDelegate {
     }
 
     private var lastMethod = ""
+    private var imageNote = ""
     /// Ratings/colour of the row (set by the browser from the label cache).
     var labelsShown: ImageLabels? { didSet { updateInfo() } }
 
@@ -141,6 +188,7 @@ final class PreviewWindow: NSWindowController, NSWindowDelegate {
             labels = (l.rating < 0 ? "reject" : String(repeating: "\u{2605}", count: l.rating)) + (l.colorClass > 0 ? "  " + XMPReader.colorNames[l.colorClass] : "")
         }
         info.stringValue = "\(e.name)   \(labels)   \(canvas.zoomLabel)   \(canvas.pixelsLabel)   \(size)   \(lastMethod)"
+            + (imageNote.isEmpty ? "" : "   - " + imageNote)
     }
 
     // MARK: Quick Look inside the window (non-image files)
@@ -199,6 +247,7 @@ final class PreviewWindow: NSWindowController, NSWindowDelegate {
         entry = nil
         canvas.clear()
         hideQuickLook()
+        decodeButton.isHidden = true
     }
 }
 
@@ -321,7 +370,13 @@ final class PreviewCanvas: NSView {
     override func layout() { super.layout(); realize() }
     override func setFrameSize(_ newSize: NSSize) { super.setFrameSize(newSize); realize() }
 
+    /// The pan of the last zoomed-in view: Z out to glance at the whole shot, Z in again and
+    /// you are back on the same detail (PhotoLab 1).
+    private var savedPan: (CGFloat, CGFloat) = (0, 0)
+
     private func setIntent(_ i: Intent) {
+        if intent != .fit && i == .fit { savedPan = (panX, panY) }
+        if intent == .fit && i != .fit { (panX, panY) = savedPan }
         intent = i
         if i == .fit { panX = 0; panY = 0 }
         realize()
