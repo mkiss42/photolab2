@@ -369,7 +369,8 @@ final class FileTableView: NSOutlineView {
             lastTyped = Date()
         }
         switch event.keyCode {
-        case 49: // Space: preview, as in Finder
+        case 49: // Space: preview, as in Finder - unless a name is being typed (PhotoLab: "DSC 0" works)
+            if Date().timeIntervalSince(lastTyped) < 1.0 && flags.isEmpty { lastTyped = Date(); break }
             if flags.isEmpty || flags == .shift { onSpace?(); return }
             if flags == .option { onOptionSpace?(); return }
         case 48: // Tab: other pane

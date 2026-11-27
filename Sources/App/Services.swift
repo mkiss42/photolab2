@@ -291,10 +291,14 @@ final class IconCache {
 final class TagCache {
     static let shared = TagCache()
     private var cache: [String: [Int]] = [:]
+    /// PhotoLab: each cached item's change time (ctime) when its tags were read - writing a tag moves it.
+    private var ctimes: [String: Double] = [:]
     private var queued = Set<String>()
     private var waiting: [String] = []
     private var running = false
+    private var rechecking = Set<String>()   // volume roots with a light check under way
     private let queue = DispatchQueue(label: "find.tags", qos: .userInitiated)
+    private let checkQueue = DispatchQueue(label: "photolab.tags.check", qos: .utility)
     var onUpdate: (([String]) -> Void)? = { paths in
         NotificationCenter.default.post(name: .findTagsRead, object: nil, userInfo: ["paths": paths])
     }
@@ -324,17 +328,24 @@ final class TagCache {
         let batch = Array(waiting.prefix(64))
         waiting.removeFirst(batch.count)
         queue.async { [weak self] in
-            var got: [(String, [Int])] = []
-            for p in batch { got.append((p, FinderTags.colorIndexes(p))) }
+            var got: [(String, [Int], Double?)] = []
+            var e: Int32 = 0
+            for p in batch {
+                let ct = Sys.lstatInfo(p, &e)?.changed   // before the read: a change meanwhile is seen next time
+                got.append((p, FinderTags.colorIndexes(p), ct))
+            }
             DispatchQueue.main.async {
                 guard let s = self else { return }
                 var changed: [String] = []
-                for (p, c) in got {
+                for (p, c, ct) in got {
                     s.queued.remove(p)
+                    let old = s.cache[p]
                     s.cache[p] = c
-                    if !c.isEmpty { changed.append(p) }
+                    s.ctimes[p] = ct
+                    // PhotoLab: a removed tag is a change too (Find only reported items with tags).
+                    if old.map({ $0 != c }) ?? !c.isEmpty { changed.append(p) }
                 }
-                if s.cache.count > 20_000 { s.cache.removeAll() }
+                if s.cache.count > 20_000 { s.cache.removeAll(); s.ctimes.removeAll() }
                 s.running = false
                 if !changed.isEmpty { s.onUpdate?(changed) }
                 s.pump()
@@ -342,12 +353,94 @@ final class TagCache {
         }
     }
 
+    /// PhotoLab: these changed on disk (FSEvents): read the known ones again; the rows update when the
+    /// new tags differ. Main thread.
+    func reread(_ paths: [String]) {
+        for p in paths where cache[p] != nil && !queued.contains(p) {
+            queued.insert(p)
+            waiting.append(p)
+        }
+        pump()
+    }
+
+    /// PhotoLab: the light check for shares (macOS does not report other Macs' changes there): one
+    /// lstat per row on screen, usually answered from the SMB client's attribute cache, and a tag
+    /// read only where the change time moved. Skipped while the previous check of that volume runs.
+    func recheck(_ paths: [String]) {
+        let known = paths.filter { cache[$0] != nil && !queued.contains($0) }
+        guard let first = known.first else { return }
+        let root = VolumeRegistry.volumeRoot(first)
+        if rechecking.contains(root) { return }
+        rechecking.insert(root)
+        let before = known.map { ($0, ctimes[$0]) }
+        checkQueue.async { [weak self] in
+            var moved: [String] = []
+            var e: Int32 = 0
+            for (p, ct) in before {
+                let now = Sys.lstatInfo(p, &e)?.changed
+                if now != ct { moved.append(p) }
+            }
+            DispatchQueue.main.async {
+                guard let s = self else { return }
+                s.rechecking.remove(root)
+                if !moved.isEmpty { s.reread(moved) }
+            }
+        }
+    }
+
     func forget(_ paths: [String]) {
-        for p in paths { cache[p] = nil }
+        for p in paths { cache[p] = nil; ctimes[p] = nil }
     }
 
     func clear() {
         cache.removeAll()
+        ctimes.removeAll()
+    }
+}
+
+/// PhotoLab (from PhotoLab 2): FSEvents for the folders on screen - reports tag (xattr) changes made on
+/// this Mac, on local disks and on shares, with no polling. macOS does not report changes made by
+/// other Macs on a share; TagCache.recheck (rows on screen, every 5 s) covers those.
+final class TagWatcher {
+    static let shared = TagWatcher()
+    private var stream: FSEventStreamRef?
+    private var folders: [ObjectIdentifier: String] = [:]
+    private var current = Set<String>()
+    private let queue = DispatchQueue(label: "photolab.fsevents", qos: .utility)
+
+    /// Main thread. One folder per list (FSEvents covers its subfolders too).
+    func watch(owner: AnyObject, folder: String?) {
+        folders[ObjectIdentifier(owner)] = folder
+        let all = Set(folders.values)
+        if all != current { current = all; restart() }
+    }
+
+    fileprivate func changed(_ paths: [String]) {
+        DispatchQueue.main.async { TagCache.shared.reread(paths) }
+    }
+
+    private func restart() {
+        if let s = stream { FSEventStreamStop(s); FSEventStreamInvalidate(s); FSEventStreamRelease(s); stream = nil }
+        guard !current.isEmpty else { return }
+        var ctx = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(), retain: nil, release: nil, copyDescription: nil)
+        let cb: FSEventStreamCallback = { _, info, count, paths, flags, _ in
+            guard let info = info else { return }
+            let me = Unmanaged<TagWatcher>.fromOpaque(info).takeUnretainedValue()
+            guard let arr = Unmanaged<CFArray>.fromOpaque(paths).takeUnretainedValue() as? [String] else { return }
+            let mask = UInt32(kFSEventStreamEventFlagItemXattrMod) | UInt32(kFSEventStreamEventFlagItemInodeMetaMod)
+            var hit: [String] = []
+            for i in 0..<min(count, arr.count) where flags[i] & mask != 0 { hit.append(arr[i]) }
+            if !hit.isEmpty { me.changed(hit) }
+        }
+        let createFlags = UInt32(kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer)
+        guard let s = FSEventStreamCreate(kCFAllocatorDefault, cb, &ctx, Array(current) as CFArray,
+                                          FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.3, createFlags) else {
+            App.log.warn("W-TAG-1 FSEvents stream not created for \(current.count) folder(s); tags update on refresh")
+            return
+        }
+        FSEventStreamSetDispatchQueue(s, queue)
+        FSEventStreamStart(s)
+        stream = s
     }
 }
 

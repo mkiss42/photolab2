@@ -106,6 +106,21 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     private var tagObserver: NSObjectProtocol?
 
     /// Colour tags arrived for some paths: redraw just those visible rows' names.
+    private var tagCheckTimer: Timer?
+
+    /// Shares only (local changes come from FSEvents), only while the window is on screen.
+    private func checkVisibleTags() {
+        guard let w = table.window, w.isVisible, w.occlusionState.contains(.visible), !loading,
+            IOLog.isNetworkPath(path) else { return }
+        let visible = table.rows(in: table.visibleRect)
+        if visible.length <= 0 { return }
+        var paths: [String] = []
+        for r in visible.location..<(visible.location + visible.length) {
+            if let n = table.item(atRow: r) as? FileNode { paths.append(n.path) }
+        }
+        TagCache.shared.recheck(paths)
+    }
+
     private func tagsRead(_ paths: Set<String>) {
         let visible = table.rows(in: table.visibleRect)
         if visible.length <= 0 { return }
@@ -173,6 +188,8 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         sizeGeneration.value += 1
         stopWatching()
         if let o = tagObserver { NotificationCenter.default.removeObserver(o); tagObserver = nil }
+        tagCheckTimer?.invalidate(); tagCheckTimer = nil
+        TagWatcher.shared.watch(owner: self, folder: nil)
         onRootsChanged = nil; onLoaded = nil; onSelectionChanged = nil; onRowsChanged = nil; onOpen = nil; onFolderGone = nil
         onDrop = nil; onBackgroundCheck = nil; holdReloads = nil
         let old = roots + retired.flatMap { $0 }
@@ -255,6 +272,8 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
             guard let s = self, let paths = n.userInfo?["paths"] as? [String] else { return }
             s.tagsRead(Set(paths))
         }
+        // PhotoLab: tags changed by other Macs on a share - a light check of the rows on screen every 5 s.
+        tagCheckTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.checkVisibleTags() }
         quickLook.table = table
         quickLook.selection = { [weak self] in return self?.selectedPaths() ?? [] }
         table.onSpace = { [weak self] in self?.previewSelection() }
@@ -441,6 +460,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         let samePath = newPath == path
         path = newPath
         loading = true
+        TagWatcher.shared.watch(owner: self, folder: newPath)
         if !samePath {
             retire(roots)
             roots = []
@@ -1243,6 +1263,48 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
                                  columnIndexes: IndexSet(integer: ci))
             }
         }
+    }
+
+    /// PhotoLab (from PhotoLab 1/2): pressing the same letter again goes to the next name starting with
+    /// it ("ccc" = third "c..."), and a name that matches nothing goes to the nearest one (the last
+    /// name sorting before it), instead of doing nothing.
+    func outlineView(_ outlineView: NSOutlineView, nextTypeSelectMatchFromItem startItem: Any, toItem endItem: Any, for searchString: String) -> Any? {
+        let count = outlineView.numberOfRows
+        guard count > 0, !searchString.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        func name(_ r: Int) -> String? { return (outlineView.item(atRow: r) as? FileNode)?.entry.name }
+        func starts(_ r: Int, _ s: String) -> Bool {
+            return name(r)?.range(of: s, options: [.caseInsensitive, .diacriticInsensitive, .anchored]) != nil
+        }
+        let chars = Array(searchString)
+        if chars.count > 1, Set(chars).count == 1 {
+            let letter = String(chars[0])
+            let from = outlineView.selectedRow
+            for i in 1...count {
+                let r = ((from < 0 ? -1 : from) + i) % count
+                if starts(r, letter) { return outlineView.item(atRow: r) }
+            }
+            return nil
+        }
+        var r = outlineView.row(forItem: startItem)
+        let end = outlineView.row(forItem: endItem)
+        if r < 0 { r = 0 }
+        for _ in 0..<count {
+            if starts(r, searchString) { return outlineView.item(atRow: r) }
+            r = (r + 1) % count
+            if r == end { break }
+        }
+        var best: (row: Int, name: String)?
+        var first: (row: Int, name: String)?
+        for i in 0..<count {
+            guard let nm = name(i) else { continue }
+            if nm.localizedStandardCompare(searchString) == .orderedAscending {
+                if best == nil || nm.localizedStandardCompare(best!.name) == .orderedDescending { best = (i, nm) }
+            } else if first == nil || nm.localizedStandardCompare(first!.name) == .orderedAscending {
+                first = (i, nm)
+            }
+        }
+        if let b = best ?? first { return outlineView.item(atRow: b.row) }
+        return nil
     }
 
     func outlineView(_ outlineView: NSOutlineView, typeSelectStringFor tableColumn: NSTableColumn?, item: Any) -> String? {

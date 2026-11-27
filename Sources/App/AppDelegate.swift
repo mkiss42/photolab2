@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         Prefs.registerDefaults()
         App.start()
+        StatusMenu.shared = StatusMenu()   // PhotoLab: the menu bar icon
         // 0.17.1: keep what happened if Find ever stops unexpectedly; offer last time's report.
         let pending = Paths.join(App.files.logsDir, "crash-pending.txt")
         let lastCrash = (FileManager.default.contents(atPath: pending)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
@@ -184,6 +185,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let p = Prefs.maintenancePolicy
         guard App.maintenance.isDue(p) else { return }
         DispatchQueue.global(qos: .utility).async { _ = App.maintenance.cleanUp(p, trigger: "scheduled (every \(p.everyHours) h)") }
+    }
+
+    /// PhotoLab: the browser windows (for the menu bar icon).
+    var windowControllers: [BrowserWindowController] { return controllers }
+
+    /// PhotoLab: items dropped on the Dock icon or opened with PhotoLab. A folder opens in a new
+    /// window; a file opens its folder with the file selected. List or contact sheet: the menu bar
+    /// icon's setting. Which is which is asked off the main thread (the item may be on a share).
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        sender.reply(toOpenOrPrint: .success)
+        DispatchQueue.global(qos: .userInitiated).async {
+            var e: Int32 = 0
+            let kinds = filenames.map { ($0, Sys.statInfo($0, &e)?.isDirectory ?? false) }
+            DispatchQueue.main.async {
+                var byFolder: [String: [String]] = [:]
+                var order: [String] = []
+                for (p, isDir) in kinds {
+                    let folder = isDir ? p : Paths.parent(p)
+                    if byFolder[folder] == nil { order.append(folder); byFolder[folder] = [] }
+                    if !isDir { byFolder[folder]?.append(Paths.lastComponent(p)) }
+                }
+                for f in order.prefix(8) {
+                    let c = self.newWindow(path: f)
+                    if StatusMenu.dropOpens == "photo" { c.pane.restoreViewMode("photo") }
+                    if let sel = byFolder[f], !sel.isEmpty { c.pane.navigate(to: f, select: sel, addHistory: false) }
+                    App.log.info("Opened from the Dock / Open With: \(f)")
+                }
+            }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

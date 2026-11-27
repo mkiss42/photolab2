@@ -133,7 +133,31 @@ final class ThumbnailGrid: NSView {
     // MARK: Content
 
     /// The pane is closing (0.17.1): stop the thumbnail reads and every callback into the pane.
+    // PhotoLab: live Finder tags in the contact sheet (FSEvents + the 5 s light check on shares).
+    private var tagObs: NSObjectProtocol?
+    private var tagTimer: Timer?
+
+    private func watchTags() {
+        if tagObs != nil { return }
+        tagObs = NotificationCenter.default.addObserver(forName: .findTagsRead, object: nil, queue: .main) { [weak self] n in
+            guard let s = self, let paths = n.userInfo?["paths"] as? [String] else { return }
+            for p in paths { if let i = s.indexByPath[p], i < s.entries.count { s.setNeedsDisplay(s.rect(of: i)) } }
+        }
+        tagTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            guard let s = self, let w = s.window, w.isVisible, w.occlusionState.contains(.visible),
+                let first = s.entries.first, IOLog.isNetworkPath(first.path) else { return }
+            let vis = s.visibleRect
+            let c = s.columns
+            let firstRow = max(0, Int((vis.minY - s.pad) / (s.cellHeight + s.pad)))
+            let lastRow = Int((vis.maxY - s.pad) / (s.cellHeight + s.pad))
+            let from = min(s.entries.count, firstRow * c), to = min(s.entries.count, (lastRow + 1) * c)
+            if from < to { TagCache.shared.recheck(s.entries[from..<to].map { $0.path }) }
+        }
+    }
+
     func shutdown() {
+        if let o = tagObs { NotificationCenter.default.removeObserver(o); tagObs = nil }
+        tagTimer?.invalidate(); tagTimer = nil
         queue.cancelAllOperations()
         onSelectionChanged = nil; onOpen = nil; onSpace = nil; onOptionSpace = nil; onEscape = nil
         onTab = nil; onFocus = nil; onOptionClick = nil; onRename = nil
@@ -143,6 +167,7 @@ final class ThumbnailGrid: NSView {
     }
 
     func setEntries(_ list0: [FileEntry], selected: [String]) {
+        watchTags()
         // 0.18.14: a share's listing taken while files are renamed can name a file twice: shown once.
         var seen = Set<String>()
         let list = list0.filter { seen.insert($0.path).inserted }
