@@ -281,7 +281,7 @@ enum EmbeddedPreview {
     // MARK: Choosing and reading the JPEG
 
     private static func pick(_ r: BlockReader, _ cands: [Candidate], minSide: Int) -> Data? {
-        let ok = cands.filter { $0.length > 2048 && $0.offset > 0 && $0.offset + Int64($0.length) <= r.size }
+        let ok = cands.filter { $0.length > 512 && $0.offset > 0 && $0.offset + Int64($0.length) <= r.size }
         var best: (Candidate, Int)?
         for c in ok.sorted(by: { $0.length < $1.length }) {
             guard let start = r.read(c.offset, min(c.length, 64 << 10)), start.count > 4, start[0] == 0xFF, start[1] == 0xD8 else { continue }
