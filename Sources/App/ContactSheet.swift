@@ -396,6 +396,24 @@ final class ContactSheetView: NSView, NSDraggingSource {
         onSelectionChange?()
     }
 
+    /// Arrow keys in the preview: the next/previous tile.
+    func step(_ d: Int) {
+        guard !items.isEmpty else { return }
+        let n = max(0, min(items.count - 1, (cursor ?? -1) + d))
+        anchor = n
+        select([n], cursor: n)
+    }
+
+    func neighbours(of path: String, before: Int, after: Int) -> [FileEntry] {
+        guard let at = items.firstIndex(where: { $0.entry.path == path }) else { return [] }
+        let files = { (r: Range<Int>) in r.map { self.items[$0] }.filter { !$0.isFolder }.map { self.picture($0) } }
+        return files(min(items.count, at + 1)..<min(items.count, at + 1 + after)) + files(max(0, at - before)..<at).reversed()
+    }
+
+    func picture(_ it: SheetItem) -> FileEntry {
+        return it.members.first { ["jpg", "jpeg", "heic", "heif"].contains($0.ext) } ?? it.entry
+    }
+
     override func selectAll(_ sender: Any?) { select(Set(items.indices), cursor: cursor) }
 
     override func mouseDown(with event: NSEvent) {

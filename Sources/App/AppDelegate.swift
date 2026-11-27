@@ -222,6 +222,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let view = submenu(main, "View")
         item(view, "Show Sidebar", #selector(toggleSidebarMenu(_:)), "s", [.command, .option], target: self)
         view.addItem(NSMenuItem.separator())
+        item(view, "Quick Look", #selector(BrowserWindowController.toggleQuickLook(_:)), "y")
+        view.addItem(NSMenuItem.separator())
         item(view, "as List", #selector(BrowserWindowController.showAsList(_:)), "1")
         item(view, "as Contact Sheet", #selector(BrowserWindowController.showAsSheet(_:)), "2")
         view.addItem(NSMenuItem.separator())

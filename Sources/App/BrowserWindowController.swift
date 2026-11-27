@@ -4,6 +4,7 @@
 // navigation cancels the older listing (generation counter).
 
 import AppKit
+import Quartz
 
 final class Generation {
     private let lock = NSLock()
@@ -18,7 +19,8 @@ extension Notification.Name {
     static let layoutSettingsChanged = Notification.Name("PhotoLabLayoutSettingsChanged")
 }
 
-final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation, NSSplitViewDelegate, NSSearchFieldDelegate {
+final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation, NSSplitViewDelegate, NSSearchFieldDelegate,
+    QLPreviewPanelDataSource, QLPreviewPanelDelegate {
     static var open: [BrowserWindowController] = []
     static var brainText = "Brain: not started"
 
@@ -202,7 +204,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         list.onOpen = { [weak self] sel in self?.open(sel) }
         list.onOpenInNewWindow = { e in BrowserWindowController.openWindow(at: e.path) }
         list.onTagPick = { [weak self] c in self?.pickTag(c) }
-        list.onSelectionChange = { [weak self] in self?.updateStatus() }
+        list.onSelectionChange = { [weak self] in self?.updateStatus(); self?.followInPreview() }
         list.onNeedChildren = { [weak self] p in self?.loadChildren(p) }
         list.onRenameRequest = { [weak self] in self?.renameSelected(nil) }
         list.onTrashRequest = { [weak self] in self?.moveToTrash(nil) }
@@ -217,7 +219,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         g.onTrash = { [weak self] in self?.moveToTrash(nil) }
         g.onRename = { [weak self] in self?.renameSelected(nil) }
         g.onSpace = { [weak self] in self?.spacePressed() }
-        g.onSelectionChange = { [weak self] in self?.updateStatus() }
+        g.onSelectionChange = { [weak self] in self?.updateStatus(); self?.followInPreview() }
         g.onDrop = { [weak self] paths, dest, kind in TransferController.shared.start(paths, to: dest, kind: kind, from: self) }
         g.onMenu = { [weak self] in self?.sheetMenu() }
         g.onThumbProgress = { [weak self] done, total in
@@ -667,10 +669,63 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             let c = BrowserWindowController.openWindow(at: e.path)
             c.setMode(.sheet, remember: false)
             c.window?.makeKeyAndOrderFront(nil)
-        } else {
-            NSSound.beep()
+            return
         }
+        guard let e = s.first else { NSSound.beep(); return }
+        if PreviewWindow.shared.isOpen { PreviewWindow.shared.close(); return }
+        let pic = pictureEntry(e)
+        if Thumbnails.route(pic.ext) == .other { toggleQuickLook(nil); return }     // PDF, video...: Quick Look
+        PreviewWindow.shared.show(pic, neighbours: neighbours(of: e), from: self)
     }
+
+    // MARK: Preview / Quick Look
+
+    private func pictureEntry(_ e: FileEntry) -> FileEntry {
+        if mode == .sheet, let it = sheet.grid.items.first(where: { $0.entry.path == e.path }) { return sheet.grid.picture(it) }
+        return list.pictureEntry(e)
+    }
+
+    private func neighbours(of e: FileEntry) -> [FileEntry] {
+        return mode == .sheet ? sheet.grid.neighbours(of: e.path, before: 1, after: 2) : list.neighbours(of: e, before: 1, after: 2).map { list.pictureEntry($0) }
+    }
+
+    /// The selection moved while the preview is open for this window: it follows.
+    private func followInPreview() {
+        guard PreviewWindow.shared.isOpen, let e = selection().first, !e.isDirectory || e.isPackage else { return }
+        let pic = pictureEntry(e)
+        guard Thumbnails.route(pic.ext) != .other else { return }
+        PreviewWindow.shared.show(pic, neighbours: neighbours(of: e), from: self)
+    }
+
+    func previewStep(_ d: Int) {
+        if mode == .sheet { sheet.grid.step(d) } else { list.step(d) }
+    }
+
+    /// Cmd-Y: Quick Look for the selection (any file type macOS can show).
+    @objc func toggleQuickLook(_ sender: Any?) {
+        guard let p = QLPreviewPanel.shared() else { return }
+        if QLPreviewPanel.sharedPreviewPanelExists() && p.isVisible { p.orderOut(nil) } else { p.makeKeyAndOrderFront(nil) }
+    }
+
+    private var qlItems: [URL] = []
+
+    override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { return true }
+
+    override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        let sel = selection()
+        qlItems = sel.map { URL(fileURLWithPath: pictureEntry($0).path, isDirectory: $0.isDirectory) }
+        panel.dataSource = self
+        panel.delegate = self
+        panel.reloadData()
+    }
+
+    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        panel.dataSource = nil
+        panel.delegate = nil
+    }
+
+    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int { return qlItems.count }
+    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! { return qlItems[index] as NSURL }
 
     /// Right-click in the contact sheet: the list's file items (tags stay in the list for now).
     private func sheetMenu() -> NSMenu {

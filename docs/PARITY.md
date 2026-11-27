@@ -67,11 +67,11 @@ Status: **done** · **part** (exists, something missing) · **todo** (phase in b
 
 | PhotoLab 1 | Status | Notes |
 |---|---|---|
-| Fast preview window following the focused item (tree or sheet), arrow navigation | todo (2) | Find-style FastPreview |
+| Fast preview window following the focused item (tree or sheet), arrow navigation | done (0.8.0) | |
 | Tiers: thumb -> embedded JPEG -> viewport -> largest embedded -> full decode | todo (2) | ImageIO; no subprocess pools |
 | Zoom (Z), 1:1 | todo (2) | |
 | Decode Raw button / full raw decode setting | todo (2) | CoreImage RAW; brain rawpy only if needed |
-| Prefetch neighbours | todo (2) | |
+| Prefetch neighbours | done (0.8.0) | next 2, previous 1 |
 
 ## Backend (audited: service_registry.py, asset_sync.py, volumes.py, server_mode.py, ingest_service.py)
 

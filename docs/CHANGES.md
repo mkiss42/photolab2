@@ -1,5 +1,25 @@
 # Changes
 
+## 0.8.0 — preview and Quick Look
+
+- Space on a file (list or contact sheet) opens the preview window; Space again (or Esc) closes
+  it. It follows the selection of the window it came from - arrow keys in the browser or in
+  the preview step through the folder. A set shows its JPG.
+- The preview shows the tile's thumbnail at once, then a screen-size picture: RAW = the smallest
+  embedded JPEG that covers your screen (our reader), camera JPEG = its preview if big enough,
+  else a reduced-size decode. The next two and the previous file are prefetched, so stepping
+  is quick. The bottom line shows the size shown, the method and the time it took.
+- PDFs, videos and other non-image files open in Quick Look on Space. Cmd-Y (View > Quick Look)
+  opens Quick Look for any selection.
+- Short Report: "preview <type>/<method>" lines next to the thumbnails.
+
+Test checklist (4 minutes):
+[ ] 1  Space on a NEF in the sheet: preview appears, sharp after a moment; arrows step, quick.
+[ ] 2  Space on a PDF or video: Quick Look.
+[ ] 3  Cmd-Y on any file: Quick Look; Space or Esc closes the preview.
+[ ] 4  Short Report: the "preview" THUMBS lines.
+
+
 ## 0.7.4 — fast PSD thumbnails
 
 - PSD/PSB: the thumbnail Photoshop saves in every file (image resource 1036) is read directly

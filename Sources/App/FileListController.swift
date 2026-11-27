@@ -623,6 +623,43 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     var selectionCount: Int { return selectedEntries().count }
 
+    // MARK: Preview support
+
+    /// The file the preview should show for a row: a set's JPG/HEIC, else the file.
+    func pictureEntry(_ e: FileEntry) -> FileEntry {
+        for r in 0..<table.numberOfRows {
+            guard let n = table.item(atRow: r) as? FileNode, n.entry.path == e.path else { continue }
+            return n.members.first { ["jpg", "jpeg", "heic", "heif"].contains($0.ext) } ?? e
+        }
+        return e
+    }
+
+    /// Files around the selected row (for prefetching), nearest first.
+    func neighbours(of e: FileEntry, before: Int, after: Int) -> [FileEntry] {
+        var rows: [FileEntry] = []
+        var at = -1
+        for r in 0..<table.numberOfRows {
+            guard let n = table.item(atRow: r) as? FileNode, !n.isPlaceholder, !n.isExpandableFolder else { continue }
+            if n.entry.path == e.path { at = rows.count }
+            rows.append(n.entry)
+        }
+        guard at >= 0 else { return [] }
+        let next = rows[min(rows.count, at + 1)..<min(rows.count, at + 1 + after)]
+        let prev = rows[max(0, at - before)..<at]
+        return Array(next) + Array(prev.reversed())
+    }
+
+    /// Arrow keys in the preview: the next/previous row.
+    func step(_ d: Int) {
+        let n = table.numberOfRows
+        guard n > 0 else { return }
+        var r = table.selectedRow < 0 ? 0 : table.selectedRow + d
+        while r >= 0, r < n, (table.item(atRow: r) as? FileNode)?.isPlaceholder ?? true { r += d }
+        guard r >= 0, r < n else { return }
+        table.selectRowIndexes(IndexSet(integer: r), byExtendingSelection: false)
+        table.scrollRowToVisible(r)
+    }
+
     /// Rows on screen (expanded folders included) and how many of them are sets.
     var shownCounts: (rows: Int, sets: Int, total: Int) {
         var rows = 0, sets = 0, total = 0
