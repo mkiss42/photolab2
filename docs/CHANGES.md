@@ -1,5 +1,24 @@
 # Changes
 
+## 0.9.0 — stars and colour classes shown (reading)
+
+- The contact sheet shows each file's colour class (a coloured dot) and stars (an x for a
+  reject) under its name. Read by PhotoLab itself, no ExifTool: a set with an .xmp sidecar
+  from the sidecar, otherwise from the XMP inside the file (JPEG, TIFF-based RAWs/DNG/TIFF,
+  CR3, PSD, PNG) near its start. Fields as in PhotoLab 1: xmp:Rating, XMP:ColorClass
+  (Photo Mechanic) as the master; xmp:Label is only read when there is no ColorClass.
+- Tiles on screen first, then the whole folder in the background; the status bar shows
+  "Thumbnails n/N   Metadata n/N" while loading (like PhotoLab 1).
+- The preview's bottom line shows the stars and colour name.
+- Writing (setting stars/colours with keys and clicks, ColorClass + Label kept in step) is the
+  next release.
+
+Test checklist (3 minutes):
+[ ] 1  A folder rated/labelled in Photo Mechanic: the same stars and colours on the tiles.
+[ ] 2  A RAW+XMP set and a JPEG rated in Bridge/Lightroom (Label only): colour shown.
+[ ] 3  Big folder: "Metadata n/N" counts up and disappears.
+
+
 ## 0.8.2 — zoom to the final size, one preview for everything
 
 - The preview reads the size the full picture will have from the file's header when a shot

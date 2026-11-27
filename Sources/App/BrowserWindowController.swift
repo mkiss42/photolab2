@@ -51,6 +51,16 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private let modeControl = NSSegmentedControl()
     private let sizeSlider = NSSlider()
     private let thumbLabel = NSTextField(labelWithString: "")
+    private var thumbProgress = (0, 0), labelProgress = (0, 0)
+
+    /// "Thumbnails 340/826  Metadata 120/826" while the sheet is still loading (PhotoLab 1).
+    private func updateLoadProgress() {
+        var parts: [String] = []
+        if thumbProgress.1 > 0 && thumbProgress.0 < thumbProgress.1 { parts.append("Thumbnails \(thumbProgress.0)/\(thumbProgress.1)") }
+        if labelProgress.1 > 0 && labelProgress.0 < labelProgress.1 { parts.append("Metadata \(labelProgress.0)/\(labelProgress.1)") }
+        thumbLabel.stringValue = parts.joined(separator: "   ")
+        thumbLabel.isHidden = mode != .sheet || parts.isEmpty
+    }
 
     // The selection, whichever view shows the folder.
     private func selection() -> [FileEntry] { return mode == .sheet ? sheet.selectedEntries() : list.selectedEntries() }
@@ -223,9 +233,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         g.onDrop = { [weak self] paths, dest, kind in TransferController.shared.start(paths, to: dest, kind: kind, from: self) }
         g.onMenu = { [weak self] in self?.sheetMenu() }
         g.onThumbProgress = { [weak self] done, total in
-            guard let me = self else { return }
-            me.thumbLabel.stringValue = "Thumbnails \(done)/\(total)"
-            me.thumbLabel.isHidden = me.mode != .sheet || total == 0 || done >= total
+            self?.thumbProgress = (done, total)
+            self?.updateLoadProgress()
+        }
+        g.onLabelProgress = { [weak self] done, total in
+            self?.labelProgress = (done, total)
+            self?.updateLoadProgress()
         }
         list.showHidden = BrowserWindowController.showHidden
         list.foldersOnly = BrowserWindowController.foldersOnly
@@ -676,9 +689,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         // Everything opens in the preview: images in its viewer, PDFs and documents in the Quick
         // Look view inside it - one window to arrow through a mixed folder.
         PreviewWindow.shared.show(pictureEntry(e), neighbours: neighbours(of: e), from: self)
+        PreviewWindow.shared.labelsShown = labels(of: e)
     }
 
     // MARK: Preview / Quick Look
+
+    private func labels(of e: FileEntry) -> ImageLabels? {
+        let members = mode == .sheet ? (sheet.grid.items.first { $0.entry.path == e.path }?.members ?? [e]) : [e]
+        return LabelLoader.shared.cached(LabelLoader.key(e, members))
+    }
 
     private func pictureEntry(_ e: FileEntry) -> FileEntry {
         if mode == .sheet, let it = sheet.grid.items.first(where: { $0.entry.path == e.path }) { return sheet.grid.picture(it) }
@@ -693,6 +712,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private func followInPreview() {
         guard PreviewWindow.shared.isOpen, let e = selection().first else { return }
         PreviewWindow.shared.show(pictureEntry(e), neighbours: neighbours(of: e), from: self)
+        PreviewWindow.shared.labelsShown = labels(of: e)
     }
 
     func previewStep(_ d: Int) {

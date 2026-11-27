@@ -91,6 +91,9 @@ final class ContactSheetController: NSObject {
         nc.addObserver(forName: NSView.frameDidChangeNotification, object: scroll.contentView, queue: .main) { [weak self] _ in
             self?.grid.relayout()
         }
+        nc.addObserver(forName: .labelsReady, object: nil, queue: .main) { [weak self] n in
+            if let p = n.userInfo?["paths"] as? [String] { self?.grid.labelsArrived(p) }
+        }
         nc.addObserver(forName: .thumbnailsReady, object: nil, queue: .main) { [weak self] n in
             if let keys = n.userInfo?["keys"] as? [String] { self?.grid.thumbnailsArrived(keys) }
         }
@@ -138,7 +141,7 @@ final class ContactSheetController: NSObject {
         return (items.count, items.filter { $0.isSet }.count, items.reduce(0) { $0 + max(1, $1.members.count) })
     }
 
-    func stop() { Thumbnails.shared.release(owner: grid) }
+    func stop() { Thumbnails.shared.release(owner: grid); LabelLoader.shared.release(owner: grid) }
 }
 
 final class ContactSheetView: NSView, NSDraggingSource {
@@ -207,6 +210,7 @@ final class ContactSheetView: NSView, NSDraggingSource {
         doneKeys = Set(indexByKey.keys.filter { Thumbnails.shared.image($0) != nil || Thumbnails.shared.hasNoPicture($0) })
         relayout()
         reportProgress()
+        reportLabelProgress()
         if select != nil, let first = selection.min() { scrollToVisible(rect(first)) }
         onSelectionChange?()
     }
@@ -216,7 +220,7 @@ final class ContactSheetView: NSView, NSDraggingSource {
     func relayout() {
         let width = enclosingScrollView?.contentSize.width ?? bounds.width
         cellW = tile + 16
-        cellH = tile + 40
+        cellH = tile + 54
         cols = max(1, Int((width - 8) / cellW))
         marginX = max(4, (width - CGFloat(cols) * cellW) / 2)
         let rows = (items.count + cols - 1) / cols
@@ -285,6 +289,9 @@ final class ContactSheetView: NSView, NSDraggingSource {
             let rest = me.items.indices.filter { !ahead.contains($0) }.sorted { abs($0 - center) < abs($1 - center) }
             Activity.during("sheet: thumbnail request") {
                 Thumbnails.shared.request(order.compactMap { me.items[$0].request }, background: rest.compactMap { me.items[$0].request }, owner: me)
+                // Ratings and colour classes: the same order, all files of the folder.
+                let rows = (order + rest).map { me.items[$0] }.filter { !$0.isFolder }.map { (entry: $0.entry, members: $0.members) }
+                LabelLoader.shared.request(rows, owner: me)
             }
             me.updateTiles()
         }
@@ -297,6 +304,20 @@ final class ContactSheetView: NSView, NSDraggingSource {
         let i = it.isFolder ? NSImage(named: NSImage.folderName) : NSWorkspace.shared.icon(forFileType: k)
         iconCache[k] = i
         return i
+    }
+
+    func labelsArrived(_ paths: [String]) {
+        let set = Set(paths)
+        for (i, t) in tileLayers where i < items.count && set.contains(items[i].entry.path) { configure(t, i, force: false) }
+        reportLabelProgress()
+    }
+
+    var onLabelProgress: ((Int, Int) -> Void)?
+
+    private func reportLabelProgress() {
+        let files = items.filter { !$0.isFolder }
+        let done = files.filter { LabelLoader.shared.cached(LabelLoader.key($0.entry, $0.members)) != nil }.count
+        onLabelProgress?(done, files.count)
     }
 
     func thumbnailsArrived(_ keys: [String]) {
@@ -315,6 +336,32 @@ final class ContactSheetView: NSView, NSDraggingSource {
     }
 
     // MARK: Tiles (layers)
+
+    static func labelColor(_ c: Int) -> NSColor {
+        switch c {
+        case 1: return NSColor.systemRed
+        case 2: return NSColor.systemYellow
+        case 3: return NSColor.systemGreen
+        case 4: return NSColor.systemBlue
+        case 5: return NSColor.systemPurple
+        case 6: return NSColor(calibratedRed: 0.2, green: 0.8, blue: 0.85, alpha: 1)
+        case 7: return NSColor.systemBrown
+        case 8: return NSColor.systemGray
+        default: return NSColor.clear
+        }
+    }
+
+    /// "● ★★★" - colour class dot and stars (an x for a reject).
+    static func labelText(_ l: ImageLabels) -> NSAttributedString {
+        let s = NSMutableAttributedString()
+        let f = NSFont.systemFont(ofSize: 11)
+        if l.colorClass > 0 {
+            s.append(NSAttributedString(string: "\u{25CF} ", attributes: [.foregroundColor: labelColor(l.colorClass).cgColor, .font: f]))
+        }
+        let stars = l.rating < 0 ? "\u{2715}" : String(repeating: "\u{2605}", count: l.rating)
+        s.append(NSAttributedString(string: stars, attributes: [.foregroundColor: NSColor.secondaryLabelColor.cgColor, .font: f]))
+        return s
+    }
 
     private static let nameFont = NSFont.systemFont(ofSize: 11)
     private static let extFont = NSFont.systemFont(ofSize: 9)
@@ -365,6 +412,12 @@ final class ContactSheetView: NSView, NSDraggingSource {
             t.extLayer.string = it.extText
             t.image.contents = nil
             t.shownKey = nil
+            t.shownLabels = nil
+            t.labelLayer.string = nil
+        }
+        if !it.isFolder, let l = LabelLoader.shared.cached(LabelLoader.key(it.entry, it.members)), l != t.shownLabels {
+            t.shownLabels = l
+            t.labelLayer.string = ContactSheetView.labelText(l)
         }
         let sel = selection.contains(i), drop = dropTarget == i
         let bg = sel || drop ? NSColor.alternateSelectedControlColor.withAlphaComponent(drop ? 0.45 : 0.25).cgColor : nil
@@ -610,6 +663,8 @@ final class TileLayer: CALayer {
     let image = CALayer()
     let nameLayer = CATextLayer()
     let extLayer = CATextLayer()
+    let labelLayer = CATextLayer()
+    var shownLabels: ImageLabels?
     var index = -1
     var path = ""
     var shownKey: String?
@@ -619,7 +674,7 @@ final class TileLayer: CALayer {
         cornerRadius = 6
         image.minificationFilter = .trilinear
         image.magnificationFilter = .linear
-        for t in [nameLayer, extLayer] {
+        for t in [nameLayer, extLayer, labelLayer] {
             t.alignmentMode = .center
             t.truncationMode = .middle
             t.isWrapped = false
@@ -630,16 +685,16 @@ final class TileLayer: CALayer {
         extLayer.font = NSFont.systemFont(ofSize: 9)
         extLayer.fontSize = 9
         extLayer.foregroundColor = NSColor.secondaryLabelColor.cgColor
-        for l in [image, nameLayer, extLayer] { addSublayer(l) }
+        for l in [image, nameLayer, extLayer, labelLayer] { addSublayer(l) }
         actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "hidden": NSNull()]
-        for l in [image, nameLayer, extLayer] as [CALayer] { l.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "string": NSNull()] }
+        for l in [image, nameLayer, extLayer, labelLayer] as [CALayer] { l.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "string": NSNull()] }
     }
 
     override init(layer: Any) { super.init(layer: layer) }
     required init?(coder: NSCoder) { fatalError("not used") }
 
     func setScale(_ s: CGFloat) {
-        if contentsScale != s { for l in [self, image, nameLayer, extLayer] as [CALayer] { l.contentsScale = s } }
+        if contentsScale != s { for l in [self, image, nameLayer, extLayer, labelLayer] as [CALayer] { l.contentsScale = s } }
     }
 
     /// Geometry inside the tile (the hosting view is flipped: y grows downwards).
@@ -648,5 +703,6 @@ final class TileLayer: CALayer {
         image.frame = CGRect(x: 8, y: 6, width: tile, height: tile)
         nameLayer.frame = CGRect(x: 4, y: 6 + tile + 4, width: w - 8, height: 15)
         extLayer.frame = CGRect(x: 4, y: 6 + tile + 19, width: w - 8, height: 13)
+        labelLayer.frame = CGRect(x: 4, y: 6 + tile + 32, width: w - 8, height: 14)
     }
 }

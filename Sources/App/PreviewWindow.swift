@@ -124,6 +124,8 @@ final class PreviewWindow: NSWindowController, NSWindowDelegate {
     }
 
     private var lastMethod = ""
+    /// Ratings/colour of the row (set by the browser from the label cache).
+    var labelsShown: ImageLabels? { didSet { updateInfo() } }
 
     private func updateInfo() {
         guard let e = entry else { return }
@@ -132,7 +134,11 @@ final class PreviewWindow: NSWindowController, NSWindowDelegate {
             info.stringValue = "\(e.name)   \(size)   Quick Look"
             return
         }
-        info.stringValue = "\(e.name)   \(canvas.zoomLabel)   \(canvas.pixelsLabel)   \(size)   \(lastMethod)"
+        var labels = ""
+        if let l = labelsShown {
+            labels = (l.rating < 0 ? "reject" : String(repeating: "\u{2605}", count: l.rating)) + (l.colorClass > 0 ? "  " + XMPReader.colorNames[l.colorClass] : "")
+        }
+        info.stringValue = "\(e.name)   \(labels)   \(canvas.zoomLabel)   \(canvas.pixelsLabel)   \(size)   \(lastMethod)"
     }
 
     // MARK: Quick Look inside the window (non-image files)

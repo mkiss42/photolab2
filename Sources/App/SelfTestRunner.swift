@@ -15,6 +15,7 @@ enum SelfTestRunner {
         results += FileOpsSelfTest.run()
         results += TransferSelfTest.run()
         results += ThumbnailSelfTest.run()
+        results += LabelSelfTest.run()
         results.append(brainPing())
         results.append(architecture())
         Stats.noteSelfTest(results)
