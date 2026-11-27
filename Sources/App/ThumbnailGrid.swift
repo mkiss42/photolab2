@@ -474,6 +474,7 @@ final class ThumbnailGrid: NSView {
         pending.insert(k)
         let px = pixelBucket
         let path = e.path
+        let size = e.size, modified = e.modified
         queue.addOperation { [weak self] in
             guard let s = self else { return }
             s.wantedLock.lock()
@@ -483,7 +484,7 @@ final class ThumbnailGrid: NSView {
                 DispatchQueue.main.async { s.pending.remove(k) }
                 return
             }
-            let cg = ImageMeta.thumbnail(path: path, maxPixels: px)
+            let cg = ImageMeta.thumbnail(path: path, maxPixels: px, size: size, modified: modified)
             DispatchQueue.main.async {
                 s.pending.remove(k)
                 guard let cg = cg else { return }

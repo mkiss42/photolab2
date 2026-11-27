@@ -6,13 +6,13 @@
 import Foundation
 import ImageIO
 import QuickLook
+import CoreServices
 
 enum ImageMeta {
     /// Read the metadata sections for one image. Blocking: call off the main thread.
     static func read(path: String) -> [MetaSection] {
-        let url = NSURL(fileURLWithPath: path)
         let opts = [kCGImageSourceShouldCache as String: false] as CFDictionary
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, opts) else {
+        guard let src = source(path) else {
             return [MetaSection("Image", [("Metadata", "macOS could not read this file's image data")])]
         }
         guard let props = CGImageSourceCopyPropertiesAtIndex(src, 0, opts) as? [String: Any] else {
@@ -94,26 +94,66 @@ enum ImageMeta {
     /// RAW: the camera's embedded JPEG (fast, never develops the RAW). Other images: ImageIO, decoding
     /// at reduced size (it never uses the tiny EXIF thumbnail). Other files: Quick Look's thumbnail.
     /// Thumbnails never wait for a slow full read (Photoshop): saved preview or Photoshop's own thumbnail.
-    static func thumbnail(path: String, maxPixels: Int) -> CGImage? {
+    /// PhotoLab: kept on disk between launches (Caches/PhotoLab/Thumbs) when size and date are given.
+    static func thumbnail(path: String, maxPixels: Int, size: Int64? = nil, modified: Double? = nil) -> CGImage? {
+        if let sz = size, let m = modified, let store = App.thumbs {
+            let key = path + "|\(maxPixels)"
+            if let d = store.get(path: key, size: sz, modified: m), let img = decodeStored(d) { return img }
+            guard let made = preview(path: path, maxPixels: maxPixels, allowSlow: false, size: sz, modified: m)?.image else { return nil }
+            if let d = jpegData(made, quality: 0.8) { store.put(d, path: key, size: sz, modified: m) }
+            return made
+        }
         return preview(path: path, maxPixels: maxPixels, allowSlow: false)?.image
+    }
+
+    private static func decodeStored(_ d: Data) -> CGImage? {
+        guard let src = CGImageSourceCreateWithData(d as CFData, nil) else { return nil }
+        return CGImageSourceCreateImageAtIndex(src, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
+    }
+
+    /// ImageIO's type hint from the extension (sources made from a reader have no file name).
+    static func typeHint(_ path: String) -> CFString? {
+        let e = Paths.fileExtension(path).lowercased()
+        if e.isEmpty { return nil }
+        return UTTypeCreatePreferredIdentifierForTag(kUTTagClassFilenameExtension, e as CFString, nil)?.takeRetainedValue()
+    }
+
+    /// An ImageIO source reading through the file's shared reader (PhotoLab: every part of a file
+    /// crosses the network once, whoever asks - thumbnail, facts, inspector, preview).
+    static func source(_ path: String, size: Int64? = nil, modified: Double? = nil) -> CGImageSource? {
+        if let r = FileReads.reader(path, size: size, modified: modified), let s = r.imageSource(hint: typeHint(path)) { return s }
+        let opts = [kCGImageSourceShouldCache as String: false] as CFDictionary
+        return CGImageSourceCreateWithURL(NSURL(fileURLWithPath: path) as CFURL, opts)
     }
 
     /// Same as `thumbnail`, plus a word on where the picture came from ("embedded camera preview").
     /// `allowSlow` false: for files that are slow to decode (PSD/PSB, huge TIFF), answer at once from the
     /// saved preview or Photoshop's own small thumbnail instead of reading the whole file.
-    static func preview(path: String, maxPixels: Int, allowSlow: Bool = true) -> (image: CGImage, source: String)? {
+    /// PhotoLab: the camera's/Photoshop's embedded JPEGs come first - the smallest that is big enough,
+    /// read through the shared reader (CameraPreviews); ImageIO also reads through it.
+    static func preview(path: String, maxPixels: Int, allowSlow: Bool = true, size: Int64? = nil, modified: Double? = nil) -> (image: CGImage, source: String)? {
         let url = NSURL(fileURLWithPath: path)
+        let ext = Paths.fileExtension(path).lowercased()
         var serr: Int32 = 0
-        if let info = Sys.lstatInfo(path, &serr), PreviewCache.worthCaching(name: path, size: info.size), let cache = App.previews {
+        let info: (size: Int64, modified: Double)? = size.flatMap { sz in modified.map { (sz, $0) } }
+            ?? Sys.lstatInfo(path, &serr).map { ($0.size, $0.modified) }
+        // Only pictures and PDFs are read by PhotoLab itself (others go to Quick Look, which opens them anyway).
+        let reader = PhotoFormats.isImage(path) || ext == "pdf" ? FileReads.reader(path, size: info?.size, modified: info?.modified) : nil
+        let layered = PhotoFormats.photoshop.contains(ext) || PhotoFormats.tiff.contains(ext)
+        let thumbOpts: [String: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways as String: true,
+            kCGImageSourceCreateThumbnailWithTransform as String: true,
+            kCGImageSourceThumbnailMaxPixelSize as String: maxPixels,
+            kCGImageSourceShouldCacheImmediately as String: true,
+        ]
+        if let info = info, PreviewCache.worthCaching(name: path, size: info.size), let cache = App.previews {
             if let d = cache.get(path: path, size: info.size, modified: info.modified),
                 let img = decode(NSData(data: d) as CFData, maxPixels: maxPixels, tiffOrientation: 1) {
                 return (img, "saved preview")
             }
             if !allowSlow {
-                if PhotoFormats.photoshop.contains(Paths.fileExtension(path).lowercased()),
-                    let loc = EmbeddedPreview.photoshopThumbnail(path: path).location,
-                    let r = FileReader(path: path), let d = r.read(loc.offset, loc.length),
-                    let img = decode(NSData(data: d) as CFData, maxPixels: maxPixels, tiffOrientation: 1) {
+                // Photoshop's own thumbnail, or a preview inside the TIFF: a few small reads.
+                if let r = reader, let img = CameraPreviews.thumbnail(r, ext: ext, maxPixels: maxPixels, minSide: min(maxPixels, 160)).image {
                     return (img, "quick thumbnail")
                 }
                 return nil
@@ -121,12 +161,8 @@ enum ImageMeta {
             // Full read once, at screen size; saved so the next look is instant.
             let srcOpts = [kCGImageSourceShouldCache as String: false] as CFDictionary
             if let src = CGImageSourceCreateWithURL(url as CFURL, srcOpts) {
-                let opts: [String: Any] = [
-                    kCGImageSourceCreateThumbnailFromImageAlways as String: true,
-                    kCGImageSourceCreateThumbnailWithTransform as String: true,
-                    kCGImageSourceThumbnailMaxPixelSize as String: PreviewCache.pixels,
-                    kCGImageSourceShouldCacheImmediately as String: true,
-                ]
+                var opts = thumbOpts
+                opts[kCGImageSourceThumbnailMaxPixelSize as String] = PreviewCache.pixels
                 if let full = CGImageSourceCreateThumbnailAtIndex(src, 0, NSDictionary(dictionary: opts) as CFDictionary) {
                     if let jpeg = jpegData(full, quality: 0.85) { cache.put(jpeg, path: path, size: info.size, modified: info.modified) }
                     IOLog.smallRead(path, bytes: info.size)   // a full read of the picture (I/O logs)
@@ -134,32 +170,60 @@ enum ImageMeta {
                 }
             }
         }
-        if PhotoFormats.isRaw(path), let j = EmbeddedPreview.largestJPEG(path: path),
-            let img = decode(NSData(data: j.data) as CFData, maxPixels: maxPixels, tiffOrientation: j.orientation) {
-            return (img, "embedded camera preview")
-        }
-        if PhotoFormats.isImage(path) {
-            let srcOpts = [kCGImageSourceShouldCache as String: false] as CFDictionary
-            if let src = CGImageSourceCreateWithURL(url as CFURL, srcOpts) {
-                let opts: [String: Any] = [
-                    kCGImageSourceCreateThumbnailFromImageAlways as String: true,
-                    kCGImageSourceCreateThumbnailWithTransform as String: true,
-                    kCGImageSourceThumbnailMaxPixelSize as String: maxPixels,
-                    kCGImageSourceShouldCacheImmediately as String: true,
-                ]
-                if let img = CGImageSourceCreateThumbnailAtIndex(src, 0, NSDictionary(dictionary: opts) as CFDictionary) {
-                    var e: Int32 = 0
-                    IOLog.smallRead(path, bytes: Sys.lstatInfo(path, &e)?.size ?? -1)   // about the whole file (I/O logs)
-                    return (img, PhotoFormats.isRaw(path) ? "developed by macOS" : "image")
+        // Embedded JPEGs: RAW (camera preview), camera JPEG (EXIF/MPF, thumbnails only), PSD/TIFF.
+        let isJPEG = PhotoFormats.jpeg.contains(ext)
+        if let r = reader, PhotoFormats.isRaw(path) || layered || (isJPEG && maxPixels <= 640) {
+            let e = CameraPreviews.thumbnail(r, ext: ext, maxPixels: maxPixels)
+            if let img = e.image {
+                if PhotoFormats.isRaw(path) { return (img, "embedded camera preview") }
+                // Not a RAW: only when it is big enough (else the picture itself is decoded).
+                if max(img.width, img.height) >= maxPixels / 2 {
+                    return (img, isJPEG ? "camera preview inside the JPEG" : "embedded preview")
                 }
             }
         }
-        let size = CGSize(width: maxPixels, height: maxPixels)
-        if let u = QLThumbnailImageCreate(kCFAllocatorDefault, url as CFURL, size, nil) {
+        if PhotoFormats.isImage(path), let src = source(path, size: info?.size, modified: info?.modified) {
+            if PhotoFormats.isRaw(path) {
+                // A RAW without a usable embedded JPEG: ImageIO's own thumbnail before developing.
+                var o = thumbOpts
+                o.removeValue(forKey: kCGImageSourceCreateThumbnailFromImageAlways as String)
+                o[kCGImageSourceCreateThumbnailFromImageIfAbsent as String] = true
+                if let t = CGImageSourceCreateThumbnailAtIndex(src, 0, NSDictionary(dictionary: o) as CFDictionary),
+                    max(t.width, t.height) >= maxPixels / 2 {
+                    return (t, "embedded camera preview")
+                }
+            }
+            if let img = CGImageSourceCreateThumbnailAtIndex(src, 0, NSDictionary(dictionary: thumbOpts) as CFDictionary) {
+                return (img, PhotoFormats.isRaw(path) ? "developed by macOS" : "image")
+            }
+        }
+        // PDF: page 1 drawn by CoreGraphics, reading only what that page needs.
+        if ext == "pdf", let r = reader, let img = pdfPage(r, maxPixels: maxPixels) { return (img, "PDF page 1") }
+        let qsize = CGSize(width: maxPixels, height: maxPixels)
+        if let u = QLThumbnailImageCreate(kCFAllocatorDefault, url as CFURL, qsize, nil) {
             IOLog.smallRead(path, bytes: -1)
             return (u.takeRetainedValue(), "Quick Look thumbnail")
         }
         return nil
+    }
+
+    static func pdfPage(_ r: BlockReader, maxPixels: Int) -> CGImage? {
+        guard let provider = r.dataProvider(), let doc = CGPDFDocument(provider), !doc.isEncrypted || doc.isUnlocked,
+            let page = doc.page(at: 1) else { return nil }
+        let box = page.getBoxRect(.cropBox)
+        let rot = (page.rotationAngle % 180 + 180) % 180 == 90
+        let pw = rot ? box.height : box.width, ph = rot ? box.width : box.height
+        guard pw > 0, ph > 0 else { return nil }
+        let k = CGFloat(maxPixels) / max(pw, ph)
+        let w = max(1, Int(pw * k)), h = max(1, Int(ph * k))
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+        ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        ctx.interpolationQuality = .medium
+        ctx.concatenate(page.getDrawingTransform(.cropBox, rect: CGRect(x: 0, y: 0, width: w, height: h), rotate: 0, preserveAspectRatio: true))
+        ctx.drawPDFPage(page)
+        return ctx.makeImage()
     }
 
     /// JPEG bytes for an image (previews saved to the cache, contact sheets).
@@ -218,11 +282,9 @@ enum PhotoFactsReader {
     /// (then ExifTool is asked, in batches).
     static func readNative(path: String) -> (facts: PhotoFacts, readable: Bool) {
         var f = PhotoFacts()
-        let url = NSURL(fileURLWithPath: path)
         let opts = [kCGImageSourceShouldCache as String: false] as CFDictionary
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, opts),
+        guard let src = ImageMeta.source(path),   // PhotoLab: the shared reader (counted there)
             let props = CGImageSourceCopyPropertiesAtIndex(src, 0, opts) as? [String: Any] else { return (f, false) }
-        IOLog.smallRead(path, bytes: -1)   // the picture's details (I/O logs; size not known)
         let tiff = props["{TIFF}"] as? [String: Any] ?? [:]
         let exif = props["{Exif}"] as? [String: Any] ?? [:]
         let aux = props["{ExifAux}"] as? [String: Any] ?? [:]

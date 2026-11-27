@@ -18,6 +18,8 @@ final class IOLog {
     static var isNetworkPath: (String) -> Bool = { VolumeRegistry.volumeRoot($0) != "/" }
     /// The whole Find process's disk bytes so far (read, written), when the system tells (macOS).
     static var processDiskBytes: (() -> (read: UInt64, written: UInt64)?)?
+    /// PhotoLab: " reads/file=2.6 ..." for the MINUTE lines (shared readers, network or local), or "".
+    static var readEconomy: ((Bool) -> String)?
 
     let path: String
     private let letter: String
@@ -100,11 +102,13 @@ final class IOLog {
 
     /// Small reads (a thumbnail, a preview, a metadata header): counted, no line of their own.
     /// `bytes` -1 = the system read the file itself (size not known).
-    func countSmallRead(bytes: Int64) {
+    func countSmallRead(bytes: Int64, newFile: Bool = true) {
         queue.async {
             if self.closed { return }
-            self.minute.smallFiles += 1
-            self.session.smallFiles += 1
+            if newFile {
+                self.minute.smallFiles += 1
+                self.session.smallFiles += 1
+            }
             if bytes > 0 {
                 self.minute.smallBytes += bytes
                 self.session.smallBytes += bytes
@@ -130,6 +134,11 @@ final class IOLog {
     /// A small read of a file (thumbnail, preview, header), counted in the log of its volume.
     static func smallRead(_ path: String, bytes: Int64) {
         (isNetworkPath(path) ? network : disk)?.countSmallRead(bytes: bytes)
+    }
+
+    /// More bytes of a file already counted by smallRead (PhotoLab's shared readers: one file, many reads).
+    static func smallReadBytes(_ path: String, bytes: Int64) {
+        (isNetworkPath(path) ? network : disk)?.countSmallRead(bytes: bytes, newFile: false)
     }
 
     /// An operation on one file (read and written in place), in the log of its volume.
@@ -173,6 +182,7 @@ final class IOLog {
         var s = "MINUTE from \(f.string(from: start)) ops=\(m.ops) \(isNet ? "in" : "read")=\(IOLog.bytes(m.read)) \(isNet ? "out" : "written")=\(IOLog.bytes(m.written))"
         s += " small-reads=\(m.smallFiles) files"
         if m.smallBytes > 0 { s += " (" + IOLog.bytes(m.smallBytes) + " read)" }
+        if m.smallFiles > 0 { s += IOLog.readEconomy?(isNet) ?? "" }
         s += " errors=\(m.errors)" + procText
         lineNow(s)
     }

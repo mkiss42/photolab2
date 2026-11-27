@@ -97,6 +97,9 @@ final class PhotoSelfTest {
         check("T-PHOTO-19", "JPEG preview decoded from the image itself (not its tiny EXIF thumbnail)",
               big?.image.width == 60 && big?.image.height == 40, big.map { "\($0.image.width)x\($0.image.height)" } ?? "none")
 
+        // 40-44 PhotoLab: embedded previews through the shared reader (CameraPreviews, FileReads).
+        embeddedPreviewChecks()
+
         // 20-22 Photography mode facts and the contact sheet
         let nf = PhotoFactsReader.readNative(path: jpg)
         check("T-PHOTO-20", "photo facts read by macOS (camera, size)",
@@ -320,6 +323,103 @@ final class PhotoSelfTest {
     }
 
     /// Minimal little-endian TIFF/NEF: IFD0 (orientation, SubIFDs) -> SubIFD with the JPEG.
+    // MARK: PhotoLab embedded previews (ported from PhotoLab 2's thumbnail self-test)
+
+    private func jpegOf(_ w: Int, _ h: Int) -> Data? {
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+        ctx.setFillColor(CGColor(red: 0.8, green: 0.3, blue: 0.2, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        guard let img = ctx.makeImage() else { return nil }
+        return ImageMeta.jpegData(img, quality: 0.8)
+    }
+
+    private func embeddedPreviewChecks() {
+        guard let big = jpegOf(2048, 1365), let mid = jpegOf(640, 427), let small = jpegOf(160, 107) else {
+            check("T-PHOTO-40", "make test previews", false, "ImageIO could not make JPEGs")
+            return
+        }
+        func le16(_ v: Int) -> [UInt8] { return [UInt8(v & 0xFF), UInt8(v >> 8 & 0xFF)] }
+        func le32(_ v: Int) -> [UInt8] { return [UInt8(v & 0xFF), UInt8(v >> 8 & 0xFF), UInt8(v >> 16 & 0xFF), UInt8(v >> 24 & 0xFF)] }
+        func be32(_ v: Int) -> [UInt8] { return [UInt8(v >> 24 & 0xFF), UInt8(v >> 16 & 0xFF), UInt8(v >> 8 & 0xFF), UInt8(v & 0xFF)] }
+        func entry(_ tag: Int, _ type: Int, _ value: Int) -> [UInt8] { return le16(tag) + le16(type) + le32(1) + (type == 3 ? le16(value) + [0, 0] : le32(value)) }
+        // Fake NEF: IFD0 (orientation 6, SubIFDs, 2048 px preview) | SubIFD 1 (160 px) | SubIFD 2 (640 px).
+        let ifd0 = 8
+        let sub1 = ifd0 + 2 + 4 * 12 + 4
+        let sub2 = sub1 + 2 + 2 * 12 + 4
+        let arr = sub2 + 2 + 2 * 12 + 4
+        let pad = 1 << 20   // the big preview lies 1 MB further on: taking it would show in the bytes read
+        let smallAt = arr + 8, midAt = smallAt + small.count, bigAt = midAt + mid.count + pad
+        var t: [UInt8] = [0x49, 0x49, 42, 0] + le32(ifd0)
+        t += le16(4) + entry(0x0112, 3, 6) + le16(0x014A) + le16(4) + le32(2) + le32(arr) + entry(0x0201, 4, bigAt) + entry(0x0202, 4, big.count) + le32(0)
+        t += le16(2) + entry(0x0201, 4, smallAt) + entry(0x0202, 4, small.count) + le32(0)
+        t += le16(2) + entry(0x0201, 4, midAt) + entry(0x0202, 4, mid.count) + le32(0)
+        t += le32(sub1) + le32(sub2)
+        var nef = Data(t)
+        nef.append(small); nef.append(mid); nef.append(Data(count: pad)); nef.append(big)
+        let nefPath = p("pick.NEF")
+        _ = files.writeData(nef, to: nefPath)
+        FileReads.forget([nefPath])
+        if let r = FileReads.reader(nefPath) {
+            let img = CameraPreviews.thumbnail(r, ext: "nef", maxPixels: 256).image
+            let okSize = img.map { $0.height == 256 && abs($0.width - 171) <= 1 } ?? false
+            check("T-PHOTO-40", "RAW thumbnail from the smallest preview that is big enough (640 px, not the 2048 px one), upright",
+                  okSize && r.bytes < 512 << 10, img.map { "\($0.width)x\($0.height), \(r.reads) reads, \(r.bytes / 1024) KB" } ?? "none")
+            let before = r.reads
+            _ = CameraPreviews.thumbnail(r, ext: "nef", maxPixels: 256)
+            check("T-PHOTO-41", "second look at the same file reads nothing more (shared reader)", r.reads == before, "\(r.reads - before) more reads")
+        } else {
+            check("T-PHOTO-40", "open test NEF", false, nefPath)
+        }
+        // Camera JPEG with an MPF preview (APP2): the preview is found without decoding the picture.
+        // Layout: SOI(0) | FF E2 + length (2) | "MPF\0" (6) | MPF TIFF header (10) ... | 640 px preview | main picture.
+        var mpf: [UInt8] = Array("MPF\0".utf8)
+        mpf += [0x49, 0x49, 42, 0] + le32(8)
+        mpf += le16(1) + le16(0xB002) + le16(7) + le32(32) + le32(8 + 2 + 12 + 4) + le32(0)
+        let appLen = 2 + mpf.count + 32
+        let previewOffset = 4 + appLen - 10        // from the MPF TIFF header (file offset 10)
+        mpf += le32(0x030000) + le32(0) + le32(0) + le32(0)
+        mpf += le32(0x010001) + le32(mid.count) + le32(previewOffset) + le32(0)
+        var cam = Data([0xFF, 0xD8, 0xFF, 0xE2, UInt8(appLen >> 8), UInt8(appLen & 0xFF)])
+        cam.append(contentsOf: mpf)
+        cam.append(mid)
+        cam.append(big.dropFirst(2))   // the main picture (its own SOI dropped: one file, one SOI)
+        let camPath = p("camera.jpg")
+        _ = files.writeData(cam, to: camPath)
+        if let r = FileReads.reader(camPath) {
+            let c = CameraPreviews.jpegPreviews(r).candidates
+            check("T-PHOTO-42", "camera JPEG: MPF preview located", c.contains { $0.length == mid.count }, "\(c.map { $0.length })")
+        }
+        // PSD: Photoshop's thumbnail resource, without reading the 2 MB composite.
+        var psd = Data(Array("8BPS".utf8))
+        psd.append(contentsOf: [0, 1, 0, 0, 0, 0, 0, 0, 0, 3] as [UInt8])
+        psd.append(contentsOf: be32(107)); psd.append(contentsOf: be32(160))
+        psd.append(contentsOf: [0, 8, 0, 3] as [UInt8]); psd.append(contentsOf: be32(0))
+        func block(_ id: Int, _ payload: [UInt8]) -> [UInt8] {
+            var b: [UInt8] = Array("8BIM".utf8)
+            b += [UInt8(id >> 8), UInt8(id & 0xFF), 0, 0] + be32(payload.count) + payload
+            if payload.count % 2 == 1 { b.append(0) }
+            return b
+        }
+        var res = block(1005, [UInt8](repeating: 1, count: 15))
+        res += block(1036, [UInt8](repeating: 0, count: 28) + [UInt8](small))
+        psd.append(contentsOf: be32(res.count)); psd.append(contentsOf: res)
+        psd.append(Data(count: 2 << 20))
+        let psdPath = p("layers.psd")
+        _ = files.writeData(psd, to: psdPath)
+        if let r = FileReads.reader(psdPath) {
+            let img = CameraPreviews.thumbnail(r, ext: "psd", maxPixels: 256).image
+            check("T-PHOTO-43", "PSD thumbnail from Photoshop's resource, composite not read",
+                  img?.width == 160 && r.bytes < 512 << 10, "\(img.map { "\($0.width)" } ?? "none") \(r.bytes / 1024) KB")
+        }
+        // The file changes: a new reader (its old bytes are never shown).
+        nef.append(Data(count: 10))
+        FileReads.forget([nefPath])
+        _ = files.writeData(nef, to: nefPath)
+        let r1 = FileReads.reader(nefPath)
+        check("T-PHOTO-44", "a changed file gets a fresh reader", r1?.size == Int64(nef.count), "\(r1?.size ?? -1) vs \(nef.count)")
+    }
+
     private func nefWrapping(_ jpeg: Data, orientation: Int) -> Data {
         var d = Data()
         func u16(_ v: Int) { d.append(UInt8(v & 0xFF)); d.append(UInt8((v >> 8) & 0xFF)) }

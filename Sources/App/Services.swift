@@ -12,6 +12,8 @@ enum App {
     static var themes: ThemeStore!
     static var indexes: IndexStore!
     static var previews: PreviewCache!
+    /// PhotoLab: contact-sheet thumbnails kept between launches (Caches/PhotoLab/Thumbs, 1 GB, oldest out).
+    static var thumbs: PreviewCache?
     static var journal: OperationJournal!
     static var maintenance: Maintenance!
     /// What the start-up recovery did (shown once the first window is open).
@@ -48,6 +50,7 @@ enum App {
         IOLog.processDiskBytes = { ProcessDiskIO.bytes() }
         IOLog.network = IOLog(files: files, network: true, appVersion: App.version)
         IOLog.disk = IOLog(files: files, network: false, appVersion: App.version)
+        IOLog.readEconomy = { FileReads.economy(network: $0) }
         Log.debugEnabled = Prefs.debugLogging
         // Phase 5: notes about operations in progress; finish what a crash or power cut interrupted,
         // before anything else can run.
@@ -61,6 +64,7 @@ enum App {
         for l in recoveryLines { log.info(l) }
         themes = ThemeStore(files: files)
         previews = PreviewCache(files: files, limitBytes: Int64(Prefs.maintenancePolicy.previewLimitMB) * 1_048_576)
+        thumbs = PreviewCache(files: files, limitBytes: 1 << 30, folder: "Thumbs")
         BulkLister.install()   // fast folder listing (getattrlistbulk); readdir + lstat if it can't be used
         indexes = IndexStore(files: files, folder: Paths.join(files.supportDir, "Indexes"))
         maintenance = Maintenance(files: files, previews: previews, indexes: indexes, journal: journal)

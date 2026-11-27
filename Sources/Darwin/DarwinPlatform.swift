@@ -14,6 +14,7 @@ final class DarwinPlatform: FilePlatform {
 
     /// renamex_np with RENAME_EXCL (0x4): the kernel refuses atomically if `dst` exists.
     func exclusiveRename(_ src: String, _ dst: String) throws {
+        FileReads.forget([src, dst])   // PhotoLab: let go of a shared reader first (and its cached bytes)
         if renamex_np(src, dst, UInt32(0x4)) == 0 { return }
         let e = errno
         if e == EEXIST { throw FileOpError.targetExists(dst) }
@@ -32,6 +33,7 @@ final class DarwinPlatform: FilePlatform {
 
     /// 0.18.14: see FilePlatform. rename(2) replaces the target in one step (also on SMB 2/3).
     func replaceWithVerified(_ temp: String, _ target: String) throws {
+        FileReads.forget([temp, target])
         guard replaceAllowed(temp, target) else { throw FileOpError.refused("E-GUARD-3 refused to replace \(target) with \(temp)") }
         if Darwin.rename(temp, target) != 0 { throw FileOpError.system("Rename", errno, temp) }
     }
@@ -41,6 +43,7 @@ final class DarwinPlatform: FilePlatform {
     var trashOverride: String?
 
     func moveToTrash(_ path: String) throws -> String {
+        FileReads.forget([path])
         if let t = trashOverride {
             _ = try? FileManager.default.createDirectory(atPath: t, withIntermediateDirectories: true, attributes: nil)
             let dst = Paths.join(t, FileOperations.uniqueName(for: Paths.lastComponent(path), in: t))
@@ -239,6 +242,7 @@ extension DarwinPlatform {
 
     /// 0.18.8: in-place metadata writes (see FilePlatform.patchFile).
     func patchFile(_ path: String, writes: [(offset: Int64, data: Data)]) throws {
+        FileReads.forget([path])   // its cached bytes are about to be stale
         var e: Int32 = 0
         guard path.hasPrefix("/"), let st = Sys.lstatInfo(path, &e), st.isRegular else {
             throw FileOpError.refused("in-place change refused: \(path) is not a plain file")
@@ -276,6 +280,7 @@ extension DarwinPlatform {
     }
 
     func truncateFile(_ path: String, to length: Int64) throws {
+        FileReads.forget([path])
         var e: Int32 = 0
         guard path.hasPrefix("/"), let st = Sys.lstatInfo(path, &e), st.isRegular, length >= 0, length <= st.size else {
             throw FileOpError.refused("truncate refused: \(path)")
@@ -285,6 +290,7 @@ extension DarwinPlatform {
 
     /// 0.18.4: Delete Immediately (only after your confirmation; FileOperations checks the path first).
     func deletePermanently(_ path: String) throws {
+        FileReads.forget([path])
         do {
             try FileManager.default.removeItem(atPath: path)
         } catch {
@@ -295,6 +301,7 @@ extension DarwinPlatform {
     }
 
     func removeReplacedOriginal(_ path: String) throws {
+        FileReads.forget([path])
         guard Paths.lastComponent(path).hasPrefix(".find-rename-") else {
             throw FileOpError.refused("E-GUARD-2 refused to remove \(path): not one of Find's temporary names")
         }

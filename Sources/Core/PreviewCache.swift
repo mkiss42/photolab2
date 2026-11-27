@@ -13,9 +13,10 @@ final class PreviewCache {
     private let lock = NSLock()
     private var writesSinceTrim = 0
 
-    init(files: AppFiles, limitBytes: Int64 = 1 << 30) {
+    /// PhotoLab: the same store, in "Thumbs", keeps contact-sheet thumbnails between launches.
+    init(files: AppFiles, limitBytes: Int64 = 1 << 30, folder: String = "Previews") {
         self.files = files
-        self.dir = Paths.join(files.cachesDir, "Previews")
+        self.dir = Paths.join(files.cachesDir, folder)
         self.limitBytes = limitBytes
     }
 
