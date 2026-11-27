@@ -182,8 +182,8 @@ final class PhotoSelfTest {
             MetaPlan.nativeRead = true
             MetaPlan.nativeSidecar = true
             MetaPlan.nativeExifToolDoubleCheck = false
-            // 0.18.11.1: the normal (rewrite) path first, whatever Settings say - T-PHOTO-28 checks the RAW's
-            // previous version in the Trash, which an in-place change doesn't make. T-PHOTO-32/33 turn it on.
+            // 0.18.11.1: the normal (rewrite) path first, whatever Settings say (PhotoLab: T-PHOTO-28 checks that
+            // no previous version goes to the Trash). T-PHOTO-32/33 turn the in-place change on.
             MetaPlan.inPlace = false
             defer {
                 (MetaPlan.writeSidecar, MetaPlan.writeEmbeddedXMP, MetaPlan.writeEmbeddedIPTC, MetaPlan.writeMode) = saved
@@ -224,9 +224,10 @@ final class PhotoSelfTest {
             let kept = files.list(p("Trash")).filter { $0.hasPrefix("wrapped (before metadata edit)") }
             let keptSame = kept.first.map { fingerprint(Paths.join(p("Trash"), $0)) == nefBefore } ?? false
             let side = tool.read(["-XMP-xmp:Rating", "-XMP-dc:Description"], files: [p("wrapped.xmp")])[p("wrapped.xmp")] ?? [:]
-            check("T-PHOTO-28", "RAW: values written inside and into its new sidecar, picture data unchanged, previous version kept untouched",
+            _ = keptSame
+            check("T-PHOTO-28", "RAW: values written inside and into its new sidecar, picture data unchanged, no previous version in the Trash (PhotoLab S4)",
                   MetaPlan.currentRating(in: nefNow) == 3 && (nefHashBefore == nil || nefHashAfter == nefHashBefore)
-                    && keptSame && MetaPlan.currentRating(in: side) == 3 && MetaPlan.current(.caption, in: side) == "Find self-test caption \u{00E9}",
+                    && kept.isEmpty && MetaPlan.currentRating(in: side) == 3 && MetaPlan.current(.caption, in: side) == "Find self-test caption \u{00E9}",
                   "rating=\(MetaPlan.currentRating(in: nefNow)) hash \(nefHashBefore ?? "none") -> \(nefHashAfter ?? "none") kept=\(kept) sidecar=\(side)",
                   safety: true)
             report.add("INFO RAW embedded IPTC caption: " + Ascii.clean(String(describing: nefNow["IPTC:Caption-Abstract"] ?? "(none - this RAW type has no IPTC, or it was skipped)")))

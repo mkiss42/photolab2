@@ -400,7 +400,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         rows.append(note("The XMP inside the RAW file itself. JPEG, TIFF, PNG always get their XMP inside - it is their only XMP. Stars and colour classes exist only in XMP, so 1 or 2 always stays on."))
         rows.append(embIPTCCheck)
         rows.append(note("IPTC inside every picture that can hold it (JPEG, TIFF; RAW where its type has IPTC) - the older standard many newsroom and agency systems still read: caption, headline, keywords, credit..."))
-        rows.append(note("With 2 or 3 on, RAW files are rewritten too (their previous version goes to the Trash); with only 1 on, RAW files are never touched.", indent: false))
+        rows.append(note("With 2 or 3 on, RAW files are rewritten too (checked, then the previous version is removed - PhotoLab keeps no copy in the Trash); with only 1 on, RAW files are never touched.", indent: false))
         let modes: [(MetaWriteMode, String, String)] = [
             (.workingCopy, "Safest, slowest: separate working copy + picture fingerprint",
              "Each file is first copied, the copy is changed, and its picture data is compared with the original's. About 4 reads + 2 writes of every file. No safer than the next one; for comparison or a share that misbehaves."),
@@ -415,7 +415,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         inPlaceCheck.target = self
         inPlaceCheck.action = #selector(inPlaceChanged(_:))
         rows.append(inPlaceCheck)
-        rows.append(note("FASTEST (off by default). NEF, NRW, DNG, ARW, PEF and TIFF: only the new XMP / IPTC block (a few KB) and the small directory entry pointing to it are written - the rest of the file, the picture included, is never written. JPEG: only when the new values fit into the space the old ones take (often after a first normal write); otherwise the normal way below. Before each change Find notes the bytes it will overwrite; it reads every value back, and puts the old bytes back if anything isn't as asked or Find stops half way (at the next start). The file isn't copied first, so there is no previous version in the Trash; Undo puts the old values back."))
+        rows.append(note("FASTEST (off by default). NEF, NRW, DNG, ARW, PEF and TIFF: only the new XMP / IPTC block (a few KB) and the small directory entry pointing to it are written - the rest of the file, the picture included, is never written. JPEG: only when the new values fit into the space the old ones take (often after a first normal write); otherwise the normal way below. Before each change Find notes the bytes it will overwrite; it reads every value back, and puts the old bytes back if anything isn't as asked or Find stops half way (at the next start). The file isn't copied first; Undo puts the old values back."))
         inPlaceFastCheck.state = Prefs.inPlaceExifToolCheck ? .off : .on
         inPlaceFastCheck.target = self
         inPlaceFastCheck.action = #selector(inPlaceFastChanged(_:))

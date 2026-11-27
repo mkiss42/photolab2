@@ -1,5 +1,44 @@
 # Changes
 
+## 1.0.0-alpha.3 — PhotoLab 2's read economy, safety rules S1-S6
+
+- Thumbnails read far less from shares. Find took the LARGEST preview inside a RAW (the full-size
+  JPEG, several MB) for every thumbnail; PhotoLab takes the smallest one that is still big enough
+  (e.g. Nikon's 640 px preview), found with one 256 KB read. New sources: Nikon maker-note
+  preview, camera JPEGs' own small previews (MPF/EXIF), Photoshop's thumbnail inside PSD/TIFF/JPEG,
+  Panasonic, CR3, RAF, and as a last resort JPEGs found by their markers. PDF thumbnails: page 1
+  drawn directly (no Quick Look).
+- One shared reader per file: the thumbnail, the ratings/labels/camera facts, the inspector and
+  the preview all reuse what was already read, so each part of a file crosses the network once.
+  The network I/O log's MINUTE lines now end with "reads/file=... KB/file=..." (PhotoLab 2 got
+  2.6 reads per file; Photo Mechanic needs 8-16).
+- Thumbnails are kept on disk (Caches/PhotoLab/Thumbs, up to 1 GB): a folder seen before shows
+  its thumbnails without touching the share.
+- Safety rules (your decisions, PLAN.md 5):
+  - S1 Replace on a share (no Trash): the clash dialog says so and the button reads "Replace (Delete
+    Old)". The old file is deleted only after the new one is in place and verified. Folders are
+    never replaced there.
+  - S2 Moving from a share to another disk: asked once ("Move / Copy Instead / Cancel"); each
+    original is deleted only after its copy is verified, and only if it did not change meanwhile.
+    Where there is a Trash nothing changes (originals to the Trash, Undo works).
+  - S4 No "(before metadata edit)" copies of RAWs in the Trash any more.
+  - S3 (fastest write mode as default) waits for a speed measurement; S5 was already the same;
+    S6: Find already takes the newer file whole - MetadataDate comparison still to come.
+- Self-tests: T-PHOTO-40..44 (preview choice, shared reader, MPF, PSD, changed file) and
+  T-SAFE-60..65 (no-Trash rules) added; all pass on Apple Silicon, Rosetta and Intel.
+
+Test checklist (5 minutes, 12.6 Mac):
+[ ] 1  Help > Run Safety Self-Check: all passed (now includes T-SAFE-60..65).
+[ ] 2  Photography mode on a big NEF folder on the share: thumbnails at least as fast as alpha.2.
+       Open Logs/PhotoLab/network-io-*.log: a MINUTE line shows "reads/file=" - retype that part.
+[ ] 3  Quit, reopen, same folder: thumbnails appear without the share being read (MINUTE line
+       shows few or no small-reads).
+[ ] 4  PDF and PSD folders: thumbnails appear (PDF page 1, PSD Photoshop's own).
+[ ] 5  Copy a file onto a share where the same name exists: the dialog mentions no Trash and says
+       "Replace (Delete Old)"; Replace leaves the new file under the old name, no "name 2".
+[ ] 6  Move a file from the share to the desktop: asked once; Move deletes the share copy.
+[ ] 7  Rate a RAW: no "(before metadata edit)" file appears in the Trash.
+
 ## 1.0.0-alpha.2 — PhotoLab = Find 0.18.16 + first PhotoLab 2 fix
 
 - The app is now Find 0.18.16 (your coworker's), renamed PhotoLab, built universal (Intel and

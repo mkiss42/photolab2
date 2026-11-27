@@ -7,6 +7,10 @@ verdicts, the phases and the Decision Log. `docs/PROTOCOL.md` is the app↔brain
 
 ## Ground rules
 
+0. **Two people push to this repo** (the user and a coworker). `git pull --rebase` before every
+   push; never force-push `main`.
+
+
 1. **Targets:** macOS 10.13+ (x86_64) and 11.0+ (arm64), one universal app. AppKit only.
    Not allowed in Swift: SwiftUI, Combine, async/await, actors, `some`/opaque result types
    in public API, Network.framework, any API newer than 10.13 unless behind
@@ -17,7 +21,7 @@ verdicts, the phases and the Decision Log. `docs/PROTOCOL.md` is the app↔brain
 3. **File safety:** only `Sources/Core/FileOperations.swift`, `Sources/Core/AppFiles.swift`
    and `Sources/Darwin/DarwinPlatform.swift` may change files (Find's rule, kept). `tools/check_mutations.sh`
    enforces it; never weaken the script to make a build pass. Trash, never delete (exception: shares without a Trash, after
-   explicit confirmation - PLAN.md section 7). Never overwrite. Verify, then swap. Journal multi-step operations. RAW metadata writes only as PLAN.md section 7 describes.
+   explicit confirmation - PLAN.md section 5, S1/S2). Never overwrite. Verify, then swap. Journal multi-step operations. Metadata writes as PLAN.md section 5 (S3-S6) describes.
 4. **Main thread:** never touches a network volume. Long work → background queue, with
    cancellation.
 5. **Done means CI is green.** Push, read the workflow result (`gh run list`, `gh run view

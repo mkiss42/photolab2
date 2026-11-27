@@ -89,6 +89,8 @@ protocol FilePlatform: class {
     /// 0.18.4: Finder's "Delete Immediately" - ONLY after you confirmed it in a dialog that names the items
     /// (FileOperations.deleteImmediately checks the paths first). Folders with everything in them.
     func deletePermanently(_ path: String) throws
+    /// PhotoLab (S1/S2): can items on this volume go to a Trash? (SMB/NFS/WebDAV shares: no.)
+    func hasTrash(_ path: String) -> Bool
     /// Finder tag names on an item (colour labels are tags such as "Red").
     func tagNames(_ path: String) -> [String]
     /// Replace an item's Finder tags. Changes metadata only, never the file's contents.
@@ -97,6 +99,7 @@ protocol FilePlatform: class {
 
 extension FilePlatform {
     func replaceWithVerified(_ temp: String, _ target: String) throws { throw FileOpError.refused("not supported here") }
+    func hasTrash(_ path: String) -> Bool { return true }
     /// The checks every replaceWithVerified makes before renaming.
     func replaceAllowed(_ temp: String, _ target: String) -> Bool {
         guard Paths.parent(temp) == Paths.parent(target), Paths.lastComponent(temp).hasPrefix(".find-partial-"),
@@ -518,19 +521,63 @@ final class FileOperations {
 
     /// Move items into `destDir`. `choose` is asked for each name clash (on the calling thread).
     /// `forceCrossVolume` is only for tests.
+    /// PhotoLab S1/S2 (decided 2026-11-27): where there is no Trash (shares), and only after you
+    /// confirmed it in the dialog: `replaceWithoutTrash` - Replace deletes the existing FILE permanently,
+    /// after the new one is in place under a "name 2" and verified; `deleteOriginalsWithoutTrash` - a move
+    /// to another volume deletes each original after its copy is verified, if the original did not
+    /// change meanwhile. Neither can be undone. Without them such items fail / both copies are kept.
     func move(_ sources: [String], into destDir: String,
               choose: (String) -> ConflictChoice,
               isCancelled: () -> Bool = { return false },
-              forceCrossVolume: Bool = false, progress: TransferProgress? = nil) -> BatchReport {
+              forceCrossVolume: Bool = false, progress: TransferProgress? = nil,
+              replaceWithoutTrash: Bool = false, deleteOriginalsWithoutTrash: Bool = false) -> BatchReport {
         return transfer(sources, into: destDir, isMove: true, choose: choose,
-                        isCancelled: isCancelled, forceCrossVolume: forceCrossVolume, progress: progress)
+                        isCancelled: isCancelled, forceCrossVolume: forceCrossVolume, progress: progress,
+                        replaceWithoutTrash: replaceWithoutTrash, deleteOriginalsWithoutTrash: deleteOriginalsWithoutTrash)
     }
 
     func copy(_ sources: [String], into destDir: String,
               choose: (String) -> ConflictChoice,
-              isCancelled: () -> Bool = { return false }, progress: TransferProgress? = nil) -> BatchReport {
+              isCancelled: () -> Bool = { return false }, progress: TransferProgress? = nil,
+              replaceWithoutTrash: Bool = false) -> BatchReport {
         return transfer(sources, into: destDir, isMove: false, choose: choose,
-                        isCancelled: isCancelled, forceCrossVolume: false, progress: progress)
+                        isCancelled: isCancelled, forceCrossVolume: false, progress: progress,
+                        replaceWithoutTrash: replaceWithoutTrash, deleteOriginalsWithoutTrash: false)
+    }
+
+    /// Self-tests only: behave as if no volume had a Trash (the S1/S2 paths).
+    var simulateNoTrash = false
+
+    /// PhotoLab S1/S2: can `path` go to a Trash?
+    func hasTrash(_ path: String) -> Bool { return !simulateNoTrash && platform.hasTrash(path) }
+
+    /// A file or folder tree as (relative path, size, modified) - to tell whether an original changed
+    /// while it was being copied. Nil if it can't be read completely.
+    private func snapshot(_ path: String) -> [String: (Int64, Double)]? {
+        var out: [String: (Int64, Double)] = [:]
+        var e: Int32 = 0
+        guard let top = Sys.lstatInfo(path, &e) else { return nil }
+        out[""] = (top.isDirectory ? 0 : top.size, top.isDirectory ? 0 : top.modified)
+        guard top.isDirectory else { return out }
+        var stack = [""]
+        while let rel = stack.popLast() {
+            let dir = rel.isEmpty ? path : Paths.join(path, rel)
+            guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return nil }
+            for n in names {
+                let r = rel.isEmpty ? n : rel + "/" + n
+                guard let i = Sys.lstatInfo(Paths.join(path, r), &e) else { return nil }
+                out[r] = (i.isDirectory ? 0 : i.size, i.isDirectory ? 0 : i.modified)
+                if i.isDirectory { stack.append(r) }
+                if out.count > 200_000 { return nil }
+            }
+        }
+        return out
+    }
+
+    private static func sameSnapshot(_ a: [String: (Int64, Double)]?, _ b: [String: (Int64, Double)]?) -> Bool {
+        guard let a = a, let b = b, a.count == b.count else { return false }
+        for (k, v) in a { guard let w = b[k], w.0 == v.0, w.1 == v.1 else { return false } }
+        return true
     }
 
     /// `progress` (0.17): told which item is in progress, where its unfinished copy is and when it is
@@ -538,7 +585,8 @@ final class FileOperations {
     private func transfer(_ sources: [String], into destDir: String, isMove: Bool,
                           choose: (String) -> ConflictChoice,
                           isCancelled: () -> Bool,
-                          forceCrossVolume: Bool, progress: TransferProgress? = nil) -> BatchReport {
+                          forceCrossVolume: Bool, progress: TransferProgress? = nil,
+                          replaceWithoutTrash: Bool = false, deleteOriginalsWithoutTrash: Bool = false) -> BatchReport {
         Activity.shared.begin(.fileOperation)
         defer { Activity.shared.end(.fileOperation) }
         var report = BatchReport()
@@ -579,6 +627,8 @@ final class FileOperations {
                 report.skipped.append("\(name) (already in this folder)")
                 continue
             }
+            // S1: the existing item goes only after the new one is in place (under a "name 2") and verified.
+            var replacePermanently: String? = nil
             if Sys.exists(target) {
                 switch choose(name) {
                 case .cancel:
@@ -587,6 +637,18 @@ final class FileOperations {
                     report.skipped.append(name)
                     continue
                 case .keepBoth:
+                    target = Paths.join(destDir, FileOperations.uniqueName(for: name, in: destDir))
+                case .replace where !hasTrash(target):
+                    var te: Int32 = 0
+                    let isFolder = Sys.lstatInfo(target, &te)?.isDirectory ?? true
+                    if !replaceWithoutTrash || isFolder || FileOperations.deleteRefusal(target) != nil {
+                        let why = isFolder ? "a folder is never replaced where there is no Trash - use Keep Both"
+                                           : "this volume has no Trash and permanent replacing was not confirmed"
+                        report.failed.append((src, .refused("\"\(name)\" was not replaced: \(why). Nothing was changed.")))
+                        log("REPLACE REFUSED (no Trash) \(target): \(why)")
+                        continue
+                    }
+                    replacePermanently = target
                     target = Paths.join(destDir, FileOperations.uniqueName(for: name, in: destDir))
                 case .replace:
                     // Replace = move the existing item to the Trash first. Never overwrite.
@@ -606,6 +668,11 @@ final class FileOperations {
             if isMove && sameVolume {
                 do {
                     try platform.exclusiveRename(src, target)
+                    if let old = replacePermanently {
+                        // Not undoable: the moved item is not offered for Undo either (Undo would move it away).
+                        report.done.append((src, finishPermanentReplace(old, placed: target, report: &report)))
+                        continue
+                    }
                     moved.append((src, target))
                     report.done.append((src, target))
                     log("MOVE \(src) -> \(target)")
@@ -617,8 +684,31 @@ final class FileOperations {
                 continue
             }
             // Copy path (copy, or move across volumes): temp name, verify, exclusive rename.
+            // S2: what the original looked like before the copy (a share without a Trash).
+            let deleteOriginal = isMove && deleteOriginalsWithoutTrash && !hasTrash(src)
+            let before = deleteOriginal ? snapshot(src) : nil
             do {
-                let finalPath = try copyVerified(src, to: target, progress: progress)
+                var finalPath = try copyVerified(src, to: target, progress: progress)
+                if let old = replacePermanently { finalPath = finishPermanentReplace(old, placed: finalPath, report: &report) }
+                if deleteOriginal {
+                    // Deleted only if it is exactly as it was when the copy started (no Undo).
+                    if before != nil, FileOperations.sameSnapshot(before, snapshot(src)), FileOperations.deleteRefusal(src) == nil {
+                        do {
+                            try platform.deletePermanently(src)
+                            report.done.append((src, finalPath))
+                            log("MOVE (across volumes, no Trash) \(src) -> \(finalPath); verified original deleted")
+                        } catch {
+                            report.done.append((src, finalPath))
+                            report.notes.append("\"\(name)\" was copied and verified, but the original could not be deleted (\(error)). Both copies now exist.")
+                            log("MOVE (across volumes, no Trash) copy ok, original kept: \(src): \(error)")
+                        }
+                    } else {
+                        report.done.append((src, finalPath))
+                        report.notes.append("\"\(name)\" was copied and verified, but the original changed while it was copied, so it was kept. Both copies now exist.")
+                        log("W-OP-1 MOVE (across volumes, no Trash) original changed during the copy, kept: \(src)")
+                    }
+                    continue
+                }
                 if isMove {
                     // Originals go to the Trash only after the copy is verified.
                     do {
@@ -633,7 +723,7 @@ final class FileOperations {
                         log("MOVE (across volumes) copy ok but original kept: \(src): \(error)")
                     }
                 } else {
-                    copied.append(finalPath)
+                    if replacePermanently == nil { copied.append(finalPath) }   // a permanent replace has no Undo
                     report.done.append((src, finalPath))
                     log("COPY \(src) -> \(finalPath)")
                 }
@@ -656,6 +746,30 @@ final class FileOperations {
             report.notes.append("Items replaced: \(replacedTrash.count). They are in the Trash and can be put back from there.")
         }
         return report
+    }
+
+    /// S1: the new item is in place at `placed` ("name 2"); delete the old FILE `old` permanently and give
+    /// the new one its name. If that fails, the new item stays as "name 2" (nothing is lost). Returns
+    /// where the new item ends up.
+    private func finishPermanentReplace(_ old: String, placed: String, report: inout BatchReport) -> String {
+        let name = Paths.lastComponent(old)
+        do {
+            try platform.deletePermanently(old)
+        } catch {
+            report.notes.append("\"\(name)\" could not be replaced (\(error)); the new one is kept as \"\(Paths.lastComponent(placed))\".")
+            log("REPLACE (no Trash) old item kept, new one at \(placed): \(error)")
+            return placed
+        }
+        do {
+            try platform.exclusiveRename(placed, old)
+        } catch {
+            report.notes.append("The new \"\(name)\" is in place as \"\(Paths.lastComponent(placed))\": renaming it failed (\(error)).")
+            log("REPLACE (no Trash) rename back failed, new one at \(placed): \(error)")
+            return placed
+        }
+        report.notes.append("The existing \"\(name)\" was deleted permanently (this volume has no Trash) after the new one was in place.")
+        log("REPLACE (no Trash): existing \(old) deleted after the new one was verified")
+        return old
     }
 
     /// Copy `src` to `target` via a hidden temporary name, verify, then rename into place without overwriting.
@@ -963,8 +1077,8 @@ final class FileOperations {
     ///  3. the copy is read back: every value must be what was asked, and the picture data must be
     ///     bit-for-bit the same as the original's (ExifTool's image-data fingerprint) - for a RAW type
     ///     ExifTool can't fingerprint, this check is not possible and is noted in the report;
-    ///  4. only then does the copy take the original's name. The previous version of a JPEG/TIFF/PNG/HEIC
-    ///     (proved identical picture) is removed; the previous version of a RAW goes to the Trash as
+    ///  4. only then does the copy take the original's name. The previous version is removed (PhotoLab S4:
+    ///     RAWs too - no copy in the Trash). Find 0.18 put a RAW's previous version in the Trash as
     ///     "<name> (before metadata edit).<ext>".
     /// Any failure leaves the original exactly as it was. Groups of 50.
     func writeMetadata(_ images: [String], change: MetaChange, progress: ((Int, Int) -> Void)? = nil) -> BatchReport {
@@ -1353,7 +1467,7 @@ final class FileOperations {
                             continue
                         }
                     } else {
-                        report.notes.append("\(name): ExifTool can't fingerprint this RAW type's picture data, so only the metadata could be checked; the previous version is in the Trash.")
+                        report.notes.append("\(name): ExifTool can't fingerprint this RAW type's picture data, so only the metadata could be checked.")
                     }
                 }
                 if j.t.kind == .sidecarNew {
@@ -1396,32 +1510,12 @@ final class FileOperations {
                         if isRaw { rawFailed[j.t.image] = true }
                         continue
                     }
-                    if isRaw {
-                        // A RAW's previous version is never deleted: it goes to the Trash under a name you
-                        // can recognise.
-                        do {
-                            let inTrash = try platform.moveToTrash(old)
-                            let visible = Paths.join(Paths.parent(inTrash), FileOperations.uniqueName(
-                                for: Paths.baseName(Paths.lastComponent(j.t.file)) + " (before metadata edit)." + Paths.fileExtension(j.t.file),
-                                in: Paths.parent(inTrash)))
-                            if (try? platform.exclusiveRename(inTrash, visible)) == nil {
-                                report.notes.append("\(name): the previous version is in the Trash as \(Paths.lastComponent(inTrash)).")
-                            }
-                        } catch {
-                            // No Trash there (most shares): a previous version proved to hold the same picture
-                            // is removed like a JPEG's; without that proof it is kept, hidden.
-                            if needsPrint(j.t.file) && hashBefore[j.t.file] != nil && (try? platform.removeReplacedOriginal(old)) != nil {
-                                // removed
-                            } else {
-                                report.notes.append("\(name): the previous version could not be moved to the Trash and is kept hidden as \(Paths.lastComponent(old)).")
-                            }
-                        }
-                    } else {
-                        do {
-                            try platform.removeReplacedOriginal(old)
-                        } catch {
-                            report.notes.append("\(name): the previous version could not be removed and is kept hidden as \(Paths.lastComponent(old)).")
-                        }
+                    // PhotoLab S4 (decided 2026-11-27): no "(before metadata edit)" copy, for RAWs either - the
+                    // new version was read back and checked, so the previous one is removed as for a JPEG.
+                    do {
+                        try platform.removeReplacedOriginal(old)
+                    } catch {
+                        report.notes.append("\(name): the previous version could not be removed and is kept hidden as \(Paths.lastComponent(old)).")
                     }
                     noteEnd(note2)
                 }

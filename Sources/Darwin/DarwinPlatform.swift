@@ -314,6 +314,35 @@ extension DarwinPlatform {
 }
 
 extension DarwinPlatform {
+    /// PhotoLab S1/S2: SMB, NFS, WebDAV and FTP mounts have no Trash on macOS (Finder deletes there
+    /// immediately); local disks and AFP do. Unknown: assume a Trash (the Trash is then tried and,
+    /// if it fails, nothing is deleted).
+    /// From the mount table only (MNT_NOWAIT: never waits for a server - safe on the main thread).
+    func hasTrash(_ path: String) -> Bool {
+        #if os(macOS)
+        var buf: UnsafeMutablePointer<statfs>? = nil
+        let n = Int(getmntinfo(&buf, MNT_NOWAIT))
+        guard n > 0, let mounts = buf else { return true }
+        var best = "", bestType = ""
+        for i in 0..<n {
+            var m = mounts[i]
+            let mp = withUnsafePointer(to: &m.f_mntonname) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+            }
+            let inside = mp == "/" || path == mp || path.hasPrefix(mp + "/")
+            if inside && mp.count > best.count {
+                best = mp
+                bestType = withUnsafePointer(to: &m.f_fstypename) {
+                    $0.withMemoryRebound(to: CChar.self, capacity: Int(MFSTYPENAMELEN)) { String(cString: $0) }
+                }
+            }
+        }
+        return !["smbfs", "nfs", "webdav", "ftp", "cifs"].contains(bestType)
+        #else
+        return true
+        #endif
+    }
+
     func tagNames(_ path: String) -> [String] {
         return FinderTags.read(path).map { $0.name }
     }

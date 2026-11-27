@@ -612,6 +612,9 @@ extension BrowserPane {
             .filter { n in !(move && sources.contains(Paths.join(dest, n))) }
         var decisions: [String: ConflictChoice] = [:]
         var applyAll: ConflictChoice? = nil
+        // PhotoLab S1: a share has no Trash - Replace then deletes the old FILE permanently, after the new
+        // one is in place and verified. The dialog says so; choosing Replace there is the confirmation.
+        let destNoTrash = !App.ops.hasTrash(dest)
         for name in clashes {
             if let all = applyAll {
                 decisions[name] = all
@@ -619,10 +622,14 @@ extension BrowserPane {
             }
             let a = ThemedAlert()
             a.messageText = "An item named \"\(name)\" already exists in \"\(Paths.lastComponent(dest))\"."
-            a.informativeText = "Keep Both adds a number to the new item's name. Replace moves the existing item to the Trash first; nothing is overwritten."
+            if destNoTrash {
+                a.informativeText = "Keep Both adds a number to the new item's name. \"\(Paths.lastComponent(dest))\" is on a volume without a Trash: Replace deletes the existing file permanently, only after the new one is copied in and verified. It can't be undone. Folders are never replaced here."
+            } else {
+                a.informativeText = "Keep Both adds a number to the new item's name. Replace moves the existing item to the Trash first; nothing is overwritten."
+            }
             a.addButton(withTitle: "Keep Both")
             a.addButton(withTitle: "Skip")
-            a.addButton(withTitle: "Replace")
+            a.addButton(withTitle: destNoTrash ? "Replace (Delete Old)" : "Replace")
             a.addButton(withTitle: "Stop")
             if clashes.count > 1 {
                 a.showsSuppressionButton = true
@@ -643,6 +650,32 @@ extension BrowserPane {
             decisions[name] = choice
             if a.suppressionButton?.state == .on { applyAll = choice }
         }
+        let replaceWithoutTrash = destNoTrash && decisions.values.contains(.replace)
+        // PhotoLab S2: moving to another volume from a share without a Trash - the originals are deleted
+        // after their copies are verified (if they did not change meanwhile). Asked once.
+        var moveNow = move
+        var deleteOriginals = false
+        let destRoot = VolumeRegistry.volumeRoot(dest)
+        let noTrashOrigins = move ? sources.filter { VolumeRegistry.volumeRoot($0) != destRoot && !App.ops.hasTrash($0) } : []
+        if !noTrashOrigins.isEmpty {
+            let a = ThemedAlert()
+            let vol = Paths.lastComponent(VolumeRegistry.volumeRoot(noTrashOrigins[0]))
+            a.messageText = "Move \(noTrashOrigins.count == 1 ? "\"\(Paths.lastComponent(noTrashOrigins[0]))\"" : "\(noTrashOrigins.count) items") from \"\(vol)\", which has no Trash?"
+            a.informativeText = "Each original is deleted only after its copy is verified, and only if it did not change while it was copied. This can't be undone. Copy Instead keeps the originals."
+            a.addButton(withTitle: "Move")
+            a.addButton(withTitle: "Copy Instead")
+            a.addButton(withTitle: "Cancel")
+            switch a.runModal() {
+            case .alertFirstButtonReturn: deleteOriginals = true
+            case .alertSecondButtonReturn: moveNow = false
+            default:
+                App.log.info("Move from a volume without a Trash cancelled by user")
+                return
+            }
+            App.log.info(deleteOriginals ? "Move from a volume without a Trash confirmed: \(noTrashOrigins.count) originals deleted after verified copies"
+                                         : "Move from a volume without a Trash: copying instead")
+        }
+        let move = moveNow
         let verb = move ? "Moving" : "Copying"
         let what = sources.count == 1 ? "\"\(Paths.lastComponent(sources[0]))\"" : "\(sources.count) items"
         runTask(title: "\(verb) \(what) to \"\(Paths.lastComponent(dest))\"", work: { t in
@@ -650,9 +683,11 @@ extension BrowserPane {
             let choose: (String) -> ConflictChoice = { n in decisions[n] ?? .skip }
             t.progress.plan(sources)
             if move {
-                return App.ops.move(sources, into: dest, choose: choose, isCancelled: t.isCancelled, progress: t.progress)
+                return App.ops.move(sources, into: dest, choose: choose, isCancelled: t.isCancelled, progress: t.progress,
+                                    replaceWithoutTrash: replaceWithoutTrash, deleteOriginalsWithoutTrash: deleteOriginals)
             }
-            return App.ops.copy(sources, into: dest, choose: choose, isCancelled: t.isCancelled, progress: t.progress)
+            return App.ops.copy(sources, into: dest, choose: choose, isCancelled: t.isCancelled, progress: t.progress,
+                                replaceWithoutTrash: replaceWithoutTrash)
         }, done: { [weak self] result in
             guard let s = self else { return }
             var r = result

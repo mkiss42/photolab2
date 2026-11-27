@@ -209,6 +209,41 @@ final class SafetySelfCheck {
             }
         }
 
+        // 60-65 PhotoLab S1/S2: volumes without a Trash (simulated here).
+        ops.simulateNoTrash = true
+        _ = files.makeDir(p("nt"))
+        makeFile("nt/r.txt", "OLD")
+        makeFile("r.txt", "NEW")
+        let nt1 = ops.copy([p("r.txt")], into: p("nt"), choose: { _ in .replace })
+        check("T-SAFE-60", "no Trash, Replace not confirmed: refused, nothing changed",
+              nt1.failed.count == 1 && read(p("nt/r.txt")) == "OLD" && read(p("r.txt")) == "NEW", nt1.summaryLines.joined(separator: " / "))
+        let nt2 = ops.copy([p("r.txt")], into: p("nt"), choose: { _ in .replace }, replaceWithoutTrash: true)
+        check("T-SAFE-61", "no Trash, Replace confirmed: new file in place, old deleted only after, no Undo, no \"name 2\" left",
+              nt2.failed.isEmpty && read(p("nt/r.txt")) == "NEW" && !Sys.exists(p("nt/r 2.txt")) && nt2.undo == nil,
+              nt2.summaryLines.joined(separator: " / "))
+        _ = files.makeDir(p("nt/fold"))
+        makeFile("nt/fold/keep.txt", "K")
+        _ = files.makeDir(p("fold"))
+        let nt3 = ops.copy([p("fold")], into: p("nt"), choose: { _ in .replace }, replaceWithoutTrash: true)
+        check("T-SAFE-62", "no Trash: a folder is never replaced permanently", nt3.failed.count == 1 && read(p("nt/fold/keep.txt")) == "K")
+        makeFile("mv.txt", "MOVE")
+        let nt4 = ops.move([p("mv.txt")], into: p("nt"), choose: { _ in .cancel }, forceCrossVolume: true, deleteOriginalsWithoutTrash: true)
+        check("T-SAFE-63", "no Trash, move to another volume confirmed: copy verified, original deleted, no Undo",
+              nt4.failed.isEmpty && read(p("nt/mv.txt")) == "MOVE" && !Sys.exists(p("mv.txt")) && nt4.undo == nil,
+              nt4.summaryLines.joined(separator: " / "))
+        _ = files.makeDir(p("mvtree"))
+        makeFile("mvtree/a.txt", "A")
+        makeFile("mvtree/b.txt", "BB")
+        let nt5 = ops.move([p("mvtree")], into: p("nt"), choose: { _ in .cancel }, forceCrossVolume: true, deleteOriginalsWithoutTrash: true)
+        check("T-SAFE-64", "no Trash, folder moved to another volume: all copied, original folder deleted",
+              nt5.failed.isEmpty && read(p("nt/mvtree/b.txt")) == "BB" && !Sys.exists(p("mvtree")), nt5.summaryLines.joined(separator: " / "))
+        ops.simulateNoTrash = false
+        makeFile("tr.txt", "T")
+        let nt6 = ops.move([p("tr.txt")], into: p("nt"), choose: { _ in .cancel }, forceCrossVolume: true, deleteOriginalsWithoutTrash: true)
+        check("T-SAFE-65", "with a Trash the confirmation changes nothing: original to the Trash, Undo offered",
+              nt6.failed.isEmpty && !Sys.exists(p("tr.txt")) && nt6.undo != nil, nt6.summaryLines.joined(separator: " / "))
+        if let u = nt6.undo { _ = try? ops.undo(u) }
+
         // 21 Undo rename
         do {
             makeFile("u.txt", "U")
