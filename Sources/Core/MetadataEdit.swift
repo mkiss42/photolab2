@@ -450,6 +450,8 @@ enum MetaPlan {
         if xmp, let cc = c.colorClass {
             // Photo Mechanic's own field (its XMP namespace), as Photo Mechanic writes it.
             a.append(cc <= 0 ? "-XMP-photomech:ColorClass=" : "-XMP-photomech:ColorClass=\(min(8, cc))")
+            // PhotoLab: ColorClass is the master; xmp:Label follows it (Bridge, Lightroom).
+            a.append("-XMP-xmp:Label=" + (MetaPlan.labelName(cc) ?? ""))
         }
         for f in MetaField.all {
             guard let v = c.set[f] else { continue }
@@ -529,6 +531,11 @@ enum MetaPlan {
     static func currentRating(in rec: [String: Any]) -> Int {
         return Int(values(rec["XMP-xmp:Rating"]).first ?? "") ?? 0
     }
+
+    /// PhotoLab: the xmp:Label written with colour class 1-8 (the colours of Photo Mechanic's default
+    /// classes, as Settings shows them); nil for 0 (Label removed).
+    static let labelNames = ["Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Cyan", "Gray"]
+    static func labelName(_ cc: Int) -> String? { return cc >= 1 && cc <= 8 ? labelNames[cc - 1] : nil }
 
     /// Colour class 0-8 (ExifTool may print "1 (Winner)": the number is what counts).
     static func currentColorClass(in rec: [String: Any]) -> Int {

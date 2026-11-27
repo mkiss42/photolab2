@@ -99,6 +99,16 @@ final class PhotoSelfTest {
 
         // 40-44 PhotoLab: embedded previews through the shared reader (CameraPreviews, FileReads).
         embeddedPreviewChecks()
+        // 45 PhotoLab: xmp:Label follows the colour class (ColorClass is the master).
+        var lc = MetaChange()
+        lc.colorClass = 4
+        let lv = InPlaceValues(lc, current: [:]).xmpChanges()
+        var lc0 = MetaChange()
+        lc0.colorClass = 0
+        let lv0 = InPlaceValues(lc0, current: [:]).xmpChanges()
+        check("T-PHOTO-45", "colour class 4 writes xmp:Label Green; class 0 removes it",
+              lv.contains { $0.0.local == "Label" && $0.1 == ["Green"] } && lv0.contains { $0.0.local == "Label" && $0.1.isEmpty },
+              "\(lv.map { "\($0.0.local)=\($0.1)" }) / \(lv0.map { "\($0.0.local)=\($0.1)" })")
 
         // 20-22 Photography mode facts and the contact sheet
         let nf = PhotoFactsReader.readNative(path: jpg)

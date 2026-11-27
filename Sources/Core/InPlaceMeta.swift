@@ -271,6 +271,8 @@ enum XMPEditor {
     }
     static let rating = Prop(ns: "http://ns.adobe.com/xap/1.0/", prefix: "xmp", local: "Rating", kind: .simple)
     static let colorClass = Prop(ns: "http://ns.camerabits.com/photomechanic/1.0/", prefix: "photomechanic", local: "ColorClass", kind: .simple)
+    /// PhotoLab (decision 2026-11-26): xmp:Label kept in step with the colour class, for Bridge/Lightroom.
+    static let label = Prop(ns: "http://ns.adobe.com/xap/1.0/", prefix: "xmp", local: "Label", kind: .simple)
 
     static let packetID = "W5M0MpCehiHzreSzNTczkc9d"
 
@@ -875,7 +877,10 @@ struct InPlaceValues {
             return (XMPEditor.prop(f.0), f.1)
         }
         if let r = rating { o.append((XMPEditor.rating, r <= 0 ? [] : ["\(min(5, r))"])) }
-        if let c = colorClass { o.append((XMPEditor.colorClass, c <= 0 ? [] : ["\(min(8, c))"])) }
+        if let c = colorClass {
+            o.append((XMPEditor.colorClass, c <= 0 ? [] : ["\(min(8, c))"]))
+            o.append((XMPEditor.label, MetaPlan.labelName(c).map { [$0] } ?? []))
+        }
         return o
     }
     func iptcChanges() -> [(MetaField, [String])] { return fields.filter { IIMBlock.dataset($0.0) != nil } }

@@ -24,7 +24,23 @@
   - S4 No "(before metadata edit)" copies of RAWs in the Trash any more.
   - S3 (fastest write mode as default) waits for a speed measurement; S5 was already the same;
     S6: Find already takes the newer file whole - MetadataDate comparison still to come.
-- Self-tests: T-PHOTO-40..44 (preview choice, shared reader, MPF, PSD, changed file) and
+- Space preview (Find's window, the list keeps the keys): Z or double-click toggles Fit / 100%,
+  Cmd = / Cmd - zoom in steps while a picture shows (thumbnail size otherwise), Cmd-0 fits,
+  Cmd-scroll or pinch zooms at the pointer, drag pans. Zoom and pan carry over to the next shot;
+  Z out and Z in again comes back to the same spot. Z goes straight to the final size (soft until
+  the sharp version arrives). The thumbnail shows at once; the preview is read only after the
+  selection rests (Settings > Thumbnails > Preview delay, default 150 ms). Option-Space still
+  fills the screen.
+- Finder tags update live: changes made on this Mac at once (FSEvents), changes by other Macs on a
+  share within about 5 s (one cheap check per row on screen); removing a tag updates too.
+- Menu bar icon: Favorites, Devices, Network, Servers; click = new window, Option-click = front
+  window. Folders dropped on the Dock icon open as a list or a contact sheet (choice in the menu).
+- Type-to-select: the same letter again goes to the next name with that letter; a name that
+  matches nothing goes to the nearest; Space while typing a name is part of the name.
+- Colour classes also write xmp:Label (Red, Orange, Yellow, Green, Blue, Purple, Cyan, Gray) for
+  Bridge and Lightroom; Photo Mechanic's ColorClass stays the master.
+- Help > Short Report (to Retype): 4 short lines, no paths.
+- Self-tests: T-PHOTO-45 (Label), T-PHOTO-40..44 (preview choice, shared reader, MPF, PSD, changed file) and
   T-SAFE-60..65 (no-Trash rules) added; all pass on Apple Silicon, Rosetta and Intel.
 
 Test checklist (5 minutes, 12.6 Mac):
@@ -38,6 +54,10 @@ Test checklist (5 minutes, 12.6 Mac):
        "Replace (Delete Old)"; Replace leaves the new file under the old name, no "name 2".
 [ ] 6  Move a file from the share to the desktop: asked once; Move deletes the share copy.
 [ ] 7  Rate a RAW: no "(before metadata edit)" file appears in the Trash.
+[ ] 8  Space on a RAW, Z, drag somewhere, arrow right: same zoom and spot on the next shot; Z out,
+       Z in: back to that spot. Hold the right arrow through 50 shots: it stops at once.
+[ ] 9  Menu bar icon: a favourite opens a new window; Option-click uses the front window.
+[ ] 10 Help > Short Report: retype the READS and STALLS lines.
 
 ## 1.0.0-alpha.2 — PhotoLab = Find 0.18.16 + first PhotoLab 2 fix
 

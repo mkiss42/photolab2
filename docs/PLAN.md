@@ -48,13 +48,13 @@ Each item: verify Find's version first (keep it if it is as good), else port.
 | P2 | Read economy: one shared reader per file (FileReads), 256 KB first read, embedded JPEG in one request; READS/THUMBS figures | PL2 | done 1.0.0-alpha.3 (Find read the full-size preview for every thumbnail; ImageIO, facts, inspector and PDF now read through the shared reader; reads/file in the network I/O log's MINUTE lines) |
 | P3 | Thumbnail sources by type: Nikon maker-note preview, camera-JPEG MPF previews, Photoshop thumbnail resource (PSD/TIFF/JPEG), PDF page 1, Quick Look on a slow lane, background track for the whole folder | PL2 | alpha.3: sources + PDF page 1 + thumbnails kept on disk (Caches/PhotoLab/Thumbs, 1 GB). Todo: Quick Look slow lane, background track for the whole folder |
 | P4 | Contact sheet tiles as CALayers (GPU scrolling, no redraw) | PL2 | todo - measure Find's grid first |
-| P5 | Preview for culling: zoom intent + pan memory between shots and Z in/out, final size probed from the header, Decode Full Image, selection-rest delay, documents in-window | PL2 + PL1 | todo - Find's FastPreview has PDF/AV viewers, never takes focus |
+| P5 | Preview for culling: zoom intent + pan memory between shots and Z in/out, final size probed from the header, Decode Full Image, selection-rest delay, documents in-window | PL2 + PL1 | alpha.3: in Find's Space window (keeps Find's rule that the list keeps the keys): zoom canvas (Z / double-click, Cmd =/-/0, Cmd-scroll/pinch at the pointer), pan kept between shots and across Z, final size from the header, bigger version loaded when zoomed, selection-rest delay (Settings). Todo: stars/colours shown in the preview, Decode Full Image button, documents arrowed through in-window |
 | P6 | Sets as one row + Ext column; set-aware rename/copy/trash; set rows drag whole sets | PL1 + PL2 | todo - check Find's sidecar handling |
-| P7 | Finder tags: live updates (FSEvents, light on-screen check on shares), dots, inline menu row | PL2 | todo |
-| P8 | Menu bar icon (Favorites, Volumes, Network), app stays open, Dock drops, editable favourites | PL2 | todo - Find has saved servers + Keychain (keep) |
-| P9 | Freeze watchdog (labelled activities) + Short Report for the air-gapped Macs | PL2 | todo - compare with Find's Settings reports |
-| P10 | Type-select cycling and nearest name | PL2 | todo |
-| P11 | XMP:ColorClass master, xmp:Label kept in step | decision 2026-11-26 | check Find's writer |
+| P7 | Finder tags: live updates (FSEvents, light on-screen check on shares), dots, inline menu row | PL2 | done alpha.3 (TagCache: ctime per item, FSEvents per list folder, 5 s check of rows on screen on shares, list and contact sheet; removed tags now update too) |
+| P8 | Menu bar icon (Favorites, Volumes, Network), app stays open, Dock drops, editable favourites | PL2 | done alpha.3 (menu bar icon with Favorites/Devices/Network/Servers, Option = front window; Dock / Open With drops, list or contact sheet; Find already stays open and has editable favourites) |
+| P9 | Freeze watchdog (labelled activities) + Short Report for the air-gapped Macs | PL2 | alpha.3: Find's StallWatch kept (BEACHBALL lines); Help > Short Report (to Retype): version, READS, STALLS, thumbs on disk - no paths |
+| P10 | Type-select cycling and nearest name | PL2 | done alpha.3 (same letter cycles, no match = nearest name, Space inside a typed name) |
+| P11 | XMP:ColorClass master, xmp:Label kept in step | decision 2026-11-26 | done alpha.3 (both writers: ExifTool and Find's in-place XMP; Label = Red/Orange/Yellow/Green/Blue/Purple/Cyan/Gray for classes 1-8; T-PHOTO-45) |
 | P12 | Brain, shared cache, ingest, AI, Goodbye Drill | PL2 plan / PL1 | later phases |
 | P13 | Split panes / combo window (tree + sheet + inspector + tools) | user | Find has split panes; combo window to discuss |
 | P14 | Styling like PhotoLab 1 | user | later |
