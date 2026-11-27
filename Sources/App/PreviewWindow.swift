@@ -28,7 +28,7 @@ final class PreviewWindow: NSWindowController, NSWindowDelegate {
     var isOpen: Bool { return window?.isVisible ?? false }
 
     init() {
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 640),
+        let w = PreviewKeyWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 640),
                          styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
         w.title = "Preview"
         w.isReleasedWhenClosed = false
@@ -57,6 +57,8 @@ final class PreviewWindow: NSWindowController, NSWindowDelegate {
         w.contentView = content
         if w.frame.origin == .zero { w.center() }
         canvas.onKey = { [weak self] e in self?.key(e) ?? false }
+        // Keys are caught at the window, before a Quick Look view inside can take them.
+        w.onKey = { [weak self] e in self?.key(e) ?? false }
         canvas.onNeedsDetail = { [weak self] in self?.loadFull() }
         canvas.onZoomChange = { [weak self] in self?.updateInfo() }
         NotificationCenter.default.addObserver(forName: .previewReady, object: nil, queue: .main) { [weak self] n in
@@ -80,13 +82,14 @@ final class PreviewWindow: NSWindowController, NSWindowDelegate {
             source = from
             if entry?.path != e.path { canvas.newPicture() }
             entry = e
-            if Thumbnails.route(e.ext) == .other {
+            if Thumbnails.route(e.ext) == .other || e.isDirectory && !e.isPackage {
                 showQuickLook(e)
             } else {
                 hideQuickLook()
                 // Neighbours are prefetched - but not PSD/TIFF composites (hundreds of MB each).
                 let pre = neighbours.filter { let r = Thumbnails.route($0.ext); return r != .other && r != .layered }
                 Previews.shared.request([e] + pre, px: screenPixels)
+                Previews.shared.probeSize(e)
                 if canvas.wantsFull { loadFull() }
                 refresh()
             }
@@ -104,6 +107,7 @@ final class PreviewWindow: NSWindowController, NSWindowDelegate {
 
     private func refresh() {
         guard let e = entry, quickLook?.isHidden ?? true else { return }
+        if let s = Previews.shared.knownSize(e) { canvas.setFinalSize(s) }
         if let f = Previews.shared.cached(e, px: Previews.full) {
             canvas.setImage(f.image, isFull: true)
             lastMethod = "\(f.method), \(Int(f.ms)) ms (full size)"
@@ -254,14 +258,28 @@ final class PreviewCanvas: NSView {
     /// A different file: forget its sizes, keep the zoom intent and pan (between shots).
     func newPicture() {
         refSize = .zero
+        finalKnown = false
         image = nil
+    }
+
+    private var finalKnown = false
+
+    /// The size the full picture will have (from the file's header): the frame is laid out at
+    /// that size from now on, and every smaller version is stretched into it - Z goes straight
+    /// to the final size (soft until the sharp version replaces it, without moving).
+    func setFinalSize(_ s: CGSize) {
+        guard s.width > 0, s.height > 0, refSize != s else { return }
+        refSize = s
+        finalKnown = true
+        realize()
+        if wantsFull { onNeedsDetail?() }
     }
 
     func setImage(_ img: CGImage, isFull: Bool) {
         if image === img { return }
         // Versions of one picture differ slightly in aspect; the biggest held is the reference.
         let size = CGSize(width: img.width, height: img.height)
-        if size.width * size.height >= refSize.width * refSize.height { refSize = size }
+        if !finalKnown && size.width * size.height >= refSize.width * refSize.height { refSize = size }
         image = img
         held = max(size.width, size.height)
         CATransaction.begin(); CATransaction.setDisableActions(true)
@@ -374,5 +392,15 @@ final class PreviewCanvas: NSView {
         if intent == .fit { panX = 0; panY = 0 }
         realize()
         if wantsFull { onNeedsDetail?() }
+    }
+}
+
+/// The preview's window: keys go to the preview first (arrows step through the folder even
+/// when a PDF or document is showing inside).
+final class PreviewKeyWindow: NSWindow {
+    var onKey: ((NSEvent) -> Bool)?
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown, onKey?(event) == true { return }
+        super.sendEvent(event)
     }
 }

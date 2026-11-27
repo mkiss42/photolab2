@@ -306,6 +306,37 @@ enum EmbeddedPreview {
 
     /// Long side from the JPEG's SOF marker (in the first bytes), nil if not found.
     static func jpegLongSide(_ d: Data) -> Int? {
+        guard let s = jpegSize(d) else { return nil }
+        return max(s.width, s.height)
+    }
+
+    /// Size of the largest embedded JPEG of a RAW (what the full-size preview will be), upright.
+    static func largestSize(_ r: BlockReader) -> (width: Int, height: Int)? {
+        guard let head = r.read(0, 64), head.count >= 16 else { return nil }
+        var cands: [Candidate] = []
+        var orientation = 1
+        if head.starts(with: Array("FUJIFILMCCD-RAW".utf8)) {
+            guard let h = r.read(84, 8), h.count == 8 else { return nil }
+            cands = [Candidate(offset: Int64(be32(h, 0)), length: Int(be32(h, 4)))]
+        } else if Array(head[4..<8]) == Array("ftyp".utf8) {
+            guard let c = cr3(r) else { return nil }
+            cands = [c.preview]
+            orientation = c.orientation
+        } else if head[0] == head[1], head[0] == 0x49 || head[0] == 0x4D, let t = tiff(r, base: 0) {
+            cands = t.candidates
+            orientation = t.orientation
+        }
+        var best: (Int, Int)?
+        for c in cands where c.length > 512 && c.offset > 0 && c.offset + Int64(c.length) <= r.size {
+            guard let start = r.read(c.offset, min(c.length, 64 << 10)), start.count > 4, start[0] == 0xFF, start[1] == 0xD8,
+                let s = jpegSize(start) else { continue }
+            if best == nil || s.width * s.height > best!.0 * best!.1 { best = (s.width, s.height) }
+        }
+        guard let b = best else { return nil }
+        return orientation >= 5 ? (b.1, b.0) : (b.0, b.1)
+    }
+
+    static func jpegSize(_ d: Data) -> (width: Int, height: Int)? {
         var i = 2
         let b = [UInt8](d)
         while i + 9 < b.count {
@@ -315,7 +346,7 @@ enum EmbeddedPreview {
             let len = Int(b[i + 2]) << 8 | Int(b[i + 3])
             if (0xC0...0xCF).contains(m) && m != 0xC4 && m != 0xC8 && m != 0xCC {
                 let h = Int(b[i + 5]) << 8 | Int(b[i + 6]), w = Int(b[i + 7]) << 8 | Int(b[i + 8])
-                return max(w, h)
+                return (w, h)
             }
             i += 2 + len
         }

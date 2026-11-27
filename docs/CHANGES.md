@@ -1,5 +1,22 @@
 # Changes
 
+## 0.8.2 — zoom to the final size, one preview for everything
+
+- The preview reads the size the full picture will have from the file's header when a shot
+  opens (RAW: its biggest embedded JPEG; others: the image header - a few small reads) and
+  lays the picture out at that size from the start. Z goes straight to the final 100%: a
+  low-res version is shown blown up (soft) and the sharp one replaces it in place. Pan keeps
+  its spot.
+- Every file opens in the same preview window and you can arrow through a mixed folder:
+  images in the viewer, PDFs/documents/video in the Quick Look view inside it. Space on a PDF
+  opens the preview too (Cmd-Y still gives the separate Quick Look panel).
+
+Test checklist (3 minutes):
+[ ] 1  Preview a JPG/NEF, press Z at once: it jumps to the final size, soft, then sharp - no
+       jump in size or position when the sharp one arrives. Drag, right arrow: same spot.
+[ ] 2  Folder with JPG, PDF, JPG: arrow through all three in the preview.
+
+
 ## 0.8.1 — preview for review (zoom, pan), documents inside the preview
 
 - The preview works like PhotoLab 1's: Z or double-click toggles fit / 100%; Cmd + / Cmd -

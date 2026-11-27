@@ -72,6 +72,35 @@ final class Previews {
         }
     }
 
+    // MARK: Final size (so the preview can lay the picture out at its full size at once)
+
+    private var sizes: [String: CGSize] = [:]
+
+    func knownSize(_ e: FileEntry) -> CGSize? { lock.lock(); defer { lock.unlock() }; return sizes[Previews.cacheKey(e, 0)] }
+
+    /// The size the full-size picture will have, from the file's header (a few small reads);
+    /// posted as .previewReady when found.
+    func probeSize(_ e: FileEntry) {
+        let key = Previews.cacheKey(e, 0)
+        lock.lock(); let have = sizes[key] != nil; lock.unlock()
+        if have { return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let s = Previews.fullSize(e.path, ext: e.ext) else { return }
+            self?.lock.lock(); self?.sizes[key] = s; self?.lock.unlock()
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .previewReady, object: nil, userInfo: ["path": e.path]) }
+        }
+    }
+
+    static func fullSize(_ path: String, ext: String) -> CGSize? {
+        guard let r = BlockReader(path) else { return nil }
+        if Thumbnails.route(ext) == .raw, let s = EmbeddedPreview.largestSize(r) { return CGSize(width: s.width, height: s.height) }
+        guard let src = r.imageSource(), CGImageSourceGetCount(src) > 0,
+            let p = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+            let w = p[kCGImagePropertyPixelWidth] as? Int, let h = p[kCGImagePropertyPixelHeight] as? Int else { return nil }
+        let o = (p[kCGImagePropertyOrientation] as? Int) ?? 1
+        return o >= 5 ? CGSize(width: h, height: w) : CGSize(width: w, height: h)
+    }
+
     static func make(_ path: String, ext: String, px: Int) -> (image: CGImage, method: String, bytes: Int64, reads: Int)? {
         let route = Thumbnails.route(ext)
         if route == .raw || route == .jpeg, let r = BlockReader(path) {

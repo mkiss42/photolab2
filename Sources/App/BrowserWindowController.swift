@@ -673,9 +673,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
         guard let e = s.first else { NSSound.beep(); return }
         if PreviewWindow.shared.isOpen { PreviewWindow.shared.close(); return }
-        let pic = pictureEntry(e)
-        if Thumbnails.route(pic.ext) == .other { toggleQuickLook(nil); return }     // PDF, video...: Quick Look
-        PreviewWindow.shared.show(pic, neighbours: neighbours(of: e), from: self)
+        // Everything opens in the preview: images in its viewer, PDFs and documents in the Quick
+        // Look view inside it - one window to arrow through a mixed folder.
+        PreviewWindow.shared.show(pictureEntry(e), neighbours: neighbours(of: e), from: self)
     }
 
     // MARK: Preview / Quick Look
@@ -691,10 +691,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     /// The selection moved while the preview is open for this window: it follows.
     private func followInPreview() {
-        guard PreviewWindow.shared.isOpen, let e = selection().first, !e.isDirectory || e.isPackage else { return }
-        let pic = pictureEntry(e)
-        guard Thumbnails.route(pic.ext) != .other else { return }
-        PreviewWindow.shared.show(pic, neighbours: neighbours(of: e), from: self)
+        guard PreviewWindow.shared.isOpen, let e = selection().first else { return }
+        PreviewWindow.shared.show(pictureEntry(e), neighbours: neighbours(of: e), from: self)
     }
 
     func previewStep(_ d: Int) {
