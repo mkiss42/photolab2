@@ -42,6 +42,12 @@ verdicts, the phases and the Decision Log. `docs/PROTOCOL.md` is the app↔brain
 11. **PhotoLab 1 source** is in the Claude project docs (Python). Port logic from it where
     PLAN.md says "Python"; read it for behaviour where it says "Swift". Do not port its
     workarounds for Qt/GIL.
+12. **Two people share this repo.** Find's author and the PhotoLab owner both push to `main`,
+    each with their own Claude. Before starting any change, pull (`git fetch origin main` then
+    `git pull --ff-only`, or rebase local work onto `origin/main`) and read the new commits and
+    `docs/CHANGES.md` so you build on the other side's latest work. Pull again right before
+    pushing; if `main` moved, rebase and re-check CI. Never force-push `main`, never revert or
+    rewrite the other side's work without asking, and push every fix so both sides stay in sync.
 
 ## Build
 
