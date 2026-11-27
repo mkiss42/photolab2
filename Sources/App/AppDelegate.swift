@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Prefs.registerDefaults()
         App.start()
         StatusMenu.shared = StatusMenu()   // PhotoLab: the menu bar icon
+        _ = App.launched
         // 0.17.1: keep what happened if Find ever stops unexpectedly; offer last time's report.
         let pending = Paths.join(App.files.logsDir, "crash-pending.txt")
         let lastCrash = (FileManager.default.contents(atPath: pending)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
@@ -514,6 +515,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Help > Network Report (0.14): what macOS reports about mounted shares and how Find matches them
     /// to saved servers. Reads nothing from any server (the volume list Find already has).
+    /// PhotoLab: a few path-free lines short enough to retype from an air-gapped Mac.
+    @objc func shortReport(_ sender: Any?) {
+        let up = Int(Date().timeIntervalSince(App.launched) / 60)
+        let lines = [
+            "PL \(App.version) | \(Ascii.clean(App.systemInfo.split(separator: ",").first.map(String.init) ?? App.systemInfo)) | up \(up) min",
+            FileReads.reportLine,
+            StallWatch.reportLine,
+            "THUMBS on disk \(App.thumbs?.count ?? 0)",
+        ]
+        let text = lines.joined(separator: "\n")
+        App.log.info("Short report: " + lines.joined(separator: " / "))
+        let a = ThemedAlert()
+        a.alertStyle = .informational
+        a.messageText = "Short Report"
+        a.informativeText = text + "\n\nNo paths, names or addresses - safe to retype."
+        a.addButton(withTitle: "OK")
+        a.addButton(withTitle: "Copy")
+        if a.runModal() == .alertSecondButtonReturn {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        }
+    }
+
     @objc func networkReport(_ sender: Any?) {
         Volumes.refresh { [weak self] in
             let lines = NetworkReport.lines(VolumeRegistry.shared.volumes, saved: Prefs.savedServers)
@@ -875,6 +899,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         help.addItem(item("Run Index Self-Test\u{2026}", #selector(runIndexTest(_:)), "", [], target: self))
         help.addItem(item("Run Photo Metadata Self-Test", #selector(runPhotoTest(_:)), "", [], target: self))
         help.addItem(item("Network Report", #selector(networkReport(_:)), "", [], target: self))
+        help.addItem(item("Short Report (to Retype)", #selector(shortReport(_:)), "", [], target: self))
         help.addItem(item("Copy Last Report to Clipboard", #selector(copyLastReport(_:)), "", [], target: self))
         help.addItem(item("Copy Current Log to Clipboard", #selector(copyCurrentLog(_:)), "", [], target: self))
         help.addItem(item("Show Logs Folder", #selector(showLogsFolder(_:)), "", [], target: self))

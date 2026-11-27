@@ -358,6 +358,7 @@ final class FileTableView: NSOutlineView {
 
     override func keyDown(with event: NSEvent) {
         cancelClickRename()
+        if FastPreview.shared.handleKey(event) { return }   // PhotoLab: Z / Cmd-0 zoom the preview
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let cmd = flags.contains(.command)
         // I: Edit Metadata - unless a name is being typed to jump to it (another letter less than a second ago).

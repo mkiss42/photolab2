@@ -207,6 +207,18 @@ enum ImageMeta {
         return nil
     }
 
+    /// PhotoLab: the size the biggest version of this picture will have, upright - from the header
+    /// (RAW: the largest embedded preview, which is what the preview shows; others: the image).
+    static func finalSize(_ path: String, size: Int64? = nil, modified: Double? = nil) -> CGSize? {
+        guard let r = FileReads.reader(path, size: size, modified: modified) else { return nil }
+        if PhotoFormats.isRaw(path), let s = CameraPreviews.largestSize(r) { return CGSize(width: s.width, height: s.height) }
+        guard let src = r.imageSource(hint: typeHint(path)),
+            let props = CGImageSourceCopyPropertiesAtIndex(src, 0, [kCGImageSourceShouldCache: false] as CFDictionary) as? [String: Any],
+            let w = (props["PixelWidth"] as? NSNumber)?.intValue, let h = (props["PixelHeight"] as? NSNumber)?.intValue, w > 0, h > 0 else { return nil }
+        let o = (props["Orientation"] as? NSNumber)?.intValue ?? 1
+        return o >= 5 ? CGSize(width: h, height: w) : CGSize(width: w, height: h)
+    }
+
     static func pdfPage(_ r: BlockReader, maxPixels: Int) -> CGImage? {
         guard let provider = r.dataProvider(), let doc = CGPDFDocument(provider), !doc.isEncrypted || doc.isUnlocked,
             let page = doc.page(at: 1) else { return nil }

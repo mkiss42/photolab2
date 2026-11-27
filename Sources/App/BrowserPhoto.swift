@@ -127,8 +127,9 @@ extension BrowserPane {
     @objc func viewAsThumbnails(_ sender: Any?) { setViewMode("grid") }
     @objc func viewPhotography(_ sender: Any?) { setViewMode("photo") }
 
-    @objc func largerThumbnails(_ sender: Any?) { stepThumbs(1.25) }
-    @objc func smallerThumbnails(_ sender: Any?) { stepThumbs(0.8) }
+    // PhotoLab: while the preview shows a picture, Cmd = / Cmd - zoom it instead.
+    @objc func largerThumbnails(_ sender: Any?) { if FastPreview.shared.stepZoom(up: true) { return }; stepThumbs(1.25) }
+    @objc func smallerThumbnails(_ sender: Any?) { if FastPreview.shared.stepZoom(up: false) { return }; stepThumbs(0.8) }
 
     private func stepThumbs(_ k: Double) {
         let v = min(480, max(80, Prefs.thumbSize * k))

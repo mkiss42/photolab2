@@ -288,6 +288,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
     private static let memChoices = [128, 256, 512, 1024, 2048]
     private static let aheadChoices = [0, 1, 2, 4]
     private static let threadChoices = [2, 4, 6, 8]
+    private let previewDelayPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private static let delayChoices = [0, 50, 100, 150, 250, 400, 600]
     private let etCountPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let etIdlePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private static let idleChoices = [1, 2, 5, 10, 15, 30, 60]
@@ -375,7 +377,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         thumbAheadPopup.selectItem(at: SettingsWindowController.aheadChoices.index(of: Prefs.thumbPrepareScreens) ?? 2)
         thumbThreadsPopup.addItems(withTitles: SettingsWindowController.threadChoices.map { "\($0)" })
         thumbThreadsPopup.selectItem(at: SettingsWindowController.threadChoices.index(of: Prefs.thumbThreads) ?? 1)
-        for pop in [thumbMemPopup, thumbAheadPopup, thumbThreadsPopup] {
+        previewDelayPopup.addItems(withTitles: SettingsWindowController.delayChoices.map { $0 == 0 ? "none" : "\($0) ms" })
+        previewDelayPopup.selectItem(at: SettingsWindowController.delayChoices.index(of: FastPreview.previewDelayMs) ?? 3)
+        for pop in [thumbMemPopup, thumbAheadPopup, thumbThreadsPopup, previewDelayPopup] {
             pop.target = self
             pop.action = #selector(thumbChanged(_:))
         }
@@ -384,6 +388,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         rows.append(row([NSTextField(labelWithString: "Prepare thumbnails ahead:"), thumbAheadPopup]))
         rows.append(row([NSTextField(labelWithString: "Pictures read at the same time:"), thumbThreadsPopup,
                          NSTextField(labelWithString: "(more = faster to fill, busier disk/network; from the next folder)")]))
+        rows.append(row([NSTextField(labelWithString: "Preview delay (Space window):"), previewDelayPopup,
+                         NSTextField(labelWithString: "(the preview reads only after the selection rests this long)")]))
 
         let head = NSTextField(labelWithString: "Writing metadata (stars, colour classes, Edit Metadata, Find and Replace)")
         head.font = NSFont.boldSystemFont(ofSize: 13)
@@ -591,6 +597,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         Prefs.thumbMemoryMB = SettingsWindowController.memChoices[max(0, thumbMemPopup.indexOfSelectedItem)]
         Prefs.thumbPrepareScreens = SettingsWindowController.aheadChoices[max(0, thumbAheadPopup.indexOfSelectedItem)]
         Prefs.thumbThreads = SettingsWindowController.threadChoices[max(0, thumbThreadsPopup.indexOfSelectedItem)]
+        UserDefaults.standard.set(SettingsWindowController.delayChoices[max(0, previewDelayPopup.indexOfSelectedItem)], forKey: "previewDelayMs")
         ThumbnailGrid.applyMemorySetting()
         App.log.info("Thumbnails: \(Prefs.thumbMemoryMB) MB, ahead \(Prefs.thumbPrepareScreens) screens, \(Prefs.thumbThreads) at a time")
     }

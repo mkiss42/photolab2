@@ -14,6 +14,8 @@ enum App {
     static var previews: PreviewCache!
     /// PhotoLab: contact-sheet thumbnails kept between launches (Caches/PhotoLab/Thumbs, 1 GB, oldest out).
     static var thumbs: PreviewCache?
+    /// When PhotoLab started (Short Report).
+    static let launched = Date()
     static var journal: OperationJournal!
     static var maintenance: Maintenance!
     /// What the start-up recovery did (shown once the first window is open).
@@ -484,6 +486,27 @@ enum StallWatch {
     private static var sentAt = Date()
     private static var seenDuring = ""
 
+    // PhotoLab Short Report: stalls counted without paths (kind = the label up to its first ":").
+    private static var stalls = 0
+    private static var stallSeconds = 0.0
+    private static var longest = (0.0, "")
+
+    fileprivate static func count(_ secs: Double, _ what: String) {
+        lock.lock()
+        stalls += 1
+        stallSeconds += secs
+        let kind = String(what.split(separator: ":").first ?? "?").trimmingCharacters(in: .whitespaces)
+        if secs > longest.0 { longest = (secs, String(kind.prefix(30))) }
+        lock.unlock()
+    }
+
+    /// "STALLS 3, 4.1 s in all, longest 2.0 s (list)" - no paths.
+    static var reportLine: String {
+        lock.lock(); defer { lock.unlock() }
+        if stalls == 0 { return "STALLS none" }
+        return String(format: "STALLS %d, %.1f s in all, longest %.1f s (%@)", stalls, stallSeconds, longest.0, Ascii.clean(longest.1))
+    }
+
     /// What the main thread is about to do (kept short).
     static func mark(_ what: String) {
         lock.lock()
@@ -510,6 +533,7 @@ enum StallWatch {
                         lock.unlock()
                         if blocked >= 0.8 {
                             App.log.warn(String(format: "BEACHBALL %.1f s - while: ", blocked) + Ascii.clean(what))
+                            StallWatch.count(blocked, what)
                         }
                     }
                 } else {

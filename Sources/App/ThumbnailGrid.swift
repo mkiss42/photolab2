@@ -801,6 +801,7 @@ final class ThumbnailGrid: NSView {
 
     override func keyDown(with event: NSEvent) {
         cancelClickRename()
+        if FastPreview.shared.handleKey(event) { return }   // PhotoLab: Z / Cmd-0 zoom the preview
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if event.keyCode == 34 && (flags.isEmpty || flags == .capsLock), onKeyI?() == true { return }
         switch event.keyCode {

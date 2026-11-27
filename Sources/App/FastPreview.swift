@@ -24,6 +24,9 @@ final class FastPreview: NSObject, NSWindowDelegate {
     private var panel: PreviewPanel!
     private let content = FillView()
     private let imageView = PreviewImageView()
+    /// PhotoLab: pictures are shown on the zoomable canvas (imageView only lays out the viewer area).
+    private let canvas = PreviewCanvas(frame: .zero)
+    private var currentEntry: FileEntry?
     private let caption = makeLabel("")
     private let note = makeLabel("")
     private var pdfView: PDFView?
@@ -171,7 +174,9 @@ final class FastPreview: NSObject, NSWindowDelegate {
         note.alignment = .center
         note.maximumNumberOfLines = 3
         note.lineBreakMode = .byWordWrapping
-        for v in [imageView, caption, note] as [NSView] {
+        canvas.onNeedsDetail = { [weak self] in self?.loadDetail() }
+        canvas.onZoomChange = { [weak self] in self?.updateZoomCaption() }
+        for v in [imageView, canvas, caption, note] as [NSView] {
             content.addSubview(v)
             v.translatesAutoresizingMaskIntoConstraints = false
         }
@@ -180,6 +185,10 @@ final class FastPreview: NSObject, NSWindowDelegate {
             imageView.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 6),
             imageView.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -6),
             imageView.bottomAnchor.constraint(equalTo: caption.topAnchor, constant: -6),
+            canvas.topAnchor.constraint(equalTo: imageView.topAnchor),
+            canvas.leadingAnchor.constraint(equalTo: imageView.leadingAnchor),
+            canvas.trailingAnchor.constraint(equalTo: imageView.trailingAnchor),
+            canvas.bottomAnchor.constraint(equalTo: imageView.bottomAnchor),
             caption.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 10),
             caption.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -10),
             caption.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -6),
@@ -297,21 +306,76 @@ final class FastPreview: NSObject, NSWindowDelegate {
         // Pictures (and any other file: system thumbnail).
         let px = maxPixels
         let k = key(e, px)
-        if let img = cache.object(forKey: k) {
+        currentEntry = e
+        detailLoaded = nil
+        canvas.newPicture()
+        captionBase = ""
+        let finalKey = "\(e.path)|\(e.size)|\(e.modified)"
+        if let fs = finalSizes[finalKey] { canvas.setFinalSize(fs) }
+        if let full = cache.object(forKey: key(e, FastPreview.fullPixels)) {
+            showImage(full, note: nil, isFull: true)
+            captionBase = captionText(e, sizeText, cachedSource[key(e, FastPreview.fullPixels) as String] ?? "", position) + extra
+            caption.stringValue = captionBase
+            updateZoomCaption()
+        } else if let img = cache.object(forKey: k) {
             showImage(img, note: nil)
-            caption.stringValue = captionText(e, sizeText, cachedSource[k as String] ?? "", position) + extra
+            captionBase = captionText(e, sizeText, cachedSource[k as String] ?? "", position) + extra
+            caption.stringValue = captionBase
+            updateZoomCaption()
         } else {
-            showImage(nil, note: "Loading\u{2026}")
+            // PhotoLab: the thumbnail at once (stretched to the final frame), the preview after the
+            // selection has rested (Settings: preview delay) - key repeat through a shoot queues nothing.
+            if let t = ThumbnailGrid.cachedThumbnail(for: e.path) {
+                showImage(t, note: nil, isFull: false)
+            } else {
+                showImage(nil, note: "Loading\u{2026}")
+            }
             caption.stringValue = captionText(e, sizeText, "", position) + extra
+            let delay = force ? 0 : FastPreview.previewDelayMs
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delay)) { [weak self] in
+                guard let s = self, s.generation == gen else { return }
+                s.startLoad(e, px: px, gen: gen, sizeText: sizeText, position: position, extra: extra, finalKey: finalKey)
+                s.prefetch(list, around: index, px: px, gen: gen)
+            }
+            return
+        }
+        prefetch(list, around: index, px: px, gen: gen)
+    }
+
+    /// Settings > Preview delay (ms, default 150; 0 = none).
+    static var previewDelayMs: Int {
+        let d = UserDefaults.standard
+        return d.object(forKey: "previewDelayMs") == nil ? 150 : max(0, min(2000, d.integer(forKey: "previewDelayMs")))
+    }
+
+    private var finalSizes: [String: CGSize] = [:]
+
+    private func startLoad(_ e: FileEntry, px: Int, gen: Int, sizeText: String, position: String, extra: String, finalKey: String) {
+        // The final pixel size from the header (shared reader: nearly free), so Z goes there at once.
+        if finalSizes[finalKey] == nil && PhotoFormats.isImage(e.name) {
+            let path = e.path, size = e.size, mod = e.modified
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let fs = ImageMeta.finalSize(path, size: size, modified: mod)
+                DispatchQueue.main.async {
+                    guard let s = self, let fs = fs else { return }
+                    s.finalSizes[finalKey] = fs
+                    if s.finalSizes.count > 2000 { s.finalSizes.removeAll() }
+                    if s.generation == gen { s.canvas.setFinalSize(fs) }
+                }
+            }
+        }
+        do {
             load(e, px: px, gen: gen, priority: .veryHigh, interim: { [weak self] img in
                 guard let s = self, s.generation == gen else { return }
-                s.showImage(img, note: nil)
+                s.showImage(img, note: nil, isFull: false)
                 s.caption.stringValue = s.captionText(e, sizeText, "quick thumbnail \u{00B7} reading the full picture\u{2026}", position) + extra
             }) { [weak self] img, source in
                 guard let s = self, s.generation == gen else { return }
                 if let img = img {
                     s.showImage(img, note: nil)
-                    s.caption.stringValue = s.captionText(e, sizeText, source, position) + extra
+                    s.captionBase = s.captionText(e, sizeText, source, position) + extra
+                    s.caption.stringValue = s.captionBase
+                    s.updateZoomCaption()
                 } else {
                     // No picture for this kind of file: a quick glance at its details instead.
                     s.showInfoCard(e, gen: gen)
@@ -319,7 +383,6 @@ final class FastPreview: NSObject, NSWindowDelegate {
                 }
             }
         }
-        prefetch(list, around: index, px: px, gen: gen)
     }
 
     private var cachedSource: [String: String] = [:]
@@ -461,19 +524,64 @@ final class FastPreview: NSObject, NSWindowDelegate {
         textScroll = nil
         playerView?.removeFromSuperview()
         playerView = nil
-        imageView.isHidden = false
+        imageView.isHidden = true
+        canvas.isHidden = false
     }
 
-    private func showImage(_ img: NSImage?, note text: String?) {
+    private func showImage(_ img: NSImage?, note text: String?, isFull: Bool = false) {
         hideViewers()
-        imageView.image = img
+        imageView.image = nil
+        if let i = img, let cg = i.cgImage(forProposedRect: nil, context: nil, hints: nil) { canvas.setImage(cg, isFull: isFull) }
         note.stringValue = text ?? ""
         note.isHidden = text == nil
     }
 
+    // MARK: PhotoLab zoom (Z, double-click, Cmd +/-/0 while the preview shows a picture)
+
+    var showsPicture: Bool { return isVisible && !canvas.isHidden && canvas.hasPicture }
+
+    /// From the list / contact sheet's keyDown (the panel never takes the keys). true = handled.
+    func handleKey(_ event: NSEvent) -> Bool {
+        guard showsPicture else { return false }
+        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        let ch = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        if flags.isEmpty && ch == "z" { canvas.toggleZoom(); return true }
+        if flags == .command && ch == "0" { canvas.fit(); return true }
+        return false
+    }
+
+    /// Cmd = / Cmd - (the menu's thumbnail size keys): zoom the preview instead while it shows a picture.
+    func stepZoom(up: Bool) -> Bool {
+        guard showsPicture else { return false }
+        canvas.stepZoom(up: up)
+        return true
+    }
+
+    private var captionBase = ""
+    private func updateZoomCaption() {
+        guard !captionBase.isEmpty else { return }
+        caption.stringValue = captionBase + "  \u{00B7}  " + canvas.zoomLabel
+    }
+
+    /// Zoomed past what is on screen: the biggest version there is (RAW: the largest embedded preview).
+    private var detailLoaded: String?
+    private func loadDetail() {
+        // Only when zoomed in: in Fit the screen-size version (on its way) is enough.
+        guard canvas.intent != .fit, let e = currentEntry, detailLoaded != e.path, e.kind == .file, PhotoFormats.isImage(e.name) else { return }
+        detailLoaded = e.path
+        let gen = generation
+        load(e, px: FastPreview.fullPixels, gen: gen, priority: .veryHigh) { [weak self] img, _ in
+            guard let s = self, s.generation == gen, let img = img else { return }
+            s.showImage(img, note: nil, isFull: true)
+        }
+    }
+    static let fullPixels = 16384
+
     private func place(_ v: NSView) {
         imageView.isHidden = true
         imageView.image = nil
+        canvas.isHidden = true
+        canvas.clear()
         note.isHidden = true
         content.addSubview(v)
         v.translatesAutoresizingMaskIntoConstraints = false
