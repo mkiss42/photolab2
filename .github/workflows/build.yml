@@ -34,10 +34,6 @@ jobs:
           if [ -z "$X" ]; then echo "E-CI-1 no Xcode 26 on this runner image"; ls -d /Applications/Xcode*.app; exit 1; fi
           echo "DEVELOPER_DIR=$X/Contents/Developer" >> "$GITHUB_ENV"
           echo "Using $X"
-      - uses: actions/cache@v4
-        with:
-          path: build/python-cache
-          key: python-${{ hashFiles('tools/fetch_python.sh') }}
       - name: Build (legacy profile)
         run: ./build-legacy.sh
       - name: Build log
@@ -46,12 +42,13 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: PhotoLab2-legacy
+          name: PhotoLab-legacy
           path: |
-            build/PhotoLab2.dmg
+            build/PhotoLab.dmg
             build/build-log.txt
             build/build-raw.txt
-            build/selftest-*.txt
+            build/*test-*.txt
+            build/selfcheck-*.txt
           if-no-files-found: ignore
 
   intel-selftest:
@@ -62,13 +59,17 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: PhotoLab2-legacy
+          name: PhotoLab-legacy
       - name: Self-test on Intel
         run: |
-          hdiutil attach -nobrowse -mountpoint /tmp/pl PhotoLab2.dmg
+          hdiutil attach -nobrowse -mountpoint /tmp/pl PhotoLab.dmg
           cp -R /tmp/pl/PhotoLab.app ./PhotoLab.app
           hdiutil detach /tmp/pl
-          ./PhotoLab.app/Contents/MacOS/PhotoLab --self-test
+          for t in selfcheck searchtest indextest phototest; do
+            ./PhotoLab.app/Contents/MacOS/PhotoLab --$t > $t.txt 2>&1; rc=$?
+            echo "$t rc=$rc"; grep -E '^(FAIL|E-)' $t.txt | head -20
+            if [ "$t" != phototest ] && [ $rc -ne 0 ]; then exit 1; fi
+          done
 
   modern:
     # Proves the upgrade path: same sources, modern profile, newest Xcode on the newest image.
@@ -83,10 +84,6 @@ jobs:
           X=$(ls -d /Applications/Xcode_*.app 2>/dev/null | grep -v beta | sort -V | tail -1)
           echo "DEVELOPER_DIR=$X/Contents/Developer" >> "$GITHUB_ENV"
           echo "Using $X"
-      - uses: actions/cache@v4
-        with:
-          path: build/python-cache
-          key: python-${{ hashFiles('tools/fetch_python.sh') }}
       - name: Build (modern profile)
         run: ./build-modern.sh --no-dmg
       - name: Build log

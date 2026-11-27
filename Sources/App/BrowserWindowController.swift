@@ -1,1320 +1,629 @@
 // BrowserWindowController.swift
-// One browser window: sidebar | (back/forward/up + path bar, file list, status line).
-// Listing happens on a background queue; the main thread only shows results. A newer
-// navigation cancels the older listing (generation counter).
+// One Find window: the sidebar, one or more browser panes, and the inspector.
+// - Panes sit side by side when there is room (each at least `minimumWidth`), otherwise stacked;
+//   side by side each pane's width can be dragged; stacked panes keep equal heights. Opening a pane keeps the window size unless
+//   the panes can't fit at all; then the window grows (never beyond the screen).
+// - The sidebar collapses by dragging its divider to the left edge, or Option-Cmd-S.
+// - The inspector sits at the right edge and follows the focused pane; showing it widens the window
+//   instead of squeezing the panes.
 
 import AppKit
-import Quartz
 
-final class Generation {
-    private let lock = NSLock()
-    private var value = 0
-    func next() -> Int { lock.lock(); defer { lock.unlock() }; value += 1; return value }
-    var current: Int { lock.lock(); defer { lock.unlock() }; return value }
-}
+final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSSplitViewDelegate, SidebarDelegate {
+    let undoStack = UndoManager()
+    let sidebar = SidebarController()
+    let inspector = InspectorController()
+    private(set) var panes: [BrowserPane] = []
+    private(set) weak var focusedPane: BrowserPane?
 
-extension Notification.Name {
-    static let volumesChanged = Notification.Name("PhotoLabVolumesChanged")
-    static let brainStateChanged = Notification.Name("PhotoLabBrainStateChanged")
-    static let layoutSettingsChanged = Notification.Name("PhotoLabLayoutSettingsChanged")
-}
+    private let outer = ThemedSplitView()
+    private let sidebarPane = FillView()
+    private let workArea = FillView()
+    private let paneSplit = ThemedSplitView()
+    private var inspectorWidth: NSLayoutConstraint!
+    private var observers: [NSObjectProtocol] = []
+    private var lastSidebarWidth: CGFloat = 190
+    /// 0.16 Glass under the sidebar.
+    private var sidebarGlass: GlassBacking?
+    /// The chosen pane layout: side by side (stacks by itself when too narrow) or always stacked.
+    private(set) var preferStacked = false
+    static let maxPanes = 6
 
-final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation, NSSplitViewDelegate, NSSearchFieldDelegate,
-    QLPreviewPanelDataSource, QLPreviewPanelDelegate {
-    static var open: [BrowserWindowController] = []
-    static var brainText = "Brain: not started"
+    var onClose: ((BrowserWindowController) -> Void)?
 
-    private(set) var currentPath: String
-    private var backStack: [String] = []
-    private var forwardStack: [String] = []
-    private let generation = Generation()
-    /// Bumped only when the window changes folder; child listings of the old folder are dropped.
-    private let folderGeneration = Generation()
-    private let listQueue = DispatchQueue(label: "photolab.list", qos: .userInitiated, attributes: .concurrent)
-    private var watcher: FolderWatcher?
-    /// Watchers for expanded subfolders, by path.
-    private var childWatchers: [String: FolderWatcher] = [:]
-    private var lastListing: FolderListing?
-    private var fromCache = false
-
-    private let sidebar = SidebarController()
-    private let list = FileListController()
-    private let sheet = ContactSheetController()
-
-    enum ViewMode: String { case list, sheet }
-    /// The mode new windows start in (the last one chosen).
-    static var defaultMode: ViewMode {
-        get { return ViewMode(rawValue: UserDefaults.standard.string(forKey: "viewMode") ?? "") ?? .list }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "viewMode") }
-    }
-    private(set) var mode: ViewMode = BrowserWindowController.defaultMode
-    private let modeControl = NSSegmentedControl()
-    private let sizeSlider = NSSlider()
-    private let thumbLabel = NSTextField(labelWithString: "")
-    private var thumbProgress = (0, 0), labelProgress = (0, 0)
-
-    /// "Thumbnails 340/826  Metadata 120/826" while the sheet is still loading (PhotoLab 1).
-    private func updateLoadProgress() {
-        var parts: [String] = []
-        if thumbProgress.1 > 0 && thumbProgress.0 < thumbProgress.1 { parts.append("Thumbnails \(thumbProgress.0)/\(thumbProgress.1)") }
-        if labelProgress.1 > 0 && labelProgress.0 < labelProgress.1 { parts.append("Metadata \(labelProgress.0)/\(labelProgress.1)") }
-        thumbLabel.stringValue = parts.joined(separator: "   ")
-        thumbLabel.isHidden = mode != .sheet || parts.isEmpty
-    }
-
-    // The selection, whichever view shows the folder.
-    private func selection() -> [FileEntry] { return mode == .sheet ? sheet.selectedEntries() : list.selectedEntries() }
-    private var selectedCount: Int { return mode == .sheet ? sheet.selectionCount : list.selectionCount }
-    private var shownCounts: (rows: Int, sets: Int, total: Int) { return mode == .sheet ? sheet.shownCounts : list.shownCounts }
-    private func setMembers(_ entries: [FileEntry]) -> [String] {
-        guard mode == .sheet else { return list.withSetMembers(entries) }
-        let want = Set(entries.map { $0.path })
-        var out: [String] = []
-        for it in sheet.grid.items where want.contains(it.entry.path) { out += it.isSet ? it.members.map { $0.path } : [it.entry.path] }
-        return out
-    }
-    private let pathBar = NSStackView()
-    private let backButton = NSButton()
-    private let forwardButton = NSButton()
-    private let upButton = NSButton()
-    private let statusLabel = NSTextField(labelWithString: "")
-    private let statusSpinner = NSProgressIndicator()
-    private let brainLabel = NSTextField(labelWithString: "")
-
-    static var showHidden: Bool {
-        get { return UserDefaults.standard.bool(forKey: "showHidden") }
-        set { UserDefaults.standard.set(newValue, forKey: "showHidden") }
-    }
-    static var foldersOnly: Bool {
-        get { return UserDefaults.standard.bool(forKey: "foldersOnly") }
-        set { UserDefaults.standard.set(newValue, forKey: "foldersOnly") }
-    }
-    static var foldersFirst: Bool {
-        get { return UserDefaults.standard.object(forKey: "foldersFirst") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "foldersFirst") }
-    }
-
-    /// A new window at `path` with `select` (names) selected - for items dropped on the app icon.
-    @discardableResult
-    static func openWindow(at path: String, select: [String]) -> BrowserWindowController {
-        let c = openWindow(at: path)
-        if !select.isEmpty { c.navigate(to: path, record: false, select: select) }
-        return c
-    }
-
-    @discardableResult
-    static func openWindow(at path: String) -> BrowserWindowController {
-        let c = BrowserWindowController(path: path)
-        open.append(c)
-        if let last = open.dropLast().last?.window, let w = c.window {
-            w.setFrameTopLeftPoint(NSPoint(x: last.frame.minX + 24, y: last.frame.maxY - 24))
-        }
-        c.showWindow(nil)
-        // Let the Name column take the free width now that the window has its real size.
-        DispatchQueue.main.async { c.list.table.sizeToFit() }
-        return c
-    }
+    /// The focused pane (there is always at least one).
+    var pane: BrowserPane { return focusedPane ?? panes[0] }
+    var currentPath: String { return pane.currentPath }
+    var focusView: NSView { return pane.focusView }
 
     init(path: String) {
-        currentPath = path
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 640),
                          styleMask: [.titled, .closable, .miniaturizable, .resizable],
                          backing: .buffered, defer: false)
+        w.isReleasedWhenClosed = false
         w.minSize = NSSize(width: 520, height: 300)
         super.init(window: w)
+        // AppKit would otherwise offset ("cascade") each new window, knocking it out of its quarter.
+        shouldCascadeWindows = false
         w.delegate = self
-        w.setFrameAutosaveName("BrowserWindow")
-        buildUI(in: w)
-        NotificationCenter.default.addObserver(self, selector: #selector(volumesChanged(_:)), name: .volumesChanged, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(brainChanged(_:)), name: .brainStateChanged, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(layoutSettingsChanged(_:)), name: .layoutSettingsChanged, object: nil)
-        brainLabel.stringValue = BrowserWindowController.brainText
-        navigate(to: path, record: false)
+        buildUI()
+        let first = BrowserPane(path: path, host: self)
+        panes = [first]
+        paneSplit.addSubview(first.view)
+        focus(first)
+        observe()
+        applyTheme()
+        sidebar.rebuild(currentPath: path)
     }
 
-    required init?(coder: NSCoder) { fatalError("not used") }
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not used")
+    }
 
     // MARK: Layout
 
-    private let split = NSSplitView()
-    private let rightStack = NSStackView()
-    private let navBar = NSStackView()
-    private let statusBar = NSStackView()
-    private let sidebarButton = NSButton()
-    private let pathRow = NSStackView()
-    private let filterRow = NSStackView()
-    private let filterField = NSSearchField()
+    private func buildUI() {
+        guard let w = window, let content = w.contentView else { return }
+        outer.isVertical = true
+        outer.dividerStyle = .thin
+        outer.delegate = self
+        content.addSubview(outer)
+        outer.pinEdges(to: content)
+        sidebarPane.frame = NSRect(x: 0, y: 0, width: 190, height: 600)
+        workArea.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
+        outer.addSubview(sidebarPane)
+        outer.addSubview(workArea)
+        sidebarPane.addSubview(sidebar.scroll)
+        sidebar.scroll.pinEdges(to: sidebarPane)
+        sidebarGlass = GlassBacking(in: sidebarPane)
+        sidebar.delegate = self
 
-    static let defaultSidebarWidth: CGFloat = 160
-    static var sidebarVisible: Bool {
-        get { return UserDefaults.standard.bool(forKey: "sidebarVisible") }      // hidden by default
-        set { UserDefaults.standard.set(newValue, forKey: "sidebarVisible") }
-    }
-    static var sidebarWidth: CGFloat {
-        get { let w = UserDefaults.standard.double(forKey: "sidebarWidth"); return w > 0 ? CGFloat(w) : defaultSidebarWidth }
-        set { UserDefaults.standard.set(Double(newValue), forKey: "sidebarWidth") }
-    }
-    static var pathBarAtBottom: Bool {
-        get { return UserDefaults.standard.bool(forKey: "pathBarAtBottom") }
-        set { UserDefaults.standard.set(newValue, forKey: "pathBarAtBottom") }
-    }
-
-    private func buildUI(in w: NSWindow) {
-        split.isVertical = true
-        split.dividerStyle = .thin
-        split.delegate = self
-        sidebar.onSelect = { [weak self] p in
-            if p == SidebarController.networkPath { NetworkWindow.show(for: self); self?.sidebar.reflect(path: self?.currentPath ?? ""); return }
-            self?.navigate(to: p)
+        paneSplit.isVertical = true
+        paneSplit.dividerStyle = .thin
+        paneSplit.delegate = self
+        for v in [paneSplit, inspector.view] as [NSView] {
+            workArea.addSubview(v)
+            v.translatesAutoresizingMaskIntoConstraints = false
         }
-        sidebar.onOpenInNewWindow = { p in BrowserWindowController.openWindow(at: p) }
-
-        for (b, img, sel, tip) in [(backButton, NSImage.goLeftTemplateName, #selector(goBack(_:)), "Back"),
-                                   (forwardButton, NSImage.goRightTemplateName, #selector(goForward(_:)), "Forward")] {
-            b.bezelStyle = .texturedRounded
-            b.image = NSImage(named: img)
-            b.target = self
-            b.action = sel
-            b.toolTip = tip
-        }
-        upButton.bezelStyle = .texturedRounded
-        upButton.title = "Up"
-        upButton.target = self
-        upButton.action = #selector(goEnclosingFolder(_:))
-        upButton.toolTip = "Enclosing folder (Cmd-Up)"
-        sidebarButton.bezelStyle = .texturedRounded
-        sidebarButton.image = Glyphs.sidebar
-        sidebarButton.imagePosition = .imageOnly
-        sidebarButton.setButtonType(.pushOnPushOff)
-        sidebarButton.target = self
-        sidebarButton.action = #selector(toggleSidebar(_:))
-        sidebarButton.toolTip = "Show or hide the sidebar (Cmd-Option-S)"
-
-        pathBar.orientation = .horizontal
-        pathBar.spacing = 0
-        pathBar.alignment = .centerY
-        pathBar.setHuggingPriority(NSLayoutConstraint.Priority(rawValue: 100), for: .horizontal)
-        modeControl.segmentCount = 2
-        modeControl.setImage(NSImage(named: NSImage.listViewTemplateName), forSegment: 0)
-        modeControl.setImage(NSImage(named: NSImage.iconViewTemplateName), forSegment: 1)
-        modeControl.setToolTip("List (Cmd-1)", forSegment: 0)
-        modeControl.setToolTip("Contact sheet (Cmd-2)", forSegment: 1)
-        modeControl.trackingMode = .selectOne
-        modeControl.segmentStyle = .texturedRounded
-        modeControl.target = self
-        modeControl.action = #selector(modeClicked(_:))
-        for v in [sidebarButton, backButton, forwardButton, upButton, modeControl] as [NSView] { navBar.addArrangedSubview(v) }
-        pathRow.orientation = .horizontal
-        pathRow.edgeInsets = NSEdgeInsets(top: 4, left: 8, bottom: 2, right: 8)
-        navBar.orientation = .horizontal
-        navBar.spacing = 6
-        navBar.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
-
-        list.foldersFirst = BrowserWindowController.foldersFirst
-        list.onOpen = { [weak self] sel in self?.open(sel) }
-        list.onOpenInNewWindow = { e in BrowserWindowController.openWindow(at: e.path) }
-        list.onTagPick = { [weak self] c in self?.pickTag(c) }
-        list.onSelectionChange = { [weak self] in self?.updateStatus(); self?.followInPreview() }
-        list.onNeedChildren = { [weak self] p in self?.loadChildren(p) }
-        list.onRenameRequest = { [weak self] in self?.renameSelected(nil) }
-        list.onTrashRequest = { [weak self] in self?.moveToTrash(nil) }
-        list.onRenameCommit = { [weak self] e, name in self?.commitRename(e, name) }
-        list.onExpandedChange = { [weak self] set in self?.watchExpanded(set); self?.updateStatus() }
-        list.onDrop = { [weak self] paths, dest, kind in
-            TransferController.shared.start(paths, to: dest, kind: kind, from: self)
-        }
-        list.onSpace = { [weak self] in self?.spacePressed() }
-        let g = sheet.grid
-        g.onOpen = { [weak self] sel in self?.open(sel) }
-        g.onTrash = { [weak self] in self?.moveToTrash(nil) }
-        g.onRename = { [weak self] in self?.renameSelected(nil) }
-        g.onSpace = { [weak self] in self?.spacePressed() }
-        g.onSelectionChange = { [weak self] in self?.updateStatus(); self?.followInPreview() }
-        g.onDrop = { [weak self] paths, dest, kind in TransferController.shared.start(paths, to: dest, kind: kind, from: self) }
-        g.onMenu = { [weak self] in self?.sheetMenu() }
-        g.onThumbProgress = { [weak self] done, total in
-            self?.thumbProgress = (done, total)
-            self?.updateLoadProgress()
-        }
-        g.onLabelProgress = { [weak self] done, total in
-            self?.labelProgress = (done, total)
-            self?.updateLoadProgress()
-        }
-        list.showHidden = BrowserWindowController.showHidden
-        list.foldersOnly = BrowserWindowController.foldersOnly
-
-        filterField.placeholderString = "Filter names (Esc clears)"
-        filterField.target = self
-        filterField.action = #selector(filterChanged(_:))
-        filterField.delegate = self
-        filterField.sendsSearchStringImmediately = true
-        filterRow.orientation = .horizontal
-        filterRow.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 6, right: 8)
-        filterRow.addArrangedSubview(filterField)
-        filterRow.isHidden = true
-
-        statusLabel.textColor = NSColor.secondaryLabelColor
-        statusLabel.font = NSFont.systemFont(ofSize: 11)
-        statusLabel.lineBreakMode = .byTruncatingTail
-        brainLabel.textColor = NSColor.secondaryLabelColor
-        brainLabel.font = NSFont.systemFont(ofSize: 11)
-        brainLabel.alignment = .right
-        statusSpinner.style = .spinning
-        statusSpinner.controlSize = .small
-        statusSpinner.isDisplayedWhenStopped = false
-        sizeSlider.minValue = 80
-        sizeSlider.maxValue = 400
-        sizeSlider.doubleValue = Double(ContactSheetController.tileSize)
-        sizeSlider.controlSize = .small
-        sizeSlider.target = self
-        sizeSlider.action = #selector(sizeChanged(_:))
-        sizeSlider.toolTip = "Thumbnail size"
-        sizeSlider.widthAnchor.constraint(equalToConstant: 120).isActive = true
-        thumbLabel.font = NSFont.systemFont(ofSize: 11)
-        thumbLabel.textColor = NSColor.secondaryLabelColor
-        thumbLabel.isHidden = true
-        for v in [statusSpinner, statusLabel, thumbLabel, sizeSlider, brainLabel] as [NSView] { statusBar.addArrangedSubview(v) }
-        statusBar.orientation = .horizontal
-        statusBar.edgeInsets = NSEdgeInsets(top: 3, left: 10, bottom: 4, right: 10)
-        statusLabel.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(rawValue: 100), for: .horizontal)
-
-        rightStack.orientation = .vertical
-        rightStack.spacing = 0
-        rightStack.alignment = .leading
-        rightStack.distribution = .fill
-        list.view.setContentHuggingPriority(NSLayoutConstraint.Priority(rawValue: 1), for: .vertical)
-        sheet.view.setContentHuggingPriority(NSLayoutConstraint.Priority(rawValue: 1), for: .vertical)
-        modeControl.selectedSegment = mode == .sheet ? 1 : 0
-        sizeSlider.isHidden = mode != .sheet
-        arrangeRightStack()
-
-        let side = sidebar.scroll
-        split.addSubview(side)
-        split.addSubview(rightStack)
-        split.setHoldingPriority(NSLayoutConstraint.Priority(rawValue: 260), forSubviewAt: 0)
-        w.contentView = split
-        w.initialFirstResponder = list.table
-        setSidebar(visible: BrowserWindowController.sidebarVisible)
+        inspectorWidth = inspector.view.widthAnchor.constraint(equalToConstant: Prefs.showInspector ? InspectorController.width : 0)
+        inspector.view.isHidden = !Prefs.showInspector
+        NSLayoutConstraint.activate([
+            paneSplit.topAnchor.constraint(equalTo: workArea.topAnchor),
+            paneSplit.bottomAnchor.constraint(equalTo: workArea.bottomAnchor),
+            paneSplit.leadingAnchor.constraint(equalTo: workArea.leadingAnchor),
+            paneSplit.trailingAnchor.constraint(equalTo: inspector.view.leadingAnchor),
+            inspector.view.topAnchor.constraint(equalTo: workArea.topAnchor),
+            inspector.view.bottomAnchor.constraint(equalTo: workArea.bottomAnchor),
+            inspector.view.trailingAnchor.constraint(equalTo: workArea.trailingAnchor),
+            inspectorWidth,
+        ])
     }
 
-    /// Path bar above the list (default) or below it, from Settings.
-    /// The message over the folder (Reading..., Empty folder...) with its spinner, in both views.
-    private func showMessage(_ text: String?, spinning: Bool = false) {
-        list.showMessage(text, spinning: spinning)
-        sheet.showMessage(text, spinning: spinning)
-    }
-
-    private var content: NSView { return mode == .sheet ? sheet.view : list.view }
-
-    /// List or contact sheet. Both always hold the folder's listing, so switching is instant.
-    /// `remember`: the user switched (new windows follow); windows PhotoLab opens in a mode
-    /// (Space, Dock drops) don't change that.
-    func setMode(_ m: ViewMode, remember: Bool = true) {
-        mode = m
-        if remember { BrowserWindowController.defaultMode = m }
-        modeControl.selectedSegment = m == .sheet ? 1 : 0
-        sizeSlider.isHidden = m != .sheet
-        if m != .sheet { thumbLabel.isHidden = true }
-        arrangeRightStack()
-        window?.makeFirstResponder(m == .sheet ? sheet.grid as NSView : list.table as NSView)
-        if m == .sheet { DispatchQueue.main.async { [weak self] in self?.sheet.grid.relayout() } }
-        updateStatus()
-    }
-
-    @objc private func modeClicked(_ sender: Any?) { setMode(modeControl.selectedSegment == 1 ? .sheet : .list) }
-    @objc func showAsList(_ sender: Any?) { setMode(.list) }
-    @objc func showAsSheet(_ sender: Any?) { setMode(.sheet) }
-    @objc private func sizeChanged(_ sender: Any?) {
-        let v = CGFloat(sizeSlider.doubleValue.rounded())
-        for c in BrowserWindowController.open { c.sheet.setTileSize(v); c.sizeSlider.doubleValue = Double(v) }
-    }
-
-    private func arrangeRightStack() {
-        for v in rightStack.arrangedSubviews { rightStack.removeArrangedSubview(v); v.removeFromSuperview() }
-        // Path bar above: one row (nav buttons + path). Below: nav buttons stay on top, the path
-        // gets its own row under the list.
-        for v in navBar.arrangedSubviews where v === pathBar { navBar.removeArrangedSubview(v); v.removeFromSuperview() }
-        pathRow.removeFromSuperview()
-        let order: [NSView]
-        if BrowserWindowController.pathBarAtBottom {
-            pathRow.setViews([pathBar], in: .leading)
-            order = [navBar, filterRow, content, pathRow, statusBar]
+    /// Called once the window has its final frame (after placement).
+    func finishLayout() {
+        window?.contentView?.layoutSubtreeIfNeeded()
+        outer.adjustSubviews()
+        let sw = CGFloat(UserDefaults.standard.double(forKey: Prefs.Key.sidebarWidth))
+        lastSidebarWidth = sw >= 120 ? sw : 190
+        if UserDefaults.standard.bool(forKey: "sidebarCollapsed") {
+            outer.setPosition(0, ofDividerAt: 0)
         } else {
-            navBar.addArrangedSubview(pathBar)
-            order = [navBar, filterRow, content, statusBar]
+            outer.setPosition(lastSidebarWidth, ofDividerAt: 0)
         }
-        for v in order {
-            rightStack.addArrangedSubview(v)
-            v.widthAnchor.constraint(equalTo: rightStack.widthAnchor).isActive = true
-        }
+        for p in panes { p.finishLayout() }
     }
 
-    private var sidebarShown = false
-    var isSidebarShown: Bool { return sidebarShown }
-
-    private func setSidebar(visible: Bool) {
-        sidebarShown = visible
-        sidebarButton.state = visible ? .on : .off
-        let side = sidebar.scroll
-        side.isHidden = !visible
-        if visible {
-            split.adjustSubviews()
-            split.setPosition(BrowserWindowController.sidebarWidth, ofDividerAt: 0)
-        } else {
-            split.adjustSubviews()
-        }
+    private func observe() {
+        let nc = NotificationCenter.default
+        observers.append(nc.addObserver(forName: .findThemeChanged, object: nil, queue: .main) { [weak self] _ in
+            self?.applyTheme()
+        })
+        observers.append(nc.addObserver(forName: .findFinishChanged, object: nil, queue: .main) { [weak self] _ in
+            self?.applyFinish()
+        })
+        observers.append(nc.addObserver(forName: .findVolumesChanged, object: nil, queue: .main) { [weak self] _ in
+            guard let s = self else { return }
+            s.sidebar.rebuild(currentPath: s.currentPath)
+        })
     }
+
+    /// 0.16: Depth / Glow / Glass / Dim changed - glass on or off, then everything redrawn.
+    func applyFinish() {
+        let tm = ThemeManager.shared
+        sidebarGlass?.apply(base: tm.sidebar)
+        sidebar.applyFinish()
+        for p in panes { p.applyContentGlass() }
+        inspector.applyFinish()
+        func redraw(_ v: NSView) {
+            v.needsDisplay = true
+            for s in v.subviews { redraw(s) }
+        }
+        if let c = window?.contentView { redraw(c) }
+    }
+
+    func applyTheme() {
+        let tm = ThemeManager.shared
+        window?.appearance = tm.appearance
+        window?.backgroundColor = tm.sidebar
+        outer.dividerTint = tm.separator
+        outer.needsDisplay = true
+        paneSplit.dividerTint = tm.separator
+        paneSplit.needsDisplay = true
+        sidebarPane.fillColor = tm.sidebar
+        sidebarGlass?.apply(base: tm.sidebar)
+        workArea.fillColor = tm.background
+        sidebar.applyTheme()
+        inspector.applyTheme()
+        FastPreview.shared.applyTheme()
+    }
+
+    // MARK: Sidebar (collapse by dragging, or Option-Cmd-S)
+
+    var sidebarCollapsed: Bool { return outer.isSubviewCollapsed(sidebarPane) || sidebarPane.frame.width < 1 }
 
     @objc func toggleSidebar(_ sender: Any?) {
-        setSidebar(visible: !sidebarShown)
-    }
-
-    @objc private func layoutSettingsChanged(_ n: Notification) {
-        arrangeRightStack()
-    }
-
-    // MARK: Navigation
-
-    func navigate(to path: String, record: Bool = true, select: [String]? = nil) {
-        if record && path != currentPath {
-            backStack.append(currentPath)
-            forwardStack.removeAll()
-        }
-        currentPath = path
-        if !list.filterText.isEmpty { closeFilter(focusList: false) }      // a filter belongs to one folder
-        _ = folderGeneration.next()
-        UserDefaults.standard.set(path, forKey: "lastFolder")
-        let vol = Volumes.volume(for: path)
-        window?.title = (path == vol?.mountPoint ? vol?.displayName : nil) ?? Paths.name(path)
-        rebuildPathBar()
-        backButton.isEnabled = !backStack.isEmpty
-        forwardButton.isEnabled = !forwardStack.isEmpty
-        upButton.isEnabled = path != "/"
-        sidebar.reflect(path: path)
-        watcher?.stop()
-        watcher = FolderWatcher(path: path) { [weak self] change in self?.watchFired(change, for: path) }
-        watchExpanded([])
-        load(select: select ?? [], useCache: true)
-    }
-
-    /// List the current folder in the background. `select` nil keeps the current selection.
-    private func load(select: [String]?, useCache: Bool) {
-        let gen = generation.next()
-        let path = currentPath
-        let started = Date()
-        // Spinners only if the listing takes noticeable time (no flicker for quick folders):
-        // a new folder gets a big one in the list, a re-read of the folder on screen a small one
-        // in the status line (its contents stay visible meanwhile).
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            guard let me = self, me.generation.current == gen else { return }
-            if me.lastListingPath != path {
-                me.list.setEntries([], select: [])
-                me.showMessage("Reading \(Paths.name(path))...", spinning: true)
-                me.statusLabel.stringValue = "Reading..."
-            }
-            me.statusSpinner.startAnimation(nil)
-        }
-        let isNetwork = Volumes.isNetwork(path)
-        listQueue.async { [weak self] in
-            guard let me = self else { return }
-            Activity.set("list: \(path)")
-            let mtime = ListingCache.folderMtime(path)
-            var listing: FolderListing
-            var cached = false
-            if useCache, let c = ListingCache.shared.lookup(path, currentMtime: mtime) {
-                listing = c
-                cached = true
-                Stats.noteCacheHit()
-            } else {
-                listing = DirectoryReader.read(path, isCancelled: { [weak me] in me?.generation.current != gen })
-                if !listing.cancelled { ListingCache.shared.store(path, listing: listing, folderMtime: mtime) }
-            }
-            Activity.set("idle")
-            if listing.cancelled { return }
-            let ms = Date().timeIntervalSince(started) * 1000
-            if !cached && listing.error == 0 {
-                Stats.noteListing(network: isNetwork, ms: ms, method: listing.method, entries: listing.entries.count)
-            }
-            if !cached {
-                Log.info(String(format: "list %@ %ld entries %.1f ms via %@%@%@", path, listing.entries.count, ms,
-                                listing.method, isNetwork ? " (network)" : "",
-                                listing.error != 0 ? " error \(listing.error) \(listing.errorText)" : ""))
-            }
-            DispatchQueue.main.async {
-                guard me.generation.current == gen else { return }
-                if !cached { TagLoader.shared.forgetFolder(path) }     // re-read from disk: tags too
-                me.apply(listing, path: path, cached: cached, select: select)
-            }
-        }
-    }
-
-    private var lastListingPath: String?
-
-    private func apply(_ listing: FolderListing, path: String, cached: Bool, select: [String]?) {
-        Activity.set("show: \(path)")
-        statusSpinner.stopAnimation(nil)
-        lastListing = listing
-        lastListingPath = path
-        fromCache = cached
-        let showHidden = BrowserWindowController.showHidden
-        let visible = showHidden ? listing.entries : listing.entries.filter { !$0.isHidden }
-        list.foldersFirst = BrowserWindowController.foldersFirst
-        list.showHidden = showHidden
-        list.foldersOnly = BrowserWindowController.foldersOnly
-        list.rootPath = path
-        list.setEntries(listing.entries, select: select)
-        sheet.showHidden = showHidden
-        sheet.foldersOnly = BrowserWindowController.foldersOnly
-        sheet.foldersFirst = BrowserWindowController.foldersFirst
-        sheet.filterText = list.filterText
-        sheet.rootPath = path
-        sheet.setEntries(listing.entries, select: select)
-        if listing.error != 0 {
-            showMessage("Can't open this folder: \(listing.errorText) (E-LIST-\(listing.error))")
-        } else if visible.isEmpty {
-            showMessage(listing.entries.isEmpty ? "Empty folder"
-                : "\(listing.entries.count) hidden item\(listing.entries.count == 1 ? "" : "s") only (Cmd-Shift-. shows them)")
+        if sidebarCollapsed {
+            outer.setPosition(lastSidebarWidth, ofDividerAt: 0)
+            UserDefaults.standard.set(false, forKey: "sidebarCollapsed")
         } else {
-            showMessage(nil)
+            lastSidebarWidth = max(120, sidebarPane.frame.width)
+            outer.setPosition(0, ofDividerAt: 0)
+            UserDefaults.standard.set(true, forKey: "sidebarCollapsed")
         }
-        if listing.error == 0 && !list.filterText.isEmpty && shownCounts.rows == 0 {
-            showMessage("Nothing here matches \"\(list.filterText)\"")
-        }
-        updateStatus()
-        Activity.set("idle")
-    }
-
-    private func updateStatus() {
-        guard let l = lastListing else { statusLabel.stringValue = ""; return }
-        if l.error != 0 { statusLabel.stringValue = "Not readable: \(l.errorText)"; return }
-        let hidden = l.entries.filter { $0.isHidden }.count
-        let c = shownCounts                       // expanded folders included, a set is one
-        var parts = ["\(c.rows) item\(c.rows == 1 ? "" : "s")" + (c.sets > 0 ? " (\(c.sets) set\(c.sets == 1 ? "" : "s"), \(c.total) total)" : "")]
-        if hidden > 0 && !BrowserWindowController.showHidden { parts.append("\(hidden) hidden") }
-        let sel = selectedCount
-        if sel > 0 { parts.append("\(sel) selected") }
-        parts.append(fromCache ? "from memory" : String(format: "%@ %.0f ms", l.method, l.milliseconds))
-        if !l.problems.isEmpty { parts.append("\(l.problems.count) unreadable") }
-        if !list.filterText.isEmpty { parts.insert("filter \"\(list.filterText)\"", at: 1) }
-        statusLabel.stringValue = parts.joined(separator: "  \u{00B7}  ")
-    }
-
-    private func rebuildPathBar() {
-        for v in pathBar.arrangedSubviews { pathBar.removeArrangedSubview(v); v.removeFromSuperview() }
-        // The whole chain from "/" (/ > Volumes > Share > ...), every level clickable.
-        let chain = Paths.ancestry(currentPath)
-        let mounts = Dictionary(Volumes.all.map { ($0.mountPoint, $0.displayName) }, uniquingKeysWith: { a, _ in a })
-        for (i, p) in chain.enumerated() {
-            if i > 0 {
-                let sep = NSTextField(labelWithString: "\u{203A}")
-                sep.textColor = NSColor.tertiaryLabelColor
-                pathBar.addArrangedSubview(sep)
-            }
-            let title = p == "/" ? "" : (mounts[p] ?? Paths.name(p))
-            let b = NSButton(title: title, target: self, action: #selector(pathClicked(_:)))
-            if p == "/" {
-                b.image = Glyphs.computer
-                b.imagePosition = .imageOnly
-                b.toolTip = "Computer"
-            }
-            let m = NSMenu()
-            let copyHere = NSMenuItem(title: "Copy Path", action: #selector(copyPathItem(_:)), keyEquivalent: "")
-            copyHere.representedObject = p
-            copyHere.target = self
-            let copyAll = NSMenuItem(title: "Copy Full Path", action: #selector(copyPathItem(_:)), keyEquivalent: "")
-            copyAll.representedObject = currentPath
-            copyAll.target = self
-            m.addItem(copyHere)
-            m.addItem(copyAll)
-            m.addItem(NSMenuItem.separator())
-            for (title, sel) in [("Paste Into", #selector(pasteIntoPathItem(_:))), ("Move Items Into", #selector(moveIntoPathItem(_:))),
-                                 ("Open in New Window", #selector(newWindowPathItem(_:)))] {
-                let i = NSMenuItem(title: title, action: sel, keyEquivalent: "")
-                i.representedObject = p
-                i.target = self
-                m.addItem(i)
-            }
-            b.menu = m
-            b.bezelStyle = .recessed
-            b.isBordered = false
-            b.identifier = NSUserInterfaceItemIdentifier(p)
-            b.lineBreakMode = .byTruncatingMiddle
-            b.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(rawValue: 200), for: .horizontal)
-            if i == chain.count - 1 { b.font = NSFont.boldSystemFont(ofSize: NSFont.systemFontSize) }
-            pathBar.addArrangedSubview(b)
-        }
-    }
-
-    /// Path bar: paste the clipboard's files into that folder (copy, or move).
-    @objc private func pasteIntoPathItem(_ sender: NSMenuItem) { pasteInto(sender, kind: .copy) }
-    @objc private func moveIntoPathItem(_ sender: NSMenuItem) { pasteInto(sender, kind: .move) }
-
-    private func pasteInto(_ sender: NSMenuItem, kind: TransferKind) {
-        guard let p = sender.representedObject as? String else { return }
-        let paths = BrowserWindowController.clipboardFiles
-        guard !paths.isEmpty else { NSSound.beep(); return }
-        TransferController.shared.start(paths, to: p, kind: kind, from: self)
-    }
-
-    @objc private func newWindowPathItem(_ sender: NSMenuItem) {
-        if let p = sender.representedObject as? String { BrowserWindowController.openWindow(at: p) }
-    }
-
-    @objc private func copyPathItem(_ sender: NSMenuItem) {
-        guard let p = sender.representedObject as? String else { return }
-        BrowserWindowController.putOnClipboard([p])
-    }
-
-    static func putOnClipboard(_ paths: [String]) {
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.setString(paths.joined(separator: "\n"), forType: .string)
-        Log.info("copied \(paths.count) path(s) to the clipboard")
-    }
-
-    /// Edit > Copy Path (Cmd-Shift-C): the selected items' paths, one per line; the folder itself
-    /// when nothing is selected.
-    @objc func copyPaths(_ sender: Any?) {
-        let sel = selection().map { $0.path }
-        BrowserWindowController.putOnClipboard(sel.isEmpty ? [currentPath] : sel)
-    }
-
-    @objc private func pathClicked(_ sender: NSButton) {
-        guard let p = sender.identifier?.rawValue, p != currentPath else { return }
-        let child = Paths.ancestry(currentPath).first { Paths.parent($0) == p && $0 != p }
-        navigate(to: p, select: child.map { [Paths.name($0)] })
-    }
-
-    private func watchFired(_ change: FolderWatcher.Change, for path: String) {
-        guard path == currentPath else { return }
-        Stats.noteWatch(gone: change == .gone)
-        switch change {
-        case .contents:
-            ListingCache.shared.invalidate(path)
-            load(select: nil, useCache: false)
-        case .gone:
-            Log.info("folder gone: \(path); going to the nearest folder that exists")
-            listQueue.async { [weak self] in
-                var p = Paths.parent(path)
-                var st = stat()
-                while p != "/" && stat(p, &st) != 0 { p = Paths.parent(p) }
-                DispatchQueue.main.async { self?.navigate(to: p) }
-            }
-        }
-    }
-
-    private func open(_ entries: [FileEntry]) {
-        if entries.count == 1, let e = entries.first, e.isDirectory && !e.isPackage {
-            navigate(to: e.path)
-            return
-        }
-        let urls = entries.map { URL(fileURLWithPath: $0.path, isDirectory: $0.isDirectory) }   // isDirectory: no stat
-        Log.info("open \(urls.count) item(s) with their default apps")
-        DispatchQueue.global(qos: .userInitiated).async {
-            for u in urls { NSWorkspace.shared.open(u) }
-        }
-    }
-
-    // MARK: Menu actions (reached through the responder chain)
-
-    @objc func goBack(_ sender: Any?) {
-        guard let p = backStack.popLast() else { return }
-        forwardStack.append(currentPath)
-        let child = Paths.ancestry(currentPath).first { Paths.parent($0) == p && $0 != p }
-        navigate(to: p, record: false, select: child.map { [Paths.name($0)] })
-    }
-
-    @objc func goForward(_ sender: Any?) {
-        guard let p = forwardStack.popLast() else { return }
-        backStack.append(currentPath)
-        navigate(to: p, record: false)
-    }
-
-    @objc func goEnclosingFolder(_ sender: Any?) {
-        guard currentPath != "/" else { return }
-        let here = currentPath
-        let vol = Volumes.volume(for: here)
-        // From a volume's root, go to "/" (Computer-like view) rather than /Volumes.
-        let target = (vol != nil && vol!.mountPoint == here && !vol!.isRoot) ? "/Volumes" : Paths.parent(here)
-        navigate(to: target, select: [Paths.name(here)])
-    }
-
-    @objc func goHome(_ sender: Any?) { navigate(to: NSHomeDirectory()) }
-    @objc func goComputer(_ sender: Any?) { navigate(to: "/") }
-    @objc func goVolumes(_ sender: Any?) { navigate(to: "/Volumes") }
-
-    @objc func connectToServer(_ sender: Any?) { NetworkWindow.show(for: self) }
-
-    @objc func goToFolder(_ sender: Any?) {
-        let alert = NSAlert()
-        alert.messageText = "Go to the folder:"
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
-        field.stringValue = currentPath
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Go")
-        alert.addButton(withTitle: "Cancel")
-        alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        var p = (field.stringValue as NSString).expandingTildeInPath
-        while p.count > 1 && p.hasSuffix("/") { p = String(p.dropLast()) }
-        guard p.hasPrefix("/") else { return }
-        listQueue.async { [weak self] in
-            var isDir: ObjCBool = false
-            let ok = FileManager.default.fileExists(atPath: p, isDirectory: &isDir)
-            DispatchQueue.main.async {
-                guard let me = self else { return }
-                if ok && isDir.boolValue { me.navigate(to: p) }
-                else if ok { me.navigate(to: Paths.parent(p), select: [Paths.name(p)]) }
-                else { NSSound.beep(); Log.info("go to folder: not found \(p)") }
-            }
-        }
-    }
-
-    @objc func openSelected(_ sender: Any?) {
-        if mode == .sheet { let s = selection(); if s.isEmpty { NSSound.beep() } else { open(s) } } else { list.openSelection() }
-    }
-
-    /// Space: a folder opens in a new window, as a contact sheet, in front (from the list and
-    /// from the sheet). Files get the preview with 0.8.
-    private func spacePressed() {
-        let s = selection()
-        if s.count == 1, let e = s.first, e.isDirectory && !e.isPackage {
-            let c = BrowserWindowController.openWindow(at: e.path)
-            c.setMode(.sheet, remember: false)
-            c.window?.makeKeyAndOrderFront(nil)
-            return
-        }
-        guard let e = s.first else { NSSound.beep(); return }
-        if PreviewWindow.shared.isOpen { PreviewWindow.shared.close(); return }
-        // Everything opens in the preview: images in its viewer, PDFs and documents in the Quick
-        // Look view inside it - one window to arrow through a mixed folder.
-        PreviewWindow.shared.show(pictureEntry(e), neighbours: neighbours(of: e), from: self)
-        PreviewWindow.shared.labelsShown = labels(of: e)
-    }
-
-    // MARK: Preview / Quick Look
-
-    private func labels(of e: FileEntry) -> ImageLabels? {
-        let members = mode == .sheet ? (sheet.grid.items.first { $0.entry.path == e.path }?.members ?? [e]) : [e]
-        return LabelLoader.shared.cached(LabelLoader.key(e, members))
-    }
-
-    private func pictureEntry(_ e: FileEntry) -> FileEntry {
-        if mode == .sheet, let it = sheet.grid.items.first(where: { $0.entry.path == e.path }) { return sheet.grid.picture(it) }
-        return list.pictureEntry(e)
-    }
-
-    private func neighbours(of e: FileEntry) -> [FileEntry] {
-        return mode == .sheet ? sheet.grid.neighbours(of: e.path, before: 1, after: 2) : list.neighbours(of: e, before: 1, after: 2).map { list.pictureEntry($0) }
-    }
-
-    /// The selection moved while the preview is open for this window: it follows.
-    private func followInPreview() {
-        guard PreviewWindow.shared.isOpen, let e = selection().first else { return }
-        PreviewWindow.shared.show(pictureEntry(e), neighbours: neighbours(of: e), from: self)
-        PreviewWindow.shared.labelsShown = labels(of: e)
-    }
-
-    func previewStep(_ d: Int) {
-        if mode == .sheet { sheet.grid.step(d) } else { list.step(d) }
-    }
-
-    /// Cmd-Y: Quick Look for the selection (any file type macOS can show).
-    @objc func toggleQuickLook(_ sender: Any?) {
-        Activity.set("quicklook")
-        defer { Activity.set("idle") }
-        guard let p = QLPreviewPanel.shared() else { return }
-        if QLPreviewPanel.sharedPreviewPanelExists() && p.isVisible { p.orderOut(nil) } else { p.makeKeyAndOrderFront(nil) }
-    }
-
-    private var qlItems: [URL] = []
-
-    override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { return true }
-
-    override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
-        let sel = selection()
-        qlItems = sel.map { URL(fileURLWithPath: pictureEntry($0).path, isDirectory: $0.isDirectory) }
-        panel.dataSource = self
-        panel.delegate = self
-        panel.reloadData()
-    }
-
-    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
-        panel.dataSource = nil
-        panel.delegate = nil
-    }
-
-    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int { return qlItems.count }
-    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! { return qlItems[index] as NSURL }
-
-    /// Right-click in the contact sheet: the list's file items (tags stay in the list for now).
-    private func sheetMenu() -> NSMenu {
-        let m = NSMenu()
-        let sel = selection()
-        func add(_ title: String, _ action: String) { m.addItem(NSMenuItem(title: title, action: Selector(action), keyEquivalent: "")) }
-        if let first = sel.first {
-            add("Open", "openSelected:")
-            let ow = NSMenuItem(title: "Open With", action: nil, keyEquivalent: "")
-            ow.submenu = FinderActions.openWithMenu(for: first)
-            m.addItem(ow)
-            if sel.count == 1 && first.isDirectory && !first.isPackage { add("Open in New Window", "openInNewWindow:") }
-            add("Show in Finder", "revealInFinder:")
-            add("Get Info", "getInfo:")
-            m.addItem(NSMenuItem.separator())
-            if sel.count == 1 { add("Rename", "renameSelected:") }
-            add("Copy", "copy:")
-        }
-        if NSPasteboard.general.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) {
-            add("Paste", "paste:")
-            add("Move Items Here", "pasteMoving:")
-        }
-        if !sel.isEmpty {
-            add("Duplicate", "duplicate:")
-            m.addItem(NSMenuItem.separator())
-            add("Copy Path", "copyPaths:")
-            m.addItem(NSMenuItem.separator())
-            add("Move to Trash", "moveToTrash:")
-        } else {
-            add("New Folder", "newFolder:")
-        }
-        return m
-    }
-
-    /// M / Return-rename in the contact sheet: a small sheet with the name (set: without the
-    /// extension, every member keeps its own).
-    private func renameInSheet() {
-        let sel = sheet.grid.selectedItems
-        guard sel.count == 1, let it = sel.first, let w = window else { NSSound.beep(); return }
-        let a = NSAlert()
-        a.messageText = "Rename \"\(it.displayName)\""
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
-        field.stringValue = it.isSet ? it.displayName : it.entry.name
-        a.accessoryView = field
-        a.addButton(withTitle: "Rename")
-        a.addButton(withTitle: "Cancel")
-        a.window.initialFirstResponder = field
-        a.beginSheetModal(for: w) { [weak self] r in
-            guard r == .alertFirstButtonReturn else { return }
-            var name = field.stringValue.trimmingCharacters(in: .whitespaces)
-            if it.isSet {
-                let ext = FileOperations.split(it.entry.name).ext
-                if !name.lowercased().hasSuffix("." + ext.lowercased()) { name += "." + ext }
-            }
-            if name != it.entry.name && !name.isEmpty { self?.commitRename(it.entry, name) }
-        }
-        DispatchQueue.main.async {
-            let stem = it.isSet || it.isFolder ? field.stringValue : FileOperations.split(field.stringValue).stem
-            field.currentEditor()?.selectedRange = NSRange(location: 0, length: (stem as NSString).length)
-        }
-    }
-
-    @objc func refresh(_ sender: Any?) {
-        ListingCache.shared.invalidate(currentPath)
-        load(select: nil, useCache: false)
-        for p in list.expandedFolderPaths {
-            ListingCache.shared.invalidate(p)
-            list.relist(path: p)
-        }
-    }
-
-    // MARK: File operations (background queue; results and undo on the main thread)
-
-    private let opsQueue = DispatchQueue(label: "photolab.ops", qos: .userInitiated)
-
-    func showProblem(_ title: String, _ text: String) {
-        guard let w = window else { return }
-        let a = NSAlert()
-        a.messageText = title
-        a.informativeText = text
-        a.beginSheetModal(for: w, completionHandler: nil)
-    }
-
-    /// Re-read the folders an operation touched (the window's folder and any expanded ones).
-    func reloadAfterOp(_ dirs: Set<String>, select: [String]? = nil) {
-        for d in dirs { ListingCache.shared.invalidate(d) }
-        if dirs.contains(currentPath) { load(select: select, useCache: false) }
-        for d in dirs where d != currentPath { list.relist(path: d) }
-    }
-
-    @objc func renameSelected(_ sender: Any?) {
-        if mode == .sheet { renameInSheet(); return }
-        if !list.beginRename() { NSSound.beep() }
-    }
-
-    private func commitRename(_ entry: FileEntry, _ newName: String) {
-        let dir = Paths.parent(entry.path)
-        Activity.set("ops: rename")
-        opsQueue.async { [weak self] in
-            let r = FileOperations.rename(entry.path, to: newName)
-            Activity.set("idle")
-            DispatchQueue.main.async {
-                guard let me = self else { return }
-                switch r {
-                case .failure(let f):
-                    me.showProblem("Not renamed", f.message)
-                case .success(let pairs):
-                    me.registerUndoRename(pairs, name: pairs.count > 1 ? "Rename Set" : "Rename")
-                    me.reloadAfterOp([dir], select: dir == me.currentPath ? [newName] : nil)
-                }
-            }
-        }
-    }
-
-    /// Undo of a rename is the reverse rename; registering it inside the undo handler makes AppKit
-    /// file it as the redo.
-    func registerUndoRename(_ pairs: [(String, String)], name: String) {
-        guard let um = window?.undoManager, !pairs.isEmpty else { return }
-        um.registerUndo(withTarget: self) { me in
-            let back = Array(pairs.map { ($0.1, $0.0) }.reversed())
-            me.registerUndoRename(back, name: name)
-            me.opsQueue.async {
-                let r = FileOperations.applyRenames(back, what: "undo rename")
-                DispatchQueue.main.async {
-                    if case .failure(let f) = r { me.showProblem("Could not undo the rename", f.message) }
-                    me.reloadAfterOp(Set(back.map { Paths.parent($0.0) }))
-                }
-            }
-        }
-        um.setActionName(name)
-    }
-
-    @objc func moveToTrash(_ sender: Any?) {
-        let sel = selection().map { $0.path }
-        guard !sel.isEmpty else { NSSound.beep(); return }
-        performTrash(sel, sets: FileOperations.useSets)
-    }
-
-    /// Trash; undo puts back, redo trashes the same items again.
-    private func performTrash(_ paths: [String], sets: Bool) {
-        Activity.set("ops: trash")
-        opsQueue.async { [weak self] in
-            let r = FileOperations.trash(paths, sets: sets)
-            Activity.set("idle")
-            DispatchQueue.main.async {
-                guard let me = self else { return }
-                if !r.done.isEmpty { me.registerUndoTrash(r.done) }
-                if !r.failures.isEmpty {
-                    me.showProblem("Some items were not moved to the Trash",
-                                   r.failures.joined(separator: "\n") + "\n\nThey are still where they were.")
-                }
-                me.reloadAfterOp(Set(paths.map { Paths.parent($0) }))
-                if !r.noTrash.isEmpty { me.confirmPermanentDelete(r.noTrash) }
-            }
-        }
-    }
-
-    /// Shares without a Trash: Finder's choice - delete immediately, after an explicit warning.
-    private func confirmPermanentDelete(_ paths: [String]) {
-        guard let w = window else { return }
-        let a = NSAlert()
-        let n = paths.count
-        a.alertStyle = .critical
-        a.messageText = n == 1 ? "Delete \"\(Paths.name(paths[0]))\" immediately?"
-                               : "Delete these \(n) items immediately?"
-        var names = paths.prefix(8).map { Paths.name($0) }.joined(separator: "\n")
-        if n > 8 { names += "\n...and \(n - 8) more" }
-        a.informativeText = "This share has no Trash. The items will be deleted for good. You can't undo this action.\n\n" + names
-        a.addButton(withTitle: "Delete")
-        a.addButton(withTitle: "Cancel")
-        a.buttons.last?.keyEquivalent = "\u{1b}"
-        a.buttons.first?.keyEquivalent = ""          // Return must not delete
-        a.beginSheetModal(for: w) { [weak self] resp in
-            guard resp == .alertFirstButtonReturn, let me = self else {
-                Log.info("permanent delete cancelled for \(n) item(s)")
-                return
-            }
-            me.opsQueue.async {
-                let failures = FileOperations.deletePermanently(paths)
-                DispatchQueue.main.async {
-                    if !failures.isEmpty { me.showProblem("Some items could not be deleted", failures.joined(separator: "\n")) }
-                    me.reloadAfterOp(Set(paths.map { Paths.parent($0) }))
-                }
-            }
-        }
-    }
-
-    private func registerUndoTrash(_ items: [FileOperations.Trashed]) {
-        guard let um = window?.undoManager else { return }
-        um.registerUndo(withTarget: self) { me in
-            // Redo = trash exactly these items again (the set was already expanded).
-            um.registerUndo(withTarget: me) { me2 in me2.performTrash(items.map { $0.original }, sets: false) }
-            um.setActionName("Move to Trash")
-            me.opsQueue.async {
-                let failures = FileOperations.putBack(items)
-                DispatchQueue.main.async {
-                    if !failures.isEmpty { me.showProblem("Some items could not be put back", failures.joined(separator: "\n")) }
-                    me.reloadAfterOp(Set(items.map { Paths.parent($0.original) }), select: items.map { Paths.name($0.original) })
-                }
-            }
-        }
-        um.setActionName("Move to Trash")
-    }
-
-    // MARK: Copy / paste / duplicate (the transfer engine: TransferController)
-
-    /// Cmd-C: the selected items (with their set members) go on the clipboard as files, so they
-    /// paste in PhotoLab and in Finder.
-    @objc func copy(_ sender: Any?) {
-        let sel = selection()
-        let paths = setMembers(sel)
-        guard !paths.isEmpty else { NSSound.beep(); return }
-        let folders = Set(sel.filter { $0.isDirectory }.map { $0.path })
-        Activity.during("clipboard: copy") {
-            let pb = NSPasteboard.general
-            pb.clearContents()
-            // isDirectory given: NSURL would otherwise stat each path (on a share, on the main thread).
-            pb.writeObjects(paths.map { NSURL(fileURLWithPath: $0, isDirectory: folders.contains($0)) })
-        }
-        Log.info("clipboard: \(paths.count) item(s)")
-    }
-
-    @objc func paste(_ sender: Any?) { pasteFiles(kind: .copy) }
-
-    /// Cmd-Option-V (Finder's "Move Item Here").
-    @objc func pasteMoving(_ sender: Any?) { pasteFiles(kind: .move) }
-
-    private static var clipboardFiles: [String] {
-        let urls = NSPasteboard.general.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
-        return urls.map { $0.path }
-    }
-
-    /// Paste goes into the folder of the selection (an expanded subfolder's row pastes there), or
-    /// into the window's folder when nothing is selected.
-    private func pasteFiles(kind: TransferKind) {
-        let paths = Activity.during("clipboard: paste") { BrowserWindowController.clipboardFiles }
-        guard !paths.isEmpty else { NSSound.beep(); return }
-        let dest = selection().first.map { Paths.parent($0.path) } ?? currentPath
-        TransferController.shared.start(paths, to: dest, kind: kind, from: self)
-    }
-
-    /// Cmd-D: copies next to the originals ("IMG_1 copy.CR3"; a set stays a set).
-    @objc func duplicate(_ sender: Any?) {
-        let sel = selection()
-        guard let first = sel.first else { NSSound.beep(); return }
-        let dir = Paths.parent(first.path)
-        let paths = setMembers(sel.filter { Paths.parent($0.path) == dir })
-        TransferController.shared.start(paths, to: dir, kind: .copy, from: self)
-    }
-
-    /// Undo of a copy: the new copies go to the Trash (on a share without one, after the usual
-    /// confirmation). Redo puts them back.
-    func registerUndoCopy(_ created: [String], name: String) {
-        guard let um = window?.undoManager, !created.isEmpty else { return }
-        um.registerUndo(withTarget: self) { me in me.performTrash(created, sets: false) }
-        um.setActionName(name)
-    }
-
-    @objc func newFolder(_ sender: Any?) {
-        let dir = currentPath
-        opsQueue.async { [weak self] in
-            let r = FileOperations.newFolder(in: dir)
-            DispatchQueue.main.async {
-                guard let me = self else { return }
-                switch r {
-                case .failure(let f): me.showProblem("No new folder", f.message)
-                case .success(let p):
-                    if let um = me.window?.undoManager {
-                        um.registerUndo(withTarget: me) { me2 in
-                            me2.opsQueue.async {
-                                let problem = FileOperations.removeNewFolder(p)
-                                DispatchQueue.main.async {
-                                    if let t = problem { me2.showProblem("The new folder was kept", t) }
-                                    me2.reloadAfterOp([dir])
-                                }
-                            }
-                        }
-                        um.setActionName("New Folder")
-                    }
-                    me.list.pendingEdit = p
-                    me.reloadAfterOp([dir], select: [Paths.name(p)])
-                }
-            }
-        }
-    }
-
-    // MARK: Expanded subfolders
-
-    /// List an expanded subfolder in the background (same cache and reader as the main listing).
-    private func loadChildren(_ path: String) {
-        let gen = folderGeneration.current
-        let isNetwork = Volumes.isNetwork(path)
-        listQueue.async { [weak self] in
-            let started = Date()
-            let mtime = ListingCache.folderMtime(path)
-            var listing: FolderListing
-            var cached = false
-            if let c = ListingCache.shared.lookup(path, currentMtime: mtime) {
-                listing = c
-                cached = true
-            } else {
-                listing = DirectoryReader.read(path, isCancelled: { [weak self] in self?.folderGeneration.current != gen })
-                if !listing.cancelled { ListingCache.shared.store(path, listing: listing, folderMtime: mtime) }
-            }
-            if listing.cancelled { return }
-            let ms = Date().timeIntervalSince(started) * 1000
-            if !cached {
-                if listing.error == 0 {
-                    Stats.noteListing(network: isNetwork, ms: ms, method: listing.method, entries: listing.entries.count)
-                }
-                Log.info(String(format: "expand %@ %ld entries %.1f ms via %@%@", path, listing.entries.count, ms,
-                                listing.method, listing.error != 0 ? " error \(listing.error) \(listing.errorText)" : ""))
-            }
-            let result = listing
-            DispatchQueue.main.async {
-                guard let me = self, me.folderGeneration.current == gen else { return }
-                TagLoader.shared.forgetFolder(path)
-                me.list.setChildren(path: path, entries: result.entries,
-                                    error: result.error != 0 ? result.errorText : nil)
-            }
-        }
-    }
-
-    /// One watcher per expanded subfolder; an event re-lists just that folder.
-    private func watchExpanded(_ paths: Set<String>) {
-        for (p, w) in childWatchers where !paths.contains(p) {
-            w.stop()
-            childWatchers.removeValue(forKey: p)
-        }
-        for p in paths where childWatchers[p] == nil {
-            childWatchers[p] = FolderWatcher(path: p) { [weak self] change in
-                guard let me = self else { return }
-                Stats.noteWatch(gone: change == .gone)
-                ListingCache.shared.invalidate(p)
-                if change == .contents { me.list.relist(path: p) }
-                // .gone: the parent's watcher sees it disappear and re-lists the parent.
-            }
-        }
-    }
-
-    @objc func toggleHidden(_ sender: Any?) {
-        BrowserWindowController.showHidden = !BrowserWindowController.showHidden
-        for c in BrowserWindowController.open { c.reapply() }
-    }
-
-    // MARK: Filter bar (Cmd-F)
-
-    @objc func showFilter(_ sender: Any?) {
-        filterRow.isHidden = false
-        window?.makeFirstResponder(filterField)
-    }
-
-    @objc private func filterChanged(_ sender: Any?) {
-        let text = filterField.stringValue.trimmingCharacters(in: .whitespaces)
-        if text == list.filterText { return }
-        list.filterText = text
-        reapply()
-    }
-
-    private func closeFilter(focusList: Bool) {
-        filterField.stringValue = ""
-        filterRow.isHidden = true
-        if !list.filterText.isEmpty { list.filterText = ""; reapply() }
-        if focusList { window?.makeFirstResponder(list.table) }
-    }
-
-    /// Esc in the filter field clears and hides it; Down arrow / Return go to the list.
-    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        guard control === filterField else { return false }
-        if commandSelector == #selector(NSResponder.cancelOperation(_:)) { closeFilter(focusList: true); return true }
-        if commandSelector == #selector(NSResponder.moveDown(_:)) || commandSelector == #selector(NSResponder.insertNewline(_:)) {
-            window?.makeFirstResponder(list.table)
-            if list.table.selectedRow < 0 && list.table.numberOfRows > 0 { list.table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false) }
-            return true
-        }
-        return false
-    }
-
-    @objc func toggleFoldersOnly(_ sender: Any?) {
-        BrowserWindowController.foldersOnly = !BrowserWindowController.foldersOnly
-        for c in BrowserWindowController.open { c.reapply() }
-    }
-
-    // MARK: Finder tags
-
-    /// Tag row in the context menu: remove the colour when every selected file (sets whole) has
-    /// it, else add it to all - decided in the background from the files' current tags.
-    func pickTag(_ color: Int) {
-        let paths = list.tagTargets()
-        guard !paths.isEmpty else { return }
-        opsQueue.async { [weak self] in
-            let r = FileOperations.toggleTag(paths, color: color)
-            DispatchQueue.main.async { self?.tagsChanged(r.changed, failed: r.failed, undoName: (r.added ? "Add Tag " : "Remove Tag ") + FinderTags.colorNames[color]) }
-        }
-    }
-
-    private func tagsChanged(_ changed: [(path: String, before: [FinderTag], after: [FinderTag])], failed: [String], undoName: String) {
-        for c in changed { TagLoader.shared.store(c.path, c.after) }
-        for w in BrowserWindowController.open { w.list.tagsArrived(changed.map { $0.path }) }
-        if !failed.isEmpty {
-            showProblem("Tags not changed on \(failed.count) item\(failed.count == 1 ? "" : "s")",
-                        failed.prefix(10).joined(separator: "\n") + "\n\nThe files themselves are untouched.")
-        }
-        guard !changed.isEmpty, let um = window?.undoManager else { return }
-        let back = changed.map { ($0.path, $0.before, $0.after) }
-        um.registerUndo(withTarget: self) { me in me.restoreTags(back.map { ($0.0, $0.1, $0.2) }, name: undoName) }
-        um.setActionName(undoName)
-    }
-
-    /// Undo / redo of a tag change: every item gets its earlier tag list back.
-    private func restoreTags(_ items: [(String, [FinderTag], [FinderTag])], name: String) {
-        opsQueue.async { [weak self] in
-            var changed: [(path: String, before: [FinderTag], after: [FinderTag])] = []
-            var failed: [String] = []
-            for (p, before, after) in items {
-                if FileOperations.setTags(p, before) { changed.append((p, after, before)) } else { failed.append(Paths.name(p)) }
-            }
-            DispatchQueue.main.async { self?.tagsChanged(changed, failed: failed, undoName: name) }
-        }
-    }
-
-    // MARK: Finder actions
-
-    @objc func openWithApp(_ sender: NSMenuItem) {
-        guard let app = sender.representedObject as? URL else { return }
-        FinderActions.open(selection().map { $0.path }, with: app)
-    }
-
-    @objc func openWithOther(_ sender: Any?) {
-        let paths = selection().map { $0.path }
-        guard !paths.isEmpty, let w = window else { return }
-        let p = NSOpenPanel()
-        p.directoryURL = URL(fileURLWithPath: "/Applications")
-        p.allowedFileTypes = ["app"]
-        p.treatsFilePackagesAsDirectories = false
-        p.prompt = "Open"
-        p.beginSheetModal(for: w) { r in
-            if r == .OK, let app = p.url { FinderActions.open(paths, with: app) }
-        }
-    }
-
-    /// Selected folders go to the end of Favorites (Finder: Ctrl-Cmd-T).
-    @objc func addToSidebar(_ sender: Any?) {
-        let dirs = selection().filter { $0.isDirectory && !$0.isPackage }.map { $0.path }
-        let paths = dirs.isEmpty ? [currentPath] : dirs
-        Favorites.all = Favorites.inserting(paths, at: Favorites.all.count, into: Favorites.all)
-        Log.info("sidebar: added \(paths.count) favorite(s)")
-    }
-
-    @objc func openInNewWindow(_ sender: Any?) {
-        for e in selection() where e.isDirectory && !e.isPackage { BrowserWindowController.openWindow(at: e.path) }
-    }
-
-    @objc func revealInFinder(_ sender: Any?) {
-        let paths = selection().map { $0.path }
-        FinderActions.reveal(paths.isEmpty ? [currentPath] : paths)
-    }
-
-    @objc func getInfo(_ sender: Any?) {
-        let paths = setMembers(selection())
-        FinderActions.getInfo(paths.isEmpty ? [currentPath] : paths)
-    }
-
-    /// Selected volumes, or the volume whose top folder is on screen. Windows showing it move to
-    /// /Volumes first, so PhotoLab itself is not what keeps it busy.
-    @objc func ejectVolume(_ sender: Any?) {
-        var targets = FinderActions.ejectable(selection().map { $0.path })
-        if targets.isEmpty { targets = FinderActions.ejectable([currentPath]) }
-        guard !targets.isEmpty else { NSSound.beep(); return }
-        for v in targets {
-            let mp = v.mountPoint
-            for c in BrowserWindowController.open where c.currentPath == mp || c.currentPath.hasPrefix(mp + "/") {
-                c.navigate(to: "/Volumes")
-            }
-            FinderActions.eject(v) { [weak self] problem in
-                if let p = problem { self?.showProblem("\"\(v.displayName)\" was not ejected", p) }
-            }
-        }
-    }
-
-    @objc func toggleFoldersFirst(_ sender: Any?) {
-        BrowserWindowController.foldersFirst = !BrowserWindowController.foldersFirst
-        for c in BrowserWindowController.open { c.reapply() }
-    }
-
-    func reapply() {
-        if let l = lastListing, let p = lastListingPath { apply(l, path: p, cached: fromCache, select: nil) }
-    }
-
-    func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        switch item.action {
-        case #selector(goBack(_:))?: return !backStack.isEmpty
-        case #selector(goForward(_:))?: return !forwardStack.isEmpty
-        case #selector(goEnclosingFolder(_:))?: return currentPath != "/"
-        case #selector(openSelected(_:))?: return selectedCount > 0
-        case #selector(renameSelected(_:))?: return selectedCount == 1
-        case #selector(moveToTrash(_:))?: return selectedCount > 0
-        case #selector(BrowserWindowController.copy(_:))?: return selectedCount > 0
-        case #selector(duplicate(_:))?: return selectedCount > 0
-        case #selector(paste(_:))?, #selector(pasteMoving(_:))?, #selector(pasteIntoPathItem(_:))?, #selector(moveIntoPathItem(_:))?:
-            return NSPasteboard.general.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
-        case #selector(toggleHidden(_:))?:
-            item.state = BrowserWindowController.showHidden ? .on : .off
-            return true
-        case #selector(toggleSidebar(_:))?:
-            item.title = sidebarShown ? "Hide Sidebar" : "Show Sidebar"
-            return true
-        case #selector(showAsList(_:))?: item.state = mode == .list ? .on : .off; return true
-        case #selector(showAsSheet(_:))?: item.state = mode == .sheet ? .on : .off; return true
-        case #selector(toggleFoldersOnly(_:))?:
-            item.state = BrowserWindowController.foldersOnly ? .on : .off
-            return true
-        case #selector(openInNewWindow(_:))?: return selection().contains { $0.isDirectory && !$0.isPackage }
-        case #selector(ejectVolume(_:))?:
-            return !FinderActions.ejectable(selection().map { $0.path } + [currentPath]).isEmpty
-        case #selector(toggleFoldersFirst(_:))?:
-            item.state = BrowserWindowController.foldersFirst ? .on : .off
-            return true
-        default: return true
-        }
-    }
-
-    // MARK: Split view (sidebar width: 160 by default, remembered, snaps to 160)
-
-    func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
-        return 110
-    }
-
-    func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
-        return min(420, splitView.bounds.width - 300)
-    }
-
-    func splitView(_ splitView: NSSplitView, constrainSplitPosition proposedPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
-        let snap = BrowserWindowController.defaultSidebarWidth
-        return abs(proposedPosition - snap) <= 10 ? snap : proposedPosition
+        for p in panes { p.finishLayout() }
     }
 
     func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool {
-        return false
+        return splitView === outer && subview === sidebarPane
+    }
+
+    func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        if splitView === outer { return 120 }
+        // Stacked panes keep equal heights: panes are only resized side to side.
+        if !paneSplit.isVertical { return paneSplit.subviews[dividerIndex].frame.maxY }
+        // Pane dividers: keep the pane before the divider at its minimum size.
+        let before = paneSplit.subviews[dividerIndex]
+        let start = paneSplit.isVertical ? before.frame.minX : before.frame.minY
+        return start + minimumExtent(of: dividerIndex)
+    }
+
+    func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        if splitView === outer {
+            if splitView.bounds.width < 600 { return max(120, proposedMaximumPosition) }
+            return min(420, splitView.bounds.width - 300)
+        }
+        if !paneSplit.isVertical { return paneSplit.subviews[dividerIndex].frame.maxY }
+        let after = paneSplit.subviews[dividerIndex + 1]
+        let end = paneSplit.isVertical ? after.frame.maxX : after.frame.maxY
+        return end - minimumExtent(of: dividerIndex + 1)
+    }
+
+    func splitView(_ splitView: NSSplitView, shouldAdjustSizeOfSubview view: NSView) -> Bool {
+        if splitView === outer { return view !== sidebarPane }
+        return true
     }
 
     func splitViewDidResizeSubviews(_ notification: Notification) {
-        guard sidebarShown, !sidebar.scroll.isHidden, window?.inLiveResize == false else { return }
-        let w = sidebar.scroll.frame.width
-        if w >= 100 { BrowserWindowController.sidebarWidth = w }
+        guard let sv = notification.object as? NSSplitView else { return }
+        if sv === outer {
+            let w = sidebarPane.frame.width
+            if w >= 120 {
+                lastSidebarWidth = w
+                UserDefaults.standard.set(Double(w), forKey: Prefs.Key.sidebarWidth)
+                UserDefaults.standard.set(false, forKey: "sidebarCollapsed")
+            } else if w < 1 {
+                UserDefaults.standard.set(true, forKey: "sidebarCollapsed")
+            }
+        }
+        for p in panes { p.list.fitColumns() }
     }
 
-    // MARK: Notifications / window
-
-    @objc private func volumesChanged(_ n: Notification) {
-        sidebar.reload()
-        sidebar.reflect(path: currentPath)
-        rebuildPathBar()
+    private func minimumExtent(of index: Int) -> CGFloat {
+        guard index < panes.count else { return 200 }
+        return paneSplit.isVertical ? panes[index].minimumWidth : BrowserWindowController.minPaneHeight
     }
 
-    @objc private func brainChanged(_ n: Notification) {
-        brainLabel.stringValue = BrowserWindowController.brainText
+    static let minPaneHeight: CGFloat = 240
+
+    // MARK: Panes
+
+    /// Focus a pane: the inspector, sidebar highlight and window title follow it.
+    func focus(_ p: BrowserPane) {
+        if focusedPane === p { return }
+        focusedPane = p
+        for q in panes { q.setFocused(q === p) }
+        paneChangedFolder(p)
+        paneTitleChanged(p)
+        updateInspector()
+    }
+
+    func paneChangedFolder(_ p: BrowserPane) {
+        guard p === focusedPane else { return }
+        sidebar.rebuild(currentPath: p.currentPath)
+    }
+
+    func paneTitleChanged(_ p: BrowserPane) {
+        guard p === focusedPane else { return }
+        window?.title = p.list.resultsMode ? (window?.title ?? p.folderTitle) : p.folderTitle
+    }
+
+    /// Open a new pane after `after` (or at the end) showing `path`.
+    @discardableResult
+    func addPane(path: String, after: BrowserPane? = nil, stacked: Bool? = nil) -> BrowserPane? {
+        if let st = stacked { preferStacked = st }
+        if panes.count >= BrowserWindowController.maxPanes {
+            pane.showMessage("Up to \(BrowserWindowController.maxPanes) panes", "Close a pane (the circled x at its top right) to open another.", style: .informational)
+            return nil
+        }
+        let p = BrowserPane(path: path, host: self)
+        let index = after.flatMap { a in panes.index(where: { $0 === a }) }.map { $0 + 1 } ?? panes.count
+        panes.insert(p, at: index)
+        if index >= paneSplit.subviews.count {
+            paneSplit.addSubview(p.view)
+        } else {
+            paneSplit.addSubview(p.view, positioned: .below, relativeTo: paneSplit.subviews[index])
+        }
+        for q in panes { q.panesChanged() }
+        arrangePanes(growIfNeeded: true, equalize: true)
+        focus(p)
+        window?.makeFirstResponder(p.focusView)
+        App.log.info("Pane opened (\(panes.count) panes): \(path)")
+        return p
+    }
+
+    func closePane(_ p: BrowserPane) {
+        guard panes.count > 1, let i = panes.index(where: { $0 === p }) else { return }
+        p.teardown()
+        p.view.removeFromSuperview()
+        panes.remove(at: i)
+        for q in panes { q.panesChanged() }
+        arrangePanes(growIfNeeded: false, equalize: true)
+        let next = panes[min(i, panes.count - 1)]
+        focusedPane = nil
+        focus(next)
+        window?.makeFirstResponder(next.focusView)
+        App.log.info("Pane closed (\(panes.count) left)")
+    }
+
+    /// Side by side when every pane gets its minimum width; otherwise stacked. If even stacking
+    /// doesn't fit and `growIfNeeded`, the window grows (within the screen).
+    func arrangePanes(growIfNeeded: Bool, equalize: Bool) {
+        guard let w = window else { return }
+        let n = CGFloat(panes.count)
+        let divider = paneSplit.dividerThickness
+        let needW = panes.reduce(CGFloat(0)) { $0 + $1.minimumWidth } + divider * (n - 1)
+        let needH = BrowserWindowController.minPaneHeight * n + divider * (n - 1)
+        var avail = paneSplit.frame.size
+        if avail.width < 1 { w.contentView?.layoutSubtreeIfNeeded(); avail = paneSplit.frame.size }
+        var vertical = !preferStacked && avail.width >= needW
+        if preferStacked && avail.height < needH && growIfNeeded, let screen = w.screen ?? NSScreen.main {
+            // Stacked by choice but too short: make the window taller, as far as the screen allows.
+            let vis = screen.visibleFrame
+            var f = w.frame
+            let newH = min(vis.height, f.height + (needH - avail.height))
+            f.origin.y = max(vis.minY, f.maxY - newH)
+            f.size.height = newH
+            w.setFrame(f, display: true)
+            w.contentView?.layoutSubtreeIfNeeded()
+            avail = paneSplit.frame.size
+        }
+        if !preferStacked && !vertical && avail.height < needH && growIfNeeded, let screen = w.screen ?? NSScreen.main {
+            // Too small either way: widen the window (side by side), as far as the screen allows.
+            let vis = screen.visibleFrame
+            var f = w.frame
+            let extra = needW - avail.width
+            let newW = min(vis.width, f.width + extra)
+            f.origin.x = max(vis.minX, min(f.origin.x, vis.maxX - newW))
+            f.size.width = newW
+            w.setFrame(f, display: true)
+            w.contentView?.layoutSubtreeIfNeeded()
+            avail = paneSplit.frame.size
+            vertical = avail.width >= needW - 1
+        }
+        let changed = paneSplit.isVertical != vertical
+        paneSplit.isVertical = vertical
+        paneSplit.adjustSubviews()
+        if equalize || changed || !vertical {
+            let total = (vertical ? avail.width : avail.height) - divider * (n - 1)
+            let each = total / n
+            for i in 0..<(panes.count - 1) {
+                paneSplit.setPosition(CGFloat(i + 1) * each + CGFloat(i) * divider, ofDividerAt: i)
+            }
+        }
+        for p in panes { p.list.fitColumns(); p.refreshGridLayout() }
+        updateMinSize()
+    }
+
+    /// Move a pane one place earlier (-1) or later (+1); the panes keep their sizes.
+    func movePane(_ p: BrowserPane, by d: Int) {
+        guard let i = panes.index(where: { $0 === p }) else { return }
+        let j = i + d
+        guard j >= 0 && j < panes.count else { NSSound.beep(); return }
+        let vertical = paneSplit.isVertical
+        var sizes = panes.map { vertical ? $0.view.frame.width : $0.view.frame.height }
+        panes.swapAt(i, j)
+        sizes.swapAt(i, j)
+        for v in paneSplit.subviews { v.removeFromSuperview() }
+        for q in panes { paneSplit.addSubview(q.view) }
+        paneSplit.adjustSubviews()
+        var pos: CGFloat = 0
+        for k in 0..<(panes.count - 1) {
+            pos += sizes[k]
+            paneSplit.setPosition(pos, ofDividerAt: k)
+            pos += paneSplit.dividerThickness
+        }
+        for q in panes { q.panesChanged(); q.list.fitColumns(); q.refreshGridLayout() }
+        window?.makeFirstResponder(p.focusView)
+    }
+
+    /// Window menu: arrange the existing panes without opening a new one.
+    @objc func arrangePanesSideBySide(_ sender: Any?) {
+        preferStacked = false
+        arrangePanes(growIfNeeded: true, equalize: true)
+    }
+
+    @objc func arrangePanesStacked(_ sender: Any?) {
+        preferStacked = true
+        arrangePanes(growIfNeeded: true, equalize: true)
+    }
+
+    private func updateMinSize() {
+        guard let w = window else { return }
+        let side = sidebarCollapsed ? 0 : sidebarPane.frame.width
+        let insp = inspector.view.isHidden ? 0 : InspectorController.width
+        let widest = panes.map { $0.minimumWidth }.max() ?? 360
+        w.minSize = NSSize(width: max(520, side + insp + widest), height: paneSplit.isVertical ? 300 : BrowserWindowController.minPaneHeight * CGFloat(panes.count))
+    }
+
+    /// The pane after `p` (wrapping), for Tab and F5 / F6.
+    func pane(after p: BrowserPane) -> BrowserPane? {
+        guard panes.count > 1, let i = panes.index(where: { $0 === p }) else { return nil }
+        return panes[(i + 1) % panes.count]
+    }
+
+    // MARK: Inspector
+
+    var inspectorShown: Bool { return !inspector.view.isHidden }
+
+    func updateInspector() {
+        guard inspectorShown, let p = focusedPane else { return }
+        inspector.show(entries: p.list.selectedEntries(), folder: p.currentPath)
+    }
+
+    /// Show/hide the inspector. Showing it widens the window (the panes keep their size) as far as the
+    /// screen allows; hiding it gives the width back.
+    @objc func toggleInspector(_ sender: Any?) {
+        guard let w = window else { return }
+        let show = inspector.view.isHidden
+        Prefs.showInspector = show
+        var f = w.frame
+        let iw = InspectorController.width
+        if let vis = (w.screen ?? NSScreen.main)?.visibleFrame {
+            if show {
+                let grow = min(iw, max(0, vis.width - f.width))
+                f.size.width += grow
+                if f.maxX > vis.maxX { f.origin.x = max(vis.minX, vis.maxX - f.width) }
+            } else {
+                f.size.width = max(w.minSize.width, f.width - iw)
+            }
+        }
+        inspector.view.isHidden = !show
+        inspectorWidth.constant = show ? iw : 0
+        w.setFrame(f, display: true)
+        w.contentView?.layoutSubtreeIfNeeded()
+        arrangePanes(growIfNeeded: false, equalize: false)
+        if show { updateInspector() } else { inspector.clear() }
+        Log.shared?.info("Inspector \(show ? "shown" : "hidden")")
+    }
+
+    // MARK: Reopening (0.13)
+
+    /// Everything about this window that is put back at the next start (not the display or desktop:
+    /// the app delegate adds those).
+    func savedState() -> SavedWindow? {
+        guard let w = window else { return nil }
+        let vertical = paneSplit.isVertical
+        let ps = panes.map { $0.savedState(size: Double(vertical ? $0.view.frame.width : $0.view.frame.height)) }
+        let f = w.frame
+        return SavedWindow(frame: [Double(f.origin.x), Double(f.origin.y), Double(f.width), Double(f.height)],
+                           display: nil, displayFrame: nil, space: nil,
+                           sidebarCollapsed: sidebarCollapsed, sidebarWidth: Double(sidebarCollapsed ? lastSidebarWidth : sidebarPane.frame.width),
+                           inspector: inspectorShown, stacked: preferStacked, panes: ps,
+                           focused: panes.index(where: { $0 === focusedPane }) ?? 0, minimized: w.isMiniaturized, shares: nil)
+    }
+
+    /// Show or hide the Info panel without changing the window size (used when reopening: the saved
+    /// window size already includes it).
+    func setInspectorShown(_ show: Bool) {
+        guard show != inspectorShown else { return }
+        inspector.view.isHidden = !show
+        inspectorWidth.constant = show ? InspectorController.width : 0
+        window?.contentView?.layoutSubtreeIfNeeded()
+        if show { updateInspector() } else { inspector.clear() }
+    }
+
+    /// Put back panes, tabs, view modes, sidebar, Info panel and pane sizes. The window already has its
+    /// frame and its first pane (showing `paths(0)`'s active folder). `paths(i)` gives pane i's usable folders.
+    func restore(_ s: SavedWindow, paths: (Int) -> [String]) {
+        setInspectorShown(s.inspector)
+        // Sidebar
+        if s.sidebarCollapsed {
+            if s.sidebarWidth >= 120 { lastSidebarWidth = CGFloat(s.sidebarWidth) }
+            outer.setPosition(0, ofDividerAt: 0)
+        } else {
+            let sw = CGFloat(min(420, max(120, s.sidebarWidth)))
+            lastSidebarWidth = sw
+            outer.setPosition(sw, ofDividerAt: 0)
+        }
+        // Panes and tabs
+        let count = min(s.panes.count, BrowserWindowController.maxPanes)
+        preferStacked = s.stacked
+        for i in 0..<count {
+            let sp = s.panes[i]
+            let ps = paths(i)
+            guard !ps.isEmpty else { continue }
+            let a = max(0, min(sp.active, ps.count - 1))
+            let p: BrowserPane
+            if i == 0 {
+                p = panes[0]
+            } else {
+                guard let np = addPane(path: ps[a], after: panes.last, stacked: s.stacked) else { break }
+                p = np
+            }
+            p.restoreTabs(ps, active: a)
+            p.restoreViewMode(sp.viewMode)
+        }
+        arrangePanes(growIfNeeded: false, equalize: true)
+        // Side by side: the saved widths, if they still fit.
+        if paneSplit.isVertical && panes.count > 1 && s.panes.count >= panes.count {
+            let sizes = s.panes.prefix(panes.count).map { CGFloat($0.size) }
+            let divider = paneSplit.dividerThickness
+            let total = paneSplit.frame.width - divider * CGFloat(panes.count - 1)
+            var fits = sizes.reduce(0, +) <= total + 2
+            for (i, p) in panes.enumerated() where sizes[i] < p.minimumWidth - 1 { fits = false }
+            if fits {
+                var pos: CGFloat = 0
+                for k in 0..<(panes.count - 1) {
+                    pos += sizes[k]
+                    paneSplit.setPosition(pos, ofDividerAt: k)
+                    pos += divider
+                }
+                for p in panes { p.list.fitColumns(); p.refreshGridLayout() }
+            }
+        }
+        let f = max(0, min(s.focused, panes.count - 1))
+        focus(panes[f])
+        window?.makeFirstResponder(panes[f].focusView)
+        for p in panes { p.finishLayout() }
+    }
+
+    // MARK: Sidebar delegate
+
+    func sidebarNavigate(_ path: String) {
+        // Option-click: open in a new pane. Deferred so the sidebar finishes its own selection change first.
+        let newPane = NSApp.currentEvent?.modifierFlags.contains(.option) == true
+        let newWindow = BrowserPane.commandClick   // 0.17.7: Cmd-click = a new window, as in Finder
+        DispatchQueue.main.async { [weak self] in
+            guard let s = self else { return }
+            if newWindow {
+                s.sidebar.sync(to: s.pane.currentPath)   // this window keeps showing where it was
+                if FTPFavorite.isFavorite(path) {
+                    s.pane.openFTPFavoriteInNewWindow(path)
+                } else {
+                    s.pane.openInNewWindow(path)
+                }
+                return
+            }
+            if FTPFavorite.isFavorite(path) {
+                // A folder on an FTP server: in this pane, or (Option) in a new pane next to it.
+                let target = newPane ? s.addPane(path: s.pane.currentPath, after: s.focusedPane) : s.pane
+                target?.openFTPFavorite(path)
+                return
+            }
+            if newPane {
+                s.addPane(path: path, after: s.focusedPane)
+            } else {
+                s.pane.navigate(to: path)
+                s.window?.makeFirstResponder(s.pane.focusView)
+            }
+        }
+    }
+
+    func sidebarOpenInNewTab(_ path: String) {
+        if FTPFavorite.isFavorite(path) { pane.openFTPFavorite(path); return }
+        pane.newTab(path: path)
+    }
+
+    func sidebarEject(_ path: String) {
+        (NSApp.delegate as? AppDelegate)?.ejectVolume(path)
+    }
+
+    func sidebarOpenServer(_ server: SavedServer) {
+        // Cmd-click (0.17.7): in a new window.
+        if BrowserPane.commandClick {
+            let c = (NSApp.delegate as? AppDelegate)?.newWindow(path: pane.currentPath)
+            sidebar.sync(to: pane.currentPath)
+            c?.pane.openSavedServer(server)
+            return
+        }
+        // Option-click: in a new pane (any number of FTP or share panes side by side).
+        if let e = NSApp.currentEvent, e.modifierFlags.contains(.option),
+            let p = addPane(path: pane.currentPath, after: pane) {
+            p.openSavedServer(server)
+            return
+        }
+        pane.openSavedServer(server)
+    }
+
+    func sidebarOpenServerInNewPane(_ server: SavedServer) {
+        if let p = addPane(path: pane.currentPath, after: pane) { p.openSavedServer(server) }
+    }
+
+    func sidebarDrop(_ paths: [String], into dest: String, move: Bool) {
+        pane.dropFiles(paths, into: dest, move: move)
+    }
+
+    func leaveVolume(_ root: String) {
+        for p in panes { p.leaveVolume(root) }
+    }
+
+    func shareUnmounted(_ root: String, wasNetwork: Bool) {
+        for p in panes { p.shareUnmounted(root, wasNetwork: wasNetwork) }
+    }
+
+    func shareMounted(_ root: String) {
+        for p in panes { p.shareMounted(root) }
+    }
+
+    // MARK: Menu commands go to the focused pane when the keyboard is elsewhere (e.g. the sidebar)
+
+    override func supplementalTarget(forAction action: Selector, sender: Any?) -> Any? {
+        if let p = focusedPane, p.responds(to: action) { return p }
+        return super.supplementalTarget(forAction: action, sender: sender)
+    }
+
+    // MARK: Window delegate
+
+    func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? {
+        return undoStack
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        arrangePanes(growIfNeeded: false, equalize: false)
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        (NSApp.delegate as? AppDelegate)?.saveWindowsSoon()
+    }
+
+    func windowDidEndLiveResize(_ notification: Notification) {
+        (NSApp.delegate as? AppDelegate)?.saveWindowsSoon()
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        sidebar.rebuild(currentPath: currentPath)
     }
 
     func windowWillClose(_ notification: Notification) {
-        // The last window closed decides the sidebar state of the next launch.
-        BrowserWindowController.sidebarVisible = sidebarShown
-        watcher?.stop()
-        watcher = nil
-        watchExpanded([])
-        list.stopTags()
-        sheet.stop()
-        _ = generation.next()
-        NotificationCenter.default.removeObserver(self)
-        BrowserWindowController.open.removeAll { $0 === self }
+        for p in panes { p.teardown() }
+        for o in observers { NotificationCenter.default.removeObserver(o) }
+        observers.removeAll()
+        sidebar.table.delegate = nil
+        sidebar.table.dataSource = nil
+        outer.delegate = nil
+        paneSplit.delegate = nil
+        window?.delegate = nil
+        DispatchQueue.main.async {
+            self.onClose?(self)
+        }
+    }
+}
+
+/// Split view with a theme-colored divider.
+final class ThemedSplitView: NSSplitView {
+    var dividerTint: NSColor = .gray
+
+    override var dividerColor: NSColor {
+        return dividerTint
     }
 }

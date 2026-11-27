@@ -1,21 +1,24 @@
 #!/bin/bash
-# File-safety guard (Swift). Only these files may use APIs that change files on disk:
-#   Sources/Core/FileOperations.swift  user files (rename, new folder, Trash, move, copy, undo)
-#   Sources/Core/AppFiles.swift        PhotoLab's own logs, support files, caches, report zip
-#   Sources/Platform/Platform.swift    the macOS primitives FileOperations uses
-# Never edit this list or the pattern to make a build pass; move the code instead.
+# Safety gate: only three files may call APIs that change files on disk.
+#   Sources/Core/FileOperations.swift  - user files (rename, new folder, trash, move, copy)
+#   Sources/Core/AppFiles.swift        - Find's own logs/themes/temp files, guarded to Find's folders
+#   Sources/Darwin/DarwinPlatform.swift - the macOS primitives FileOperations uses
+# Any other source file using one of these APIs fails the build.
 cd "$(dirname "$0")/.."
-ALLOWED="Sources/Core/FileOperations.swift Sources/Core/AppFiles.swift Sources/Platform/Platform.swift"
-PATTERN='removeItem|moveItem|copyItem|trashItem|replaceItem|createDirectory|createFile|setAttributes|createSymbolicLink|linkItem|write\(to:|write\(toFile:|writeToFile|writeToURL|atomicWrite|FileHandle\(forWriting|FileHandle\(forUpdating|[^a-zA-Z_.]mkdir\(|[^a-zA-Z_.]rmdir\(|[^a-zA-Z_.]unlink\(|[^a-zA-Z_.]rename\(|renamex_np|renameat|[^a-zA-Z_.]chmod\(|[^a-zA-Z_.]chown\(|[^a-zA-Z_.]truncate\(|ftruncate|fopen\(|O_WRONLY|O_RDWR|O_CREAT|setResourceValue|setxattr|removexattr|recycle\(|/usr/bin/ditto|/bin/mv|/bin/rm|/bin/cp'
+PATTERN='removeItem|moveItem|copyItem|trashItem|replaceItem|createDirectory|createFile|setAttributes|createSymbolicLink|linkItem|write\(to:|write\(toFile:|writeToFile|writeToURL|FileHandle\(forWriting|FileHandle\(forUpdating|[^a-zA-Z_.]mkdir\(|[^a-zA-Z_.]rmdir\(|[^a-zA-Z_.]unlink\(|[^a-zA-Z_.]rename\(|renamex_np|renameat|[^a-zA-Z_.]chmod\(|[^a-zA-Z_.]chown\(|[^a-zA-Z_.]truncate\(|\.platform\.|exclusiveRename\(|moveToTrash\(|fopen\(|[^a-zA-Z_]open\([^)]*O_(WRONLY|RDWR|CREAT)|NSFileHandle|recycle\(|setResourceValue|setxattr|removexattr'
+ALLOWED='Sources/Core/FileOperations.swift Sources/Core/AppFiles.swift Sources/Darwin/DarwinPlatform.swift'
 BAD=0
-while IFS= read -r f; do
-  case " $ALLOWED " in *" $f "*) continue ;; esac
-  hits=$(grep -nE "$PATTERN" "$f" | grep -vE '^[0-9]+:[[:space:]]*//' || true)
+for f in $(find Sources -name '*.swift' | sort); do
+  skip=0
+  for a in $ALLOWED; do [ "$f" = "$a" ] && skip=1; done
+  [ $skip = 1 ] && continue
+  # ignore comment lines
+  hits=$(grep -nE "$PATTERN" "$f" | grep -vE '^[0-9]+:\s*//' || true)
   if [ -n "$hits" ]; then
-    echo "E-GUARD-1 file-changing API outside the allowed files: $f"
-    echo "$hits" | sed 's/^/E-GUARD-1   line /'
+    echo "E-GUARD-2 file-changing API used outside the allowed files: $f"
+    echo "$hits" | sed 's/^/E-GUARD-2 line /'
     BAD=1
   fi
-done < <(find Sources -name '*.swift' | sort)
-[ $BAD = 0 ] && echo "GUARD OK (Swift)"
+done
+if [ $BAD = 0 ]; then echo "GUARD OK only FileOperations, AppFiles and DarwinPlatform change files"; fi
 exit $BAD

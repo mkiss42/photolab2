@@ -1,245 +1,155 @@
 // AppFiles.swift
-// PhotoLab's own files: logs, support files, caches. One of the three source files allowed to
-// change anything on disk (see tools/check_mutations.sh). Everything here stays inside:
-//   ~/Library/Logs/PhotoLab2
-//   ~/Library/Application Support/PhotoLab2
-//   ~/Library/Caches/PhotoLab2
-// plus a report zip written where the user chose in a save panel.
+// The only code that writes Find's OWN files: logs, themes, journals, temporary work files.
+// Every write and every removal is checked to be inside one of Find's own folders,
+// after resolving symlinks, so it can never touch user files.
 
+#if os(Linux)
+import Glibc
+#else
+import Darwin
+#endif
 import Foundation
 
-enum AppFiles {
-    static var home: String { return NSHomeDirectory() }
-    static var logsDir: String { return home + "/Library/Logs/PhotoLab2" }
-    static var supportDir: String { return home + "/Library/Application Support/PhotoLab2" }
-    static var cachesDir: String { return home + "/Library/Caches/PhotoLab2" }
+final class AppFiles {
+    static var shared: AppFiles!
 
-    /// Default socket for the brain. Unix socket paths are limited to 103 bytes.
-    static var brainSocketPath: String { return supportDir + "/brain.sock" }
+    /// ~/Library/Application Support/Find
+    let supportDir: String
+    /// ~/Library/Caches/Find
+    let cachesDir: String
+    /// ~/Library/Logs/Find
+    let logsDir: String
 
-    static func ensureDirectories() {
-        for d in [logsDir, supportDir, cachesDir] {
+    private var realRoots: [String] = []
+
+    init(supportDir: String, cachesDir: String, logsDir: String) {
+        self.supportDir = supportDir
+        self.cachesDir = cachesDir
+        self.logsDir = logsDir
+        for d in [supportDir, cachesDir, logsDir] {
             try? FileManager.default.createDirectory(atPath: d, withIntermediateDirectories: true, attributes: nil)
         }
+        realRoots = [supportDir, cachesDir, logsDir].map { Sys.realPath($0) ?? $0 }
     }
 
-    // MARK: Log file (called on Log's queue only)
+    var themesDir: String { return Paths.join(supportDir, "Themes") }
+    var journalsDir: String { return Paths.join(supportDir, "Journals") }
+    var tempDir: String { return Paths.join(cachesDir, "tmp") }
 
-    private static var logHandle: FileHandle?
-    private static var logDay = ""
-
-    private static let dayFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd"
-        return f
-    }()
-
-    static func appendLog(_ line: String) {
-        let day = dayFormatter.string(from: Date())
-        if logHandle == nil || day != logDay {
-            logHandle?.closeFile()
-            logHandle = nil
-            ensureDirectories()
-            let path = logsDir + "/photolab-\(day).log"
-            if !FileManager.default.fileExists(atPath: path) {
-                _ = FileManager.default.createFile(atPath: path, contents: nil, attributes: nil)
-            }
-            logHandle = FileHandle(forWritingAtPath: path)
-            logHandle?.seekToEndOfFile()
-            logDay = day
+    /// True only if `path` (resolving symlinks in its parent folders) is inside one of Find's folders.
+    func isOwned(_ path: String) -> Bool {
+        let parent = Paths.parent(path)
+        guard let realParent = Sys.realPath(parent) else { return false }
+        let full = Paths.join(realParent, Paths.lastComponent(path))
+        for root in realRoots where Paths.isInside(full, root: root) && full != root {
+            return true
         }
-        if let d = line.data(using: .utf8) {
-            logHandle?.write(d)
-        }
+        return false
     }
 
-    // MARK: Operation journal (support folder)
-
-    static var journalPath: String { return supportDir + "/operation-journal.json" }
-
-    /// Written before a multi-step operation, removed when it finishes (see FileOperations).
-    static func writeJournal(op: String, pairs: [(String, String)]) {
-        ensureDirectories()
-        let obj: [String: Any] = ["op": op, "pairs": pairs.map { [$0.0, $0.1] }, "time": Date().timeIntervalSince1970]
-        guard let d = try? JSONSerialization.data(withJSONObject: obj, options: []) else { return }
-        try? d.write(to: URL(fileURLWithPath: journalPath), options: .atomic)
-    }
-
-    static func readJournal() -> (op: String, pairs: [(String, String)])? {
-        guard let d = FileManager.default.contents(atPath: journalPath),
-            let obj = (try? JSONSerialization.jsonObject(with: d, options: [])) as? [String: Any],
-            let op = obj["op"] as? String, let raw = obj["pairs"] as? [[String]] else { return nil }
-        let pairs = raw.compactMap { $0.count == 2 ? ($0[0], $0[1]) : nil }
-        return (op, pairs)
-    }
-
-    static func clearJournal() {
-        if FileManager.default.fileExists(atPath: journalPath) {
-            try? FileManager.default.removeItem(atPath: journalPath)
-        }
-    }
-
-    // MARK: Thumbnail cache (~/Library/Caches/PhotoLab2/thumbs/ab/<hash>.jpg)
-
-    static var thumbsDir: String { return cachesDir + "/thumbs" }
-
-    static func thumbnailPath(_ hash: String) -> String {
-        return thumbsDir + "/" + String(hash.prefix(2)) + "/" + hash + ".jpg"
-    }
-
-    /// Written to a temp name, then renamed: a reader never sees half a JPEG.
-    static func storeThumbnail(_ data: Data, at path: String) {
-        let dir = (path as NSString).deletingLastPathComponent
-        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: nil)
-        try? data.write(to: URL(fileURLWithPath: path), options: .atomic)
-    }
-
-    /// At launch, in the background: keep the cache under `maxBytes`, oldest files out first.
-    static func pruneThumbnails(maxBytes: Int64 = 3 << 30) {
-        let fm = FileManager.default
-        guard let e = fm.enumerator(at: URL(fileURLWithPath: thumbsDir), includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey],
-                                    options: [.skipsHiddenFiles]) else { return }
-        var files: [(URL, Int64, Date)] = []
-        var total: Int64 = 0
-        for case let u as URL in e {
-            guard let v = try? u.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]), let s = v.fileSize else { continue }
-            files.append((u, Int64(s), v.contentModificationDate ?? Date.distantPast))
-            total += Int64(s)
-        }
-        guard total > maxBytes else { return }
-        var removed = 0
-        for f in files.sorted(by: { $0.2 < $1.2 }) where total > maxBytes * 9 / 10 {
-            if (try? fm.removeItem(at: f.0)) != nil { total -= f.1; removed += 1 }
-        }
-        Log.info("thumbnail cache pruned: \(removed) file(s) removed")
-    }
-
-    // MARK: Transfer journal (partial copies in progress)
-
-    static var transferJournalPath: String { return supportDir + "/transfer-journal.json" }
-    private static let transferLock = NSLock()
-
-    /// Hidden partial copies being written right now. Kept on the local disk; written when an
-    /// item starts and when it is finished (not per file), so it costs nothing on a share.
-    static func readTransferJournal() -> [String] {
-        guard let d = FileManager.default.contents(atPath: transferJournalPath),
-            let obj = (try? JSONSerialization.jsonObject(with: d, options: [])) as? [String: Any],
-            let temps = obj["partial"] as? [String] else { return [] }
-        return temps
-    }
-
-    static func notePartial(_ path: String, active: Bool) {
-        transferLock.lock(); defer { transferLock.unlock() }
-        var temps = readTransferJournal()
-        if active { if !temps.contains(path) { temps.append(path) } } else { temps.removeAll { $0 == path } }
-        ensureDirectories()
-        if temps.isEmpty {
-            if FileManager.default.fileExists(atPath: transferJournalPath) {
-                try? FileManager.default.removeItem(atPath: transferJournalPath)
-            }
-            return
-        }
-        let obj: [String: Any] = ["partial": temps, "time": Date().timeIntervalSince1970]
-        guard let d = try? JSONSerialization.data(withJSONObject: obj, options: []) else { return }
-        try? d.write(to: URL(fileURLWithPath: transferJournalPath), options: .atomic)
-    }
-
-    // MARK: Self-test fixtures (inside the caches folder only)
-
-    /// A fresh folder for the file-operation self-test:
-    ///   IMG_1.CR3, IMG_1.JPG, IMG_1.xmp, IMG_1.psd (derivative: never part of the set), IMG_2.CR3
-    static func makeOpsFixture() -> String? {
-        let base = selfTestDir
-        let dir = base + "/ops-\(ProcessInfo.processInfo.processIdentifier)"
-        let fm = FileManager.default
-        if let old = try? fm.contentsOfDirectory(atPath: base) {
-            for n in old where n.hasPrefix("ops-") { try? fm.removeItem(atPath: base + "/" + n) }
-        }
+    func makeDir(_ path: String) -> Bool {
+        let parent = Paths.parent(path)
+        if !Sys.exists(parent) { _ = makeDir(parent) }
+        guard isOwned(path) || realRoots.contains(Sys.realPath(path) ?? "") else { return false }
+        if Sys.exists(path) { return true }
         do {
-            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: nil)
-            for name in ["IMG_1.CR3", "IMG_1.JPG", "IMG_1.xmp", "IMG_1.psd", "IMG_2.CR3"] {
-                guard fm.createFile(atPath: dir + "/" + name, contents: Data(name.utf8), attributes: nil) else { return nil }
-            }
+            try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: false, attributes: nil)
+            return true
         } catch {
-            return nil
+            return false
         }
-        return dir
     }
 
-    /// Self-test only: a file with `bytes` bytes and a known modification date, or a folder.
-    static func makeTestFile(_ path: String, bytes: Int, modified: Double) -> Bool {
-        let data = Data((0..<bytes).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ 7) })
-        guard FileManager.default.createFile(atPath: path, contents: data, attributes: nil) else { return false }
-        return (try? FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: modified)],
-                                                       ofItemAtPath: path)) != nil
-    }
-
-    static func makeTestFile(_ path: String, data: Data) -> Bool {
+    @discardableResult
+    func writeText(_ text: String, to path: String) -> Bool {
+        // The folder first (makeDir refuses anything outside Find's folders), then the ownership check,
+        // which needs the folder to exist (0.17: saving into a new subfolder was refused - SESS-03).
+        _ = makeDir(Paths.parent(path))
+        guard isOwned(path) else { return false }
+        guard let data = text.data(using: .utf8) else { return false }
         return FileManager.default.createFile(atPath: path, contents: data, attributes: nil)
     }
 
-    static func makeTestFolder(_ path: String) -> Bool {
-        return (try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true, attributes: nil)) != nil
+    /// Write binary data atomically (temporary file, then replaced in one step). Find's own folders only.
+    @discardableResult
+    func writeData(_ data: Data, to path: String) -> Bool {
+        _ = makeDir(Paths.parent(path))
+        guard isOwned(path) else { return false }
+        do {
+            try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+            return true
+        } catch {
+            return false
+        }
     }
 
-    static func makeTestSymlink(_ path: String, to target: String) -> Bool {
+    @discardableResult
+    func appendText(_ text: String, to path: String) -> Bool {
+        _ = makeDir(Paths.parent(path))
+        guard isOwned(path) else { return false }
+        guard let data = text.data(using: .utf8) else { return false }
+        if !Sys.exists(path) {
+            _ = makeDir(Paths.parent(path))
+            return FileManager.default.createFile(atPath: path, contents: data, attributes: nil)
+        }
+        guard let h = FileHandle(forWritingAtPath: path) else { return false }
+        h.seekToEndOfFile()
+        h.write(data)
+        h.closeFile()
+        return true
+    }
+
+    /// Remove one of Find's own files or folders. Refuses anything outside Find's folders.
+    @discardableResult
+    func removeOwned(_ path: String) -> Bool {
+        guard isOwned(path) else {
+            Log.shared?.warn("E-GUARD-1 refused to remove a path outside Find's folders: \(path)")
+            return false
+        }
+        do {
+            try FileManager.default.removeItem(atPath: path)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Test support: set a file's modification/creation dates. Only inside Find's own folders.
+    @discardableResult
+    func setDates(_ path: String, modified: Date) -> Bool {
+        guard isOwned(path) else { return false }
+        let secs = Int(modified.timeIntervalSince1970)
+        var times = [timeval(tv_sec: secs, tv_usec: 0), timeval(tv_sec: secs, tv_usec: 0)]
+        return utimes(path, &times) == 0
+    }
+
+    /// Test support: set POSIX permissions. Only inside Find's own folders.
+    @discardableResult
+    func setPermissions(_ path: String, _ mode: Int) -> Bool {
+        guard isOwned(path) else { return false }
+        return chmod(path, mode_t(mode)) == 0
+    }
+
+    /// Test support: rename inside Find's own folders.
+    @discardableResult
+    func moveOwned(_ from: String, _ to: String) -> Bool {
+        guard isOwned(from), isOwned(to) else { return false }
+        return (try? FileManager.default.moveItem(atPath: from, toPath: to)) != nil
+    }
+
+    /// Test support: create a symbolic link inside Find's own folders.
+    @discardableResult
+    func makeSymlink(_ path: String, to target: String) -> Bool {
+        guard isOwned(path) else { return false }
         return (try? FileManager.default.createSymbolicLink(atPath: path, withDestinationPath: target)) != nil
     }
 
-    static func removeOpsFixture(_ dir: String) {
-        guard dir.hasPrefix(selfTestDir + "/ops-") else { return }
-        try? FileManager.default.removeItem(atPath: dir)
+    func list(_ dir: String) -> [String] {
+        return ((try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []).sorted()
     }
 
-    /// Self-test only: a journal describing a rename that was interrupted after its first step.
-    static func writeTestJournal(from: String, to: String) {
-        writeJournal(op: "rename", pairs: [(from, to)])
-    }
-
-    static var selfTestDir: String { return cachesDir + "/selftest" }
-
-    /// A fresh folder with known contents for the listing self-test:
-    ///   a.txt (5 bytes), .hidden (1 byte), Folder/ (with inner.txt), "IMG 10.JPG", "IMG 9.JPG", "caf\u{e9}.txt"
-    /// Returns its path, or nil when it could not be made.
-    static func makeListingFixture() -> String? {
-        let base = selfTestDir
-        let dir = base + "/listing-\(ProcessInfo.processInfo.processIdentifier)"
-        let fm = FileManager.default
-        // Only ever remove our own fixture folders.
-        if let old = try? fm.contentsOfDirectory(atPath: base) {
-            for n in old where n.hasPrefix("listing-") {
-                try? fm.removeItem(atPath: base + "/" + n)
-            }
-        }
-        do {
-            try fm.createDirectory(atPath: dir + "/Folder", withIntermediateDirectories: true, attributes: nil)
-            let files: [(String, String)] = [("a.txt", "hello"), (".hidden", "h"), ("Folder/inner.txt", "x"),
-                                             ("IMG 10.JPG", "jpg10"), ("IMG 9.JPG", "jpg9"), ("caf\u{e9}.txt", "")]
-            for (name, body) in files {
-                guard fm.createFile(atPath: dir + "/" + name, contents: Data(body.utf8), attributes: nil) else { return nil }
-            }
-        } catch {
-            return nil
-        }
-        return dir
-    }
-
-    static func removeListingFixture(_ dir: String) {
-        guard dir.hasPrefix(selfTestDir + "/listing-") else { return }
-        try? FileManager.default.removeItem(atPath: dir)
-    }
-
-    // MARK: Report
-
-    /// Zip the logs folder to `dest` (a path the user picked). Returns an error text or nil.
-    static func saveReport(to dest: String) -> String? {
-        Log.flush()
-        let p = Process()
-        p.launchPath = "/usr/bin/ditto"
-        p.arguments = ["-c", "-k", "--keepParent", logsDir, dest]
-        p.launch()
-        p.waitUntilExit()
-        return p.terminationStatus == 0 ? nil : "ditto exited with status \(p.terminationStatus)"
+    /// Delete everything in the temporary folder (called at launch and quit).
+    func clearTemp() {
+        for n in list(tempDir) { removeOwned(Paths.join(tempDir, n)) }
     }
 }

@@ -1,708 +1,245 @@
 // ContactSheet.swift
-// The contact sheet: a hand-drawn grid of tiles (thumbnail, name, extensions). Only tiles on
-// screen are drawn and asked for; thumbnails come from Core/Thumbnails (background, cached).
-// One tile per set while sets are on (same rule as the list). Selection, keys and drag and drop
-// follow the list: click / Cmd-click / Shift-click, arrows (Shift extends), Cmd-A; double-click,
-// Cmd-E, Cmd-O, Cmd-Down open; Return or M renames; Backspace trashes; Space on a folder opens it.
-// Display: each tile is a Core Animation layer (thumbnail, name, extensions) - scrolling moves
-// layers on the GPU and the GPU scales the pictures; nothing is redrawn while scrolling.
+// Contact sheet PDF: a grid of pictures (RAW: embedded camera preview) with file names and optionally
+// camera settings, page header and page numbers. Pictures are embedded as JPEG so the PDF stays small.
+// Rendering only produces data; saving goes through FileOperations.writeNewFile (never overwrites).
 
 import AppKit
+import CoreText
+import ImageIO
 
-final class SheetItem {
-    let entry: FileEntry
-    let members: [FileEntry]
-    let request: ThumbRequest?
+struct ContactSheetOptions {
+    var columns = 5
+    var rows = 6
+    var pageWidth = 612.0
+    var pageHeight = 792.0
+    var paperName = "US Letter"
+    var showSettings = true
+    var title = ""
 
-    init(entry: FileEntry, members: [FileEntry]) {
-        self.entry = entry
-        self.members = members
-        if entry.isDirectory && !entry.isPackage {
-            request = nil
-        } else {
-            // A set shows its JPG/HEIC (the delivered look, a cheaper read), else the file itself.
-            let pic = members.first { ["jpg", "jpeg", "heic", "heif"].contains($0.ext) } ?? entry
-            let size = members.count > 1 ? pic.size : entry.size
-            request = ThumbRequest(source: pic.path, size: size, modified: pic.modified)
+    static let papers: [(String, Double, Double)] = [
+        ("US Letter, portrait", 612, 792), ("US Letter, landscape", 792, 612),
+        ("A4, portrait", 595, 842), ("A4, landscape", 842, 595),
+        ("US Tabloid (11 x 17), portrait", 792, 1224),
+    ]
+
+    /// Ask for columns, rows, paper, captions and title (remembered for next time). nil = cancelled.
+    static func ask(count: Int, title: String) -> ContactSheetOptions? {
+        let d = UserDefaults.standard
+        let a = ThemedAlert()
+        a.messageText = "Contact sheet of \(ContactSheetLayout.plural(count, "picture"))"
+        a.informativeText = "Saved as a PDF in the current folder (a new file; nothing is overwritten), then opened in Adobe Acrobat."
+        let cols = NSPopUpButton(frame: .zero, pullsDown: false)
+        cols.addItems(withTitles: (1...12).map { "\($0)" })
+        cols.selectItem(at: max(0, min(11, (d.integer(forKey: "csColumns") > 0 ? d.integer(forKey: "csColumns") : 5) - 1)))
+        let rows = NSPopUpButton(frame: .zero, pullsDown: false)
+        rows.addItems(withTitles: (1...15).map { "\($0)" })
+        rows.selectItem(at: max(0, min(14, (d.integer(forKey: "csRows") > 0 ? d.integer(forKey: "csRows") : 6) - 1)))
+        let paper = NSPopUpButton(frame: .zero, pullsDown: false)
+        paper.addItems(withTitles: papers.map { $0.0 })
+        paper.selectItem(at: max(0, min(papers.count - 1, d.integer(forKey: "csPaper"))))
+        let settings = NSButton(checkboxWithTitle: "Camera settings under each picture", target: nil, action: nil)
+        settings.state = d.object(forKey: "csSettings") == nil || d.bool(forKey: "csSettings") ? .on : .off
+        let titleField = NSTextField(string: title)
+        titleField.translatesAutoresizingMaskIntoConstraints = false
+        titleField.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        func row(_ label: String, _ views: [NSView]) -> NSStackView {
+            let l = NSTextField(labelWithString: label)
+            l.translatesAutoresizingMaskIntoConstraints = false
+            l.widthAnchor.constraint(equalToConstant: 70).isActive = true
+            let r = NSStackView(views: [l] + views)
+            r.orientation = .horizontal
+            r.spacing = 8
+            return r
         }
-    }
-
-    var isSet: Bool { return members.count > 1 }
-    var isFolder: Bool { return entry.isDirectory && !entry.isPackage }
-    var displayName: String { return isSet ? FileOperations.split(entry.name).stem : entry.name }
-    var extText: String {
-        if isFolder { return "" }
-        return isSet ? FileSets.extLabel(members) : entry.ext.uppercased()
+        let stack = NSStackView(views: [row("Title:", [titleField]),
+                                        row("Columns:", [cols, NSTextField(labelWithString: "Rows:"), rows]),
+                                        row("Paper:", [paper]), settings])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.frame = NSRect(x: 0, y: 0, width: 380, height: 120)
+        a.accessoryView = stack
+        a.addButton(withTitle: "Make Contact Sheet")
+        a.addButton(withTitle: "Cancel")
+        if a.runModal() != .alertFirstButtonReturn { return nil }
+        var o = ContactSheetOptions()
+        o.columns = 1 + max(0, cols.indexOfSelectedItem)
+        o.rows = 1 + max(0, rows.indexOfSelectedItem)
+        let pi = max(0, min(papers.count - 1, paper.indexOfSelectedItem))
+        let p = papers[pi]
+        o.paperName = p.0
+        o.pageWidth = p.1
+        o.pageHeight = p.2
+        o.showSettings = settings.state == .on
+        o.title = titleField.stringValue.trimmingCharacters(in: .whitespaces)
+        d.set(o.columns, forKey: "csColumns")
+        d.set(o.rows, forKey: "csRows")
+        d.set(pi, forKey: "csPaper")
+        d.set(o.showSettings, forKey: "csSettings")
+        return o
     }
 }
 
-final class ContactSheetController: NSObject {
-    let view = NSView()
-    let scroll = NSScrollView()
-    let grid = ContactSheetView()
-    private let message = NSTextField(labelWithString: "")
-    private let spinner = NSProgressIndicator()
+enum ContactSheetMaker {
+    /// Render the PDF. Blocking (call off the main thread). `progress` gets the number of pictures done.
+    static func render(_ pics: [FileEntry], options o: ContactSheetOptions, progress: (Int) -> Void) -> Data? {
+        let layout = ContactSheetLayout(pageWidth: o.pageWidth, pageHeight: o.pageHeight, columns: o.columns, rows: o.rows)
+        let pages = layout.pages(for: pics.count)
+        let out = NSMutableData()
+        guard pages > 0, let consumer = CGDataConsumer(data: out as CFMutableData) else { return nil }
+        var box = CGRect(x: 0, y: 0, width: o.pageWidth, height: o.pageHeight)
+        guard let ctx = CGContext(consumer: consumer, mediaBox: &box, nil) else { return nil }
+        let px = Int(min(1600, max(300, max(layout.cellWidth, layout.cellHeight) * 2.5)))
+        let date = DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .short)
+        let black = CGColor(red: 0, green: 0, blue: 0, alpha: 1)
+        let grey = CGColor(red: 0.35, green: 0.35, blue: 0.35, alpha: 1)
+        let frameGrey = CGColor(red: 0.85, green: 0.85, blue: 0.85, alpha: 1)
+        let nameSize: CGFloat = layout.cellWidth < 90 ? 6 : 7
 
-    var showHidden = false
-    var foldersOnly = false
-    var foldersFirst = true
-    var filterText = ""
-    var rootPath = "/" { didSet { grid.rootPath = rootPath } }
+        // Captions first (each row's caption space = its tallest caption).
+        var captions: [NSAttributedString] = []
+        var captionHeights: [Double] = []
+        for e in pics {
+            var settingsLine = ""
+            if o.showSettings {
+                let secs = InspectorController.details(for: e).sections
+                var rows: [String: String] = [:]
+                for s in secs { for (k, v) in s.rows { rows[k] = rows[k] ?? v } }
+                settingsLine = [rows["Focal length"], rows["Aperture"], rows["Shutter speed"], rows["ISO"].map { "ISO " + $0 },
+                                rows["Rating"].flatMap { $0.contains("\u{2605}") ? $0.components(separatedBy: " (").first : nil }]
+                    .compactMap { $0 }.joined(separator: "  ")
+            }
+            let cap = caption(e.name, settingsLine, nameSize: nameSize, black: black, grey: grey)
+            captions.append(cap)
+            captionHeights.append(textHeight(cap, width: layout.cellWidth))
+        }
+        var rowCaption: [String: Double] = [:]
+        for i in 0..<pics.count {
+            let c = layout.cell(i)
+            let k = "\(c.page)-\(c.row)"
+            rowCaption[k] = max(rowCaption[k] ?? 0, captionHeights[i])
+        }
 
-    static var tileSize: CGFloat {
-        get { let v = UserDefaults.standard.double(forKey: "sheetTileSize"); return v >= 80 ? CGFloat(v) : 160 }
-        set { UserDefaults.standard.set(Double(newValue), forKey: "sheetTileSize") }
+        var page = -1
+        for (i, e) in pics.enumerated() {
+            let c = layout.cell(i)
+            if c.page != page {
+                if page >= 0 { ctx.endPDFPage() }
+                page = c.page
+                ctx.beginPDFPage(nil)
+                let heading = o.title.isEmpty ? "Contact Sheet" : o.title
+                text(ctx, heading, x: layout.margin, top: layout.margin, width: o.pageWidth * 0.6, size: 12, color: black, pageHeight: o.pageHeight)
+                text(ctx, "\(ContactSheetLayout.plural(pics.count, "picture"))  \u{00B7}  \(date)", x: o.pageWidth * 0.55, top: layout.margin + 2,
+                     width: o.pageWidth * 0.45 - layout.margin, size: 8, color: grey, pageHeight: o.pageHeight, alignRight: true)
+                text(ctx, "Page \(page + 1) of \(pages)", x: layout.margin, top: o.pageHeight - layout.margin - 10,
+                     width: o.pageWidth - 2 * layout.margin, size: 8, color: grey, pageHeight: o.pageHeight, alignRight: true)
+            }
+            let capH = rowCaption["\(c.page)-\(c.row)"] ?? captionHeights[i]
+            let pb = layout.pictureBox(x: c.x, y: c.y, w: c.w, h: c.h, captionHeight: capH)
+            let boxRect = CGRect(x: pb.x, y: o.pageHeight - pb.y - pb.h, width: pb.w, height: pb.h)
+            ctx.setStrokeColor(frameGrey)
+            ctx.setLineWidth(0.5)
+            ctx.stroke(boxRect)
+            if let pv = ImageMeta.preview(path: e.path, maxPixels: px), let jpeg = jpegImage(pv.image) {
+                let f = layout.fit(imageWidth: Double(jpeg.width), height: Double(jpeg.height), inBox: pb)
+                ctx.draw(jpeg, in: CGRect(x: f.x, y: o.pageHeight - f.y - f.h, width: f.w, height: f.h))
+            } else {
+                text(ctx, "(no preview)", x: pb.x, top: pb.y + pb.h / 2 - 5, width: pb.w, size: 7, color: grey, pageHeight: o.pageHeight, center: true)
+            }
+            // Full name, wrapped onto as many lines as it needs.
+            drawWrapped(ctx, captions[i], x: c.x, top: pb.y + pb.h + 3, width: c.w, height: captionHeights[i] + 2, pageHeight: o.pageHeight)
+            progress(i + 1)
+        }
+        ctx.endPDFPage()
+        ctx.closePDF()
+        return out.length > 0 ? Data(referencing: out) : nil
     }
 
-    override init() {
-        super.init()
-        scroll.documentView = grid
-        scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true
-        scroll.drawsBackground = true
-        scroll.backgroundColor = NSColor.controlBackgroundColor
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(scroll)
-        message.alignment = .center
-        message.textColor = NSColor.secondaryLabelColor
-        message.translatesAutoresizingMaskIntoConstraints = false
-        message.isHidden = true
-        view.addSubview(message)
-        spinner.style = .spinning
-        spinner.controlSize = .small
-        spinner.isDisplayedWhenStopped = false
-        spinner.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(spinner)
-        NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: view.topAnchor), scroll.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor), scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            message.centerXAnchor.constraint(equalTo: view.centerXAnchor), message.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            message.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, constant: -40),
-            spinner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            spinner.bottomAnchor.constraint(equalTo: message.topAnchor, constant: -8),
-        ])
-        grid.tile = ContactSheetController.tileSize
-        scroll.contentView.postsBoundsChangedNotifications = true
-        scroll.contentView.postsFrameChangedNotifications = true
-        let nc = NotificationCenter.default
-        nc.addObserver(forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main) { [weak self] _ in
-            self?.grid.scheduleThumbRequest()
+    private static func caption(_ name: String, _ settings: String, nameSize: CGFloat, black: CGColor, grey: CGColor) -> NSAttributedString {
+        // Centred, word-wrapped (Core Text breaks a name with no spaces wherever it has to).
+        var alignment = CTTextAlignment.center
+        let para: CTParagraphStyle = withUnsafePointer(to: &alignment) { ptr in
+            var setting = CTParagraphStyleSetting(spec: .alignment, valueSize: MemoryLayout<CTTextAlignment>.size, value: ptr)
+            return CTParagraphStyleCreate(&setting, 1)
         }
-        nc.addObserver(forName: NSView.frameDidChangeNotification, object: scroll.contentView, queue: .main) { [weak self] _ in
-            self?.grid.relayout()
+        let paraKey = AttrKey(rawValue: kCTParagraphStyleAttributeName as String)
+        let nameFont = CTFontCreateWithName("Helvetica" as CFString, nameSize, nil)
+        let smallFont = CTFontCreateWithName("Helvetica" as CFString, nameSize - 1, nil)
+        let out = NSMutableAttributedString(string: "")
+        out.append(NSAttributedString(string: name, attributes: [AttrKey(rawValue: kCTFontAttributeName as String): nameFont,
+                                                                 AttrKey(rawValue: kCTForegroundColorAttributeName as String): black,
+                                                                 paraKey: para]))
+        if !settings.isEmpty {
+            out.append(NSAttributedString(string: "\n" + settings, attributes: [AttrKey(rawValue: kCTFontAttributeName as String): smallFont,
+                                                                               AttrKey(rawValue: kCTForegroundColorAttributeName as String): grey,
+                                                                               paraKey: para]))
         }
-        nc.addObserver(forName: .labelsReady, object: nil, queue: .main) { [weak self] n in
-            if let p = n.userInfo?["paths"] as? [String] { self?.grid.labelsArrived(p) }
-        }
-        nc.addObserver(forName: .thumbnailsReady, object: nil, queue: .main) { [weak self] n in
-            if let keys = n.userInfo?["keys"] as? [String] { self?.grid.thumbnailsArrived(keys) }
-        }
-    }
-
-    func setTileSize(_ s: CGFloat) {
-        if s == grid.tile { return }
-        ContactSheetController.tileSize = s
-        grid.tile = s
-        grid.relayout()
-    }
-
-    func setEntries(_ entries: [FileEntry], select: [String]?) {
-        var v = showHidden ? entries : entries.filter { !$0.isHidden }
-        if foldersOnly { v = v.filter { $0.isDirectory && !$0.isPackage } }
-        let rows = FileOperations.useSets ? FileSets.rows(v) : v.map { SetRow(entry: $0, members: [$0]) }
-        var members: [String: [FileEntry]] = [:]
-        for r in rows { members[r.entry.path] = r.members }
-        let sorted = EntrySort.sort(rows.map { $0.entry }, by: .name, ascending: true, foldersFirst: foldersFirst)
-        var items = sorted.map { SheetItem(entry: $0, members: members[$0.path] ?? [$0]) }
-        if !filterText.isEmpty {
-            items = items.filter { it in it.members.contains { $0.name.localizedCaseInsensitiveContains(filterText) } || it.entry.name.localizedCaseInsensitiveContains(filterText) }
-        }
-        grid.setItems(items, select: select)
-    }
-
-    func showMessage(_ text: String?, spinning: Bool = false) {
-        message.stringValue = text ?? ""
-        message.isHidden = text == nil
-        if spinning { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
-    }
-
-    func selectedEntries() -> [FileEntry] { return grid.selectedItems.map { $0.entry } }
-    var selectionCount: Int { return grid.selection.count }
-
-    /// Paths of the selection with every file of its sets.
-    func withSetMembers() -> [String] {
-        var out: [String] = []
-        for it in grid.selectedItems { out += it.isSet ? it.members.map { $0.path } : [it.entry.path] }
         return out
     }
 
-    var shownCounts: (rows: Int, sets: Int, total: Int) {
-        let items = grid.items
-        return (items.count, items.filter { $0.isSet }.count, items.reduce(0) { $0 + max(1, $1.members.count) })
+    private static func textHeight(_ s: NSAttributedString, width: Double) -> Double {
+        let fs = CTFramesetterCreateWithAttributedString(s as CFAttributedString)
+        let size = CTFramesetterSuggestFrameSizeWithConstraints(fs, CFRange(location: 0, length: 0), nil,
+                                                                CGSize(width: width, height: 100_000), nil)
+        return Double(ceil(size.height))
     }
 
-    func stop() { Thumbnails.shared.release(owner: grid); LabelLoader.shared.release(owner: grid) }
-}
-
-final class ContactSheetView: NSView, NSDraggingSource {
-    private(set) var items: [SheetItem] = []
-    private var indexByKey: [String: [Int]] = [:]
-    private(set) var selection = Set<Int>()
-    private var anchor: Int?
-    private var cursor: Int?
-    var tile: CGFloat = 160
-    var rootPath = "/"
-    private var cols = 1
-    private var cellW: CGFloat = 176, cellH: CGFloat = 200, marginX: CGFloat = 8
-    private var dropTarget: Int?
-    private var downPoint: NSPoint?
-    private var downIndex: Int?
-    private var lastTyped = Date.distantPast
-    // Tiles are Core Animation layers: scrolling moves layers on the GPU, nothing is redrawn.
-    private var tileLayers: [Int: TileLayer] = [:]
-    private var spareLayers: [TileLayer] = []
-    /// Keys whose thumbnail (or "no picture") is known: the background progress.
-    private(set) var doneKeys = Set<String>()
-    var onThumbProgress: ((Int, Int) -> Void)?
-
-    var onOpen: (([FileEntry]) -> Void)?
-    var onTrash: (() -> Void)?
-    var onRename: (() -> Void)?
-    var onSpace: (() -> Void)?
-    var onSelectionChange: (() -> Void)?
-    var onDrop: (([String], String, TransferKind) -> Void)?
-    var onMenu: (() -> NSMenu?)?
-
-    override var isFlipped: Bool { return true }
-    override var acceptsFirstResponder: Bool { return true }
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        wantsLayer = true
-        layerContentsRedrawPolicy = .never           // the view itself draws nothing: tiles are layers
-        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
-        registerForDraggedTypes([.fileURL])
+    private static func drawWrapped(_ ctx: CGContext, _ s: NSAttributedString, x: Double, top: Double, width: Double, height: Double, pageHeight: Double) {
+        let fs = CTFramesetterCreateWithAttributedString(s as CFAttributedString)
+        let rect = CGRect(x: x, y: pageHeight - top - height, width: width, height: height)
+        let path = CGPath(rect: rect, transform: nil)
+        let frame = CTFramesetterCreateFrame(fs, CFRange(location: 0, length: 0), path, nil)
+        CTFrameDraw(frame, ctx)
     }
 
-    override var wantsUpdateLayer: Bool { return true }
-    override func updateLayer() { layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor }
-
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    var selectedItems: [SheetItem] { return selection.sorted().compactMap { $0 < items.count ? items[$0] : nil } }
-
-    func setItems(_ new: [SheetItem], select: [String]?) {
-        Activity.during("sheet: items") { setItemsNow(new, select: select) }
-    }
-
-    private func setItemsNow(_ new: [SheetItem], select: [String]?) {
-        let keepPaths: Set<String>
-        if let names = select { keepPaths = Set(new.filter { it in names.contains(it.entry.name) || it.members.contains { names.contains($0.name) } }.map { $0.entry.path }) }
-        else { keepPaths = Set(selectedItems.map { $0.entry.path }) }
-        let cursorPath = cursor.flatMap { $0 < items.count ? items[$0].entry.path : nil }
-        items = new
-        for (_, t) in tileLayers { t.index = -1 }
-        indexByKey = [:]
-        for (i, it) in items.enumerated() { if let k = it.request?.key { indexByKey[k, default: []].append(i) } }
-        selection = Set(items.indices.filter { keepPaths.contains(items[$0].entry.path) })
-        cursor = items.indices.first { items[$0].entry.path == cursorPath } ?? selection.min()
-        anchor = cursor
-        doneKeys = Set(indexByKey.keys.filter { Thumbnails.shared.image($0) != nil || Thumbnails.shared.hasNoPicture($0) })
-        relayout()
-        reportProgress()
-        reportLabelProgress()
-        if select != nil, let first = selection.min() { scrollToVisible(rect(first)) }
-        onSelectionChange?()
-    }
-
-    // MARK: Layout
-
-    func relayout() {
-        let width = enclosingScrollView?.contentSize.width ?? bounds.width
-        cellW = tile + 16
-        cellH = tile + 54
-        cols = max(1, Int((width - 8) / cellW))
-        marginX = max(4, (width - CGFloat(cols) * cellW) / 2)
-        let rows = (items.count + cols - 1) / cols
-        let h = max(CGFloat(rows) * cellH + 8, enclosingScrollView?.contentSize.height ?? 0)
-        setFrameSize(NSSize(width: width, height: h))
-        for (_, t) in tileLayers { t.index = -1 }          // positions changed: re-place every tile
-        updateTiles()
-        scheduleThumbRequest()
-    }
-
-    func rect(_ i: Int) -> NSRect {
-        return NSRect(x: marginX + CGFloat(i % cols) * cellW, y: 4 + CGFloat(i / cols) * cellH, width: cellW, height: cellH)
-    }
-
-    private func imageRect(_ i: Int) -> NSRect {
-        let r = rect(i)
-        return NSRect(x: r.minX + 8, y: r.minY + 6, width: tile, height: tile)
-    }
-
-    func index(at p: NSPoint) -> Int? {
-        let c = Int((p.x - marginX) / cellW), r = Int((p.y - 4) / cellH)
-        guard p.x >= marginX, c >= 0, c < cols, r >= 0 else { return nil }
-        let i = r * cols + c
-        return i < items.count ? i : nil
-    }
-
-    private func visibleRange(extra: CGFloat = 0) -> Range<Int> {
-        guard !items.isEmpty else { return 0..<0 }
-        let vr = visibleRect.insetBy(dx: 0, dy: -extra)
-        let first = max(0, Int((vr.minY - 4) / cellH)) * cols
-        let last = min(items.count, (Int((vr.maxY - 4) / cellH) + 1) * cols)
-        return first < last ? first..<last : 0..<0
-    }
-
-    // MARK: Thumbnails
-
-    private var thumbPending = false
-    private var retryCount = 0
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        if window != nil { relayout() }
-    }
-
-    /// Tiles on screen first, then a screen ahead.
-    func scheduleThumbRequest() {
-        if thumbPending { return }
-        thumbPending = true
-        DispatchQueue.main.async { [weak self] in
-            guard let me = self else { return }
-            me.thumbPending = false
-            // Not on screen yet (new window, view just switched): try again shortly, so the
-            // thumbnails start without a scroll.
-            guard me.window != nil, !me.isHiddenOrHasHiddenAncestor, me.visibleRect.height > 0 else {
-                if !me.items.isEmpty && me.retryCount < 20 {
-                    me.retryCount += 1
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { me.scheduleThumbRequest() }
-                }
-                return
-            }
-            me.retryCount = 0
-            let now = me.visibleRange(), ahead = me.visibleRange(extra: me.visibleRect.height)
-            let order = Array(now) + ahead.filter { !now.contains($0) }
-            // The rest of the folder, nearest first, on the low-priority track.
-            let center = now.isEmpty ? 0 : now.lowerBound
-            let rest = me.items.indices.filter { !ahead.contains($0) }.sorted { abs($0 - center) < abs($1 - center) }
-            Activity.during("sheet: thumbnail request") {
-                Thumbnails.shared.request(order.compactMap { me.items[$0].request }, background: rest.compactMap { me.items[$0].request }, owner: me)
-                // Ratings and colour classes: the same order, all files of the folder.
-                let rows = (order + rest).map { me.items[$0] }.filter { !$0.isFolder }.map { (entry: $0.entry, members: $0.members) }
-                LabelLoader.shared.request(rows, owner: me)
-            }
-            me.updateTiles()
-        }
-    }
-
-    private var iconCache: [String: NSImage] = [:]
-    private func icon(for it: SheetItem) -> NSImage? {
-        let k = it.isFolder ? "/folder" : (it.entry.ext.isEmpty ? "public.data" : it.entry.ext)
-        if let i = iconCache[k] { return i }
-        let i = it.isFolder ? NSImage(named: NSImage.folderName) : NSWorkspace.shared.icon(forFileType: k)
-        iconCache[k] = i
-        return i
-    }
-
-    func labelsArrived(_ paths: [String]) {
-        let set = Set(paths)
-        for (i, t) in tileLayers where i < items.count && set.contains(items[i].entry.path) { configure(t, i, force: false) }
-        reportLabelProgress()
-    }
-
-    var onLabelProgress: ((Int, Int) -> Void)?
-
-    private func reportLabelProgress() {
-        let files = items.filter { !$0.isFolder }
-        let done = files.filter { LabelLoader.shared.cached(LabelLoader.key($0.entry, $0.members)) != nil }.count
-        onLabelProgress?(done, files.count)
-    }
-
-    func thumbnailsArrived(_ keys: [String]) {
-        var changed = false
-        for k in keys where indexByKey[k] != nil {
-            if doneKeys.insert(k).inserted { changed = true }
-            for i in indexByKey[k] ?? [] { if let t = tileLayers[i] { configure(t, i, force: true) } }
-        }
-        if changed { reportProgress() }
-    }
-
-    private var thumbTotal: Int { return indexByKey.count }
-
-    private func reportProgress() {
-        onThumbProgress?(doneKeys.count, thumbTotal)
-    }
-
-    // MARK: Tiles (layers)
-
-    static func labelColor(_ c: Int) -> NSColor {
-        switch c {
-        case 1: return NSColor.systemRed
-        case 2: return NSColor.systemYellow
-        case 3: return NSColor.systemGreen
-        case 4: return NSColor.systemBlue
-        case 5: return NSColor.systemPurple
-        case 6: return NSColor(calibratedRed: 0.2, green: 0.8, blue: 0.85, alpha: 1)
-        case 7: return NSColor.systemBrown
-        case 8: return NSColor.systemGray
-        default: return NSColor.clear
-        }
-    }
-
-    /// "● ★★★" - colour class dot and stars (an x for a reject).
-    static func labelText(_ l: ImageLabels) -> NSAttributedString {
-        let s = NSMutableAttributedString()
-        let f = NSFont.systemFont(ofSize: 11)
-        if l.colorClass > 0 {
-            s.append(NSAttributedString(string: "\u{25CF} ", attributes: [.foregroundColor: labelColor(l.colorClass).cgColor, .font: f]))
-        }
-        let stars = l.rating < 0 ? "\u{2715}" : String(repeating: "\u{2605}", count: l.rating)
-        s.append(NSAttributedString(string: stars, attributes: [.foregroundColor: NSColor.secondaryLabelColor.cgColor, .font: f]))
-        return s
-    }
-
-    private static let nameFont = NSFont.systemFont(ofSize: 11)
-    private static let extFont = NSFont.systemFont(ofSize: 9)
-
-    /// Give every tile within a screen of the visible area a layer, recycle the rest. Cheap:
-    /// only frames and contents are set, and only when they change.
-    func updateTiles() {
-        guard let root = layer else { return }
-        let t0 = Date()
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        let range = visibleRange(extra: visibleRect.height)
-        for (i, t) in tileLayers where !range.contains(i) {
-            t.isHidden = true
-            spareLayers.append(t)
-            tileLayers.removeValue(forKey: i)
-        }
-        let scale = window?.backingScaleFactor ?? 2
-        for i in range {
-            let t: TileLayer
-            if let have = tileLayers[i] { t = have } else {
-                t = spareLayers.popLast() ?? TileLayer()
-                if t.superlayer == nil { root.addSublayer(t) }
-                t.isHidden = false
-                t.index = -1
-                tileLayers[i] = t
-            }
-            t.setScale(scale)
-            configure(t, i, force: false)
-        }
-        CATransaction.commit()
-        Stats.noteSheetDraw(Date().timeIntervalSince(t0) * 1000)
-    }
-
-    private func configure(_ t: TileLayer, _ i: Int, force: Bool) {
-        guard i < items.count else { return }
-        let it = items[i]
-        let r = rect(i)
-        let newItem = t.index != i || t.path != it.entry.path
-        if newItem || t.frame != r {
-            t.frame = r
-            t.layout(tile: tile)
-        }
-        if newItem {
-            t.index = i
-            t.path = it.entry.path
-            t.nameLayer.string = it.displayName
-            t.extLayer.string = it.extText
-            t.image.contents = nil
-            t.shownKey = nil
-            t.shownLabels = nil
-            t.labelLayer.string = nil
-        }
-        if !it.isFolder, let l = LabelLoader.shared.cached(LabelLoader.key(it.entry, it.members)), l != t.shownLabels {
-            t.shownLabels = l
-            t.labelLayer.string = ContactSheetView.labelText(l)
-        }
-        let sel = selection.contains(i), drop = dropTarget == i
-        let bg = sel || drop ? NSColor.alternateSelectedControlColor.withAlphaComponent(drop ? 0.45 : 0.25).cgColor : nil
-        if t.backgroundColor != bg { t.backgroundColor = bg }
-        if newItem || force || t.shownKey == nil {
-            if let k = it.request?.key, let cg = Thumbnails.shared.image(k) {
-                if t.shownKey != k {
-                    t.image.contents = cg
-                    t.image.contentsGravity = .resizeAspect
-                    t.image.borderWidth = 0
-                    t.shownKey = k
-                }
-            } else if it.request == nil || Thumbnails.shared.hasNoPicture(it.request!.key) {
-                if t.shownKey != "icon" {
-                    t.image.contents = icon(for: it)?.cgImage(forProposedRect: nil, context: nil, hints: nil)
-                    t.image.contentsGravity = .center
-                    t.shownKey = "icon"
-                }
+    /// Open the saved sheet in Adobe Acrobat (Pro or Reader). Returns false if Acrobat isn't installed;
+    /// then the Mac's default PDF app is used.
+    @discardableResult
+    static func openInAcrobat(_ path: String) -> Bool {
+        let ws = NSWorkspace.shared
+        let ids = ["com.adobe.Acrobat.Pro", "com.adobe.Acrobat", "com.adobe.Reader", "com.adobe.AdobeAcrobatReader"]
+        for id in ids {
+            if let app = ws.absolutePathForApplication(withBundleIdentifier: id), ws.openFile(path, withApplication: app) {
+                Log.shared?.info("Contact sheet opened in \(app)")
+                return true
             }
         }
-    }
-
-    override func viewDidChangeBackingProperties() {
-        super.viewDidChangeBackingProperties()
-        updateTiles()
-    }
-
-    // MARK: Selection
-
-    private func select(_ set: Set<Int>, cursor c: Int?) {
-        selection = set
-        cursor = c
-        updateTiles()
-        if let c = c { scrollToVisible(rect(c)) }
-        onSelectionChange?()
-    }
-
-    /// Arrow keys in the preview: the next/previous tile.
-    func step(_ d: Int) {
-        guard !items.isEmpty else { return }
-        let n = max(0, min(items.count - 1, (cursor ?? -1) + d))
-        anchor = n
-        select([n], cursor: n)
-    }
-
-    func neighbours(of path: String, before: Int, after: Int) -> [FileEntry] {
-        guard let at = items.firstIndex(where: { $0.entry.path == path }) else { return [] }
-        let files = { (r: Range<Int>) in r.map { self.items[$0] }.filter { !$0.isFolder }.map { self.picture($0) } }
-        return files(min(items.count, at + 1)..<min(items.count, at + 1 + after)) + files(max(0, at - before)..<at).reversed()
-    }
-
-    func picture(_ it: SheetItem) -> FileEntry {
-        return it.members.first { ["jpg", "jpeg", "heic", "heif"].contains($0.ext) } ?? it.entry
-    }
-
-    override func selectAll(_ sender: Any?) { select(Set(items.indices), cursor: cursor) }
-
-    override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
-        let p = convert(event.locationInWindow, from: nil)
-        let i = index(at: p)
-        let mods = event.modifierFlags
-        downPoint = p
-        downIndex = i
-        if event.clickCount == 2, let i = i {
-            select(selection.contains(i) ? selection : [i], cursor: i)
-            onOpen?(selectedItems.map { $0.entry })
-            return
-        }
-        guard let idx = i else {
-            if !mods.contains(.command) && !mods.contains(.shift) { select([], cursor: nil) }
-            return
-        }
-        if mods.contains(.command) {
-            var s = selection
-            if s.contains(idx) { s.remove(idx) } else { s.insert(idx) }
-            anchor = idx
-            select(s, cursor: idx)
-        } else if mods.contains(.shift), let a = anchor ?? cursor {
-            select(Set(min(a, idx)...max(a, idx)), cursor: idx)
-        } else if !selection.contains(idx) {
-            anchor = idx
-            select([idx], cursor: idx)
-        }
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        // A click on an already selected tile (no drag) selects just that tile.
-        let mods = event.modifierFlags
-        if let i = downIndex, downPoint != nil, !mods.contains(.command), !mods.contains(.shift), event.clickCount == 1, selection.count > 1 {
-            anchor = i
-            select([i], cursor: i)
-        }
-        downPoint = nil
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        guard let start = downPoint, let i = downIndex, selection.contains(i) else { return }
-        let p = convert(event.locationInWindow, from: nil)
-        guard hypot(p.x - start.x, p.y - start.y) > 4 else { return }
-        downPoint = nil
-        var dragItems: [NSDraggingItem] = []
-        for idx in selection.sorted() {
-            let it = items[idx]
-            let paths = it.isSet ? it.members : [it.entry]
-            for (n, e) in paths.enumerated() {
-                let d = NSDraggingItem(pasteboardWriter: NSURL(fileURLWithPath: e.path, isDirectory: e.isDirectory))
-                var image: NSImage?
-                if n == 0, let k = it.request?.key, let cg = Thumbnails.shared.image(k) { image = NSImage(cgImage: cg, size: .zero) }
-                else if n == 0 { image = it.isFolder ? NSImage(named: NSImage.folderName) : NSWorkspace.shared.icon(forFileType: it.entry.ext) }
-                d.setDraggingFrame(imageRect(idx), contents: image)
-                dragItems.append(d)
+        for name in ["Adobe Acrobat", "Adobe Acrobat DC", "Adobe Acrobat Pro DC", "Adobe Acrobat Reader DC", "Adobe Acrobat Reader"] {
+            if let app = ws.fullPath(forApplication: name), ws.openFile(path, withApplication: app) {
+                Log.shared?.info("Contact sheet opened in \(app)")
+                return true
             }
         }
-        Activity.set("drag: out")
-        beginDraggingSession(with: dragItems, event: event, source: self)
+        ws.openFile(path)
+        Log.shared?.info("Acrobat not found; contact sheet opened in the default PDF app")
+        return false
     }
 
-    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
-        return context == .withinApplication ? [.copy, .move] : [.copy, .move, .generic]
+    /// Re-encode as JPEG so the PDF embeds compressed pictures.
+    private static func jpegImage(_ img: CGImage) -> CGImage? {
+        let d = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(d as CFMutableData, "public.jpeg" as CFString, 1, nil) else { return img }
+        let props = NSDictionary(dictionary: [kCGImageDestinationLossyCompressionQuality as String: 0.82])
+        CGImageDestinationAddImage(dest, img, props as CFDictionary)
+        guard CGImageDestinationFinalize(dest), let provider = CGDataProvider(data: d as CFData),
+            let j = CGImage(jpegDataProviderSource: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent) else { return img }
+        return j
     }
 
-    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
-        Activity.set("idle")
-    }
-
-    override func menu(for event: NSEvent) -> NSMenu? {
-        if let i = index(at: convert(event.locationInWindow, from: nil)), !selection.contains(i) {
-            anchor = i
-            select([i], cursor: i)
-        }
-        return onMenu?()
-    }
-
-    // MARK: Keys
-
-    override func keyDown(with event: NSEvent) {
-        let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
-        switch event.keyCode {
-        case 123, 124, 125, 126:                                   // left right down up
-            guard !items.isEmpty else { return }
-            let c = cursor ?? -1
-            var n: Int
-            switch event.keyCode {
-            case 123: n = c - 1
-            case 124: n = c + 1
-            case 125: n = c < 0 ? 0 : c + cols
-            default: n = c - cols
-            }
-            n = max(0, min(items.count - 1, n))
-            if mods.contains(.shift), let a = anchor { select(Set(min(a, n)...max(a, n)), cursor: n) }
-            else if mods.contains(.command) { super.keyDown(with: event) }       // Cmd-Up / Cmd-Down: menus
-            else { anchor = n; select([n], cursor: n) }
-        // (`case a, b where x` would apply x to b only: plain checks instead.)
-        case 36, 76:                                               // Return, Enter: rename (like the list)
-            if mods.isEmpty { onRename?() } else { super.keyDown(with: event) }
-        case 51, 117:                                              // Backspace, Delete: Trash
-            if mods.isEmpty || mods == [.command] { onTrash?() } else { super.keyDown(with: event) }
-        case 49:                                                   // Space
-            if mods.isEmpty { onSpace?() } else { super.keyDown(with: event) }
-        case 53:                                                   // Esc: closes the preview
-            if PreviewWindow.shared.isOpen { PreviewWindow.shared.closeAndReturn() } else { super.keyDown(with: event) }
-        default:
-            if mods == [.command] && chars == "e" { onOpen?(selectedItems.map { $0.entry }); return }   // Cmd-E (Cmd-O, Cmd-Down: menu)
-            if mods.isEmpty && chars == "m" && Date().timeIntervalSince(lastTyped) > 1 { onRename?(); return }
-            if mods.isEmpty, let ch = chars.first, ch.isLetter || ch.isNumber { lastTyped = Date(); typeSelect(String(ch)); return }
-            super.keyDown(with: event)
-        }
-    }
-
-    /// Type a letter: the next tile whose name starts with it (same letter again cycles), or the
-    /// nearest one when none does (like the list).
-    private func typeSelect(_ s: String) {
-        guard !items.isEmpty else { return }
-        let start = (cursor ?? -1) + 1
-        for k in 0..<items.count {
-            let i = (start + k) % items.count
-            if items[i].displayName.range(of: s, options: [.caseInsensitive, .diacriticInsensitive, .anchored]) != nil {
-                anchor = i; select([i], cursor: i); return
-            }
-        }
-        var best: Int?
-        for (i, it) in items.enumerated() where it.displayName.localizedStandardCompare(s) == .orderedAscending {
-            if best == nil || it.displayName.localizedStandardCompare(items[best!].displayName) == .orderedDescending { best = i }
-        }
-        let i = best ?? 0
-        anchor = i; select([i], cursor: i)
-    }
-
-    // MARK: Drop
-
-    private func droppedPaths(_ info: NSDraggingInfo) -> [String] {
-        let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
-        return urls.map { $0.path }
-    }
-
-    private func dropDestination(_ info: NSDraggingInfo) -> (dest: String, tile: Int?) {
-        let p = convert(info.draggingLocation, from: nil)
-        if let i = index(at: p), items[i].isFolder { return (items[i].entry.path, i) }
-        return (rootPath, nil)
-    }
-
-    private func dropKind(_ info: NSDraggingInfo, _ paths: [String], _ dest: String) -> TransferKind? {
-        let mods = NSEvent.modifierFlags
-        let same = paths.allSatisfy { Transfers.sameVolume($0, dest) }
-        var kind = Transfers.dropOperation(sameVolume: same, option: mods.contains(.option), command: mods.contains(.command))
-        let allowed = info.draggingSourceOperationMask
-        if kind == .move && !allowed.contains(.move) && !allowed.contains(.generic) { kind = .copy }
-        if kind == .copy && !allowed.contains(.copy) { return allowed.contains(.move) ? .move : nil }
-        return kind
-    }
-
-    private func evaluate(_ info: NSDraggingInfo) -> NSDragOperation {
-        let paths = droppedPaths(info)
-        let (dest, tile) = dropDestination(info)
-        let target = paths.contains(dest) ? nil : tile
-        if target != dropTarget { dropTarget = target; updateTiles() }
-        guard !paths.isEmpty, !paths.contains(dest), let kind = dropKind(info, paths, dest) else { return [] }
-        if kind == .move && paths.allSatisfy({ Paths.parent($0) == dest }) { return [] }
-        return kind == .copy ? .copy : .move
-    }
-
-    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { return Activity.during("drag: hover") { evaluate(sender) } }
-    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { return Activity.during("drag: hover") { evaluate(sender) } }
-    override func draggingExited(_ sender: NSDraggingInfo?) { dropTarget = nil; updateTiles() }
-
-    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        dropTarget = nil
-        updateTiles()
-        let paths = droppedPaths(sender)
-        let (dest, _) = dropDestination(sender)
-        guard !paths.isEmpty, !paths.contains(dest), let kind = dropKind(sender, paths, dest) else { return false }
-        Log.info("drop on sheet: \(paths.count) item(s), \(kind.rawValue) -> \(dest)")
-        onDrop?(paths, dest, kind)
-        return true
-    }
-}
-
-
-/// One tile: selection background (the layer itself), picture, name, extensions.
-final class TileLayer: CALayer {
-    let image = CALayer()
-    let nameLayer = CATextLayer()
-    let extLayer = CATextLayer()
-    let labelLayer = CATextLayer()
-    var shownLabels: ImageLabels?
-    var index = -1
-    var path = ""
-    var shownKey: String?
-
-    override init() {
-        super.init()
-        cornerRadius = 6
-        image.minificationFilter = .trilinear
-        image.magnificationFilter = .linear
-        for t in [nameLayer, extLayer, labelLayer] {
-            t.alignmentMode = .center
-            t.truncationMode = .middle
-            t.isWrapped = false
-        }
-        nameLayer.font = NSFont.systemFont(ofSize: 11)
-        nameLayer.fontSize = 11
-        nameLayer.foregroundColor = NSColor.labelColor.cgColor
-        extLayer.font = NSFont.systemFont(ofSize: 9)
-        extLayer.fontSize = 9
-        extLayer.foregroundColor = NSColor.secondaryLabelColor.cgColor
-        for l in [image, nameLayer, extLayer, labelLayer] { addSublayer(l) }
-        actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "hidden": NSNull()]
-        for l in [image, nameLayer, extLayer, labelLayer] as [CALayer] { l.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "string": NSNull()] }
-    }
-
-    override init(layer: Any) { super.init(layer: layer) }
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    func setScale(_ s: CGFloat) {
-        if contentsScale != s { for l in [self, image, nameLayer, extLayer, labelLayer] as [CALayer] { l.contentsScale = s } }
-    }
-
-    /// Geometry inside the tile (the hosting view is flipped: y grows downwards).
-    func layout(tile: CGFloat) {
-        let w = bounds.width
-        image.frame = CGRect(x: 8, y: 6, width: tile, height: tile)
-        nameLayer.frame = CGRect(x: 4, y: 6 + tile + 4, width: w - 8, height: 15)
-        extLayer.frame = CGRect(x: 4, y: 6 + tile + 19, width: w - 8, height: 13)
-        labelLayer.frame = CGRect(x: 4, y: 6 + tile + 32, width: w - 8, height: 14)
+    /// One line of text (Core Text, safe off the main thread), truncated in the middle to fit.
+    private static func text(_ ctx: CGContext, _ s: String, x: Double, top: Double, width: Double, size: CGFloat,
+                             color: CGColor, pageHeight: Double, center: Bool = false, alignRight: Bool = false) {
+        let font = CTFontCreateWithName("Helvetica" as CFString, size, nil)
+        let attrs: [AttrKey: Any] = [AttrKey(rawValue: kCTFontAttributeName as String): font,
+                                     AttrKey(rawValue: kCTForegroundColorAttributeName as String): color]
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: s, attributes: attrs) as CFAttributedString)
+        let ellipsis = CTLineCreateWithAttributedString(NSAttributedString(string: "\u{2026}", attributes: attrs) as CFAttributedString)
+        let fitted = CTLineCreateTruncatedLine(line, width, .middle, ellipsis) ?? line
+        let w = Double(CTLineGetTypographicBounds(fitted, nil, nil, nil))
+        var px = x
+        if center { px = x + max(0, (width - w) / 2) }
+        if alignRight { px = x + max(0, width - w) }
+        ctx.textPosition = CGPoint(x: px, y: pageHeight - top - Double(size))
+        CTLineDraw(fitted, ctx)
     }
 }

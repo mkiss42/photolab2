@@ -1,0 +1,1916 @@
+FIND - version 0.18.16
+====================
+
+Find is a native macOS file browser (AppKit, Swift 4.1). No browser, no server, no internet.
+Target: the office iMac (macOS 10.13 High Sierra, Xcode 9.4). The same build also runs on the
+Intel MacBook Pro (macOS Tahoe).
+
+
+BUILD IT (on the office iMac)
+-----------------------------
+1. Copy Find-0.18.16.zip to the iMac and double-click it to unzip. You get a folder named "Find".
+   (Copy the .zip itself, not the loose files: the zip keeps line endings and permissions intact.)
+2. Open Terminal and type:   cd
+   then a space, then drag the "Find" folder onto the Terminal window, then press Return.
+3. Type:   bash build.sh
+   and press Return. It takes about one to three minutes.
+4. When it says DONE, open Find.dmg (in the Find folder) and drag Find into Applications.
+
+The build also runs Find's Safety Self-Check, Search Self-Test, Index Self-Test and Photo Metadata
+Self-Test on the iMac. If a safety, search or index check fails, the build stops and no disk image is
+made. If only photo metadata details fail, the build finishes with warning W-PHOTO-1 (send me the log).
+
+IF THE BUILD FAILS
+------------------
+build.sh writes build-log.txt and copies it to the clipboard automatically.
+Paste it into AutoType and type it into Notepad on the Windows machine, save as .txt, upload it.
+The log is plain ASCII, one fact per line, every line numbered (B0001, B0002, ...), with the
+errors listed first. Failure codes:
+  E-BUILD-0  Xcode tools not found          E-BUILD-5  code signing failed
+  E-BUILD-1  safety guard tripped           E-BUILD-6  disk image failed (app in build/ still ok)
+  E-BUILD-2  Swift compile error            E-BUILD-7  built app did not start
+  E-BUILD-3  Info.plist copy failed         E-BUILD-8  Safety Self-Check failed
+  E-BUILD-4  Swift libraries not embedded   E-BUILD-9  Search Self-Test failed
+                                            E-BUILD-10 Index Self-Test failed
+                                            E-BUILD-11 a file changed while its metadata
+                                                       was read (do not use the build)
+  W-PHOTO-1  warning only: some photo metadata details could not be read back
+  W-EXIF-1   warning only: ExifTool could not be bundled (inspector shows what macOS reads)
+
+Codes in the log and in Settings reports (Find itself, not the build):
+  E-GUARD-1   refused to remove something outside Find's own folders (nothing was removed)
+  E-GUARD-2   refused to remove a previous version that isn't one of Find's temporary names
+  E-MAINT-1   clean-up refused a path that is not one of Find's stores (nothing was removed)
+  E-MAINT-2   an index file could not be deleted      E-MAINT-3  a cache file could not be removed
+  E-RECOVER-1 a note line that doesn't look like Find's was ignored (nothing touched)
+  E-RECOVER-2 an interrupted rename could not be put back (tried again at the next start)
+  E-RECOVER-3 an unfinished copy could not be moved to the Trash (tried again at the next start)
+
+ON THE MACBOOK PRO (Tahoe)
+--------------------------
+Use the Find.dmg built on the iMac (the MacBook has no Xcode). The first time, use
+System Settings > Privacy & Security > "Open Anyway". For complete access to protected folders
+(Mail, Safari data, etc.) on Tahoe, Find will later need Full Disk Access; Phase 1 simply reports
+folders it can't read.
+
+
+FILE SAFETY (how Find protects your files)
+------------------------------------------
+- "Move to Trash" uses the macOS Trash. On a drive or share that has no Trash (most shared
+  volumes), Find does what Finder does (0.18.4): it asks "delete immediately? You can't undo this",
+  naming the items, with Cancel as the main button - nothing is deleted unless you choose Delete.
+  File > Delete Immediately... (Option-Cmd-Backspace; Option in the right-click menu) does the same
+  anywhere. Never allowed: the top of a disk, a whole disk or share, your home folder and its main
+  folders, and system folders.
+- Ratings and metadata (0.12, settings 0.18.5 in Settings > Photography): Find writes a NEW version
+  of the file under a hidden name beside it (or changes a separate working copy, in the safest
+  mode), reads it back and checks every value as asked - and, unless you chose the fastest mode,
+  that the picture data is bit-for-bit identical to the original's - and only then puts it in the
+  original's place and removes the previous version, whose old values are kept for Edit > Undo.
+  Where (0.18.6, all on by default): 1 the RAW's .xmp sidecar (an existing one is always kept up to
+  date), 2 the XMP inside RAW files, 3 the IPTC inside every picture that holds it; JPEG/TIFF always
+  get their XMP inside. A RAW rewritten inside has its previous version go to the Trash as
+  "NAME (before metadata edit).NEF".
+- Nothing is ever overwritten. Renames and moves use an atomic "fail if the name exists" rename.
+  A name clash always asks: Keep Both, Skip, Replace (existing item goes to the Trash first), Stop.
+- Copies are written under a hidden temporary name, checked (every file's size, every folder's
+  contents), then renamed into place.
+- Moving between drives = copy, verify, then the originals go to the Trash.
+- Rename, New Folder, Move to Trash, Move, Copy and Duplicate can all be undone (Cmd-Z).
+- Find writes no .DS_Store or any other file into your folders. The only things it puts there
+  are hidden temporary names while it works (".find-partial-..." during a copy or save,
+  ".find-rename-..." during a batch rename). Each is noted before it exists; if Find is stopped
+  half way (crash, Force Quit, power cut), the next start gives renamed items their names back
+  and moves unfinished copies to the Trash - never deletes anything - and tells you.
+- Its own files live only in:
+    ~/Library/Application Support/Find   (themes, search indexes, operation notes, clean-up record)
+    ~/Library/Caches/Find                (saved previews, temporary files, self-test folders)
+    ~/Library/Logs/Find                  (logs and reports)
+  Clean-up (Settings > Storage & Maintenance) only ever removes from these, and a build-time
+  guard makes sure only three source files can change anything on disk.
+- Help > Run Safety Self-Check runs 57 checks of these rules on your Mac using test files only.
+  Help > Run Search Self-Test checks search results against a folder with known contents.
+  Help > Run Index Self-Test checks indexed searches always equal direct searches.
+  Help > Run Photo Metadata Self-Test reads a test JPEG with known camera values and checks that
+  reading (by macOS and by the bundled ExifTool) leaves the file byte-for-byte unchanged.
+- The inspector, Quick Look and ExifTool reading only ever read files. Find writes into photos
+  and XMP sidecars only when you rate, edit metadata or use Find and Replace on metadata (see above).
+- Saved servers (0.13): server passwords are kept in the macOS Keychain, as Finder keeps them
+  (Keychain Access shows them as internet passwords). Removing a saved server never touches the
+  server or its files. Window positions are kept in Application Support/Find/session.json.
+
+
+TEST CHECKLIST FOR 0.18.16  (10 minutes - COPIES of pictures)
+--------------------------
+Before you unzip: move every old "Find" / "Find 2" folder away. The report must say
+"Version check: Find 0.18.16".
+[ ] 1  Build: DONE, all self-tests passed.
+Photography bar
+[ ] 2  Make a Photography pane narrow (or split the window): the bar's items move onto a second
+       (third) row instead of being cut off; the thumbnails start below the bar. Widen it: one row
+       again. The plain thumbnail view still shows just the size slider.
+Metadata windows
+[ ] 3  Template (Cmd-I): the tick boxes have no "Button" text beside them.
+[ ] 4  Under Rating: Supplemental Category 1, 2, 3 (in both windows). Fill 1 and 3 in the template,
+       Apply to a copy: Photo Mechanic shows them as its two supplemental categories. Edit Metadata (I)
+       on a picture with three categories from Photo Mechanic: each in its own field.
+[ ] 5  Fill from XMP File: choose a Photo Mechanic template (.XMP) - the template's fields are filled
+       and ticked, the rest empty and unticked. A picture's sidecar works too. A file that isn't XMP:
+       says so, template unchanged.
+[ ] 6  The template window fits all fields (nothing cut off at the bottom), also after Close and Cmd-I.
+
+TEST CHECKLIST FOR 0.18.15  (20 minutes - COPIES of pictures)
+--------------------------
+Before you unzip: move every old "Find" / "Find 2" folder away. The report must say
+"Version check: Find 0.18.15".
+[ ] 1  Build: DONE, all self-tests passed.
+Speed - the TIMING line now names its settings in [brackets]
+[ ] 2  Local SSD, 207 NEF+XMP+JPG, "No flush": the TIMING line. "in place: write" should be well
+       under 6 s now (0.18.14: 6.2 s).
+[ ] 3  The share, same set, "No flush": the TIMING line. "in place: plan" and "old values" should be
+       back to 0.18.13's (about 3 s and 3-12 s); "in place: check" a few seconds.
+Item count
+[ ] 4  List view, a folder with subfolders: the count at the bottom says e.g. "12 items". Open a
+       folder (triangle): "20 items shown (12 in this folder)". Close it: "12 items" again.
+       Option-Right (open all): the count follows.
+Metadata windows
+[ ] 5  Photography mode bar: "Metadata Template" and "Edit Metadata" buttons, no "..." in any button.
+[ ] 6  Cmd-I: Metadata Template opens. Type in Headline: its tick turns on. Fill a few fields,
+       Close, Cmd-I again: everything as you left it (also after quitting Find).
+[ ] 7  Select 3 copies, Apply to Selected: only the ticked fields are written (Photo Mechanic),
+       the window stays open; select 3 others, Apply again. An empty ticked field clears that field.
+[ ] 8  Clear Template empties it. Apply with nothing selected says to select pictures first.
+[ ] 9  Select one picture, press I (in the thumbnails, and in list view): Edit Metadata opens with
+       that picture's own values. In list view, typing a name to jump to a file ("img...") still
+       works when another letter came first; I alone with no picture selected also jumps as before.
+[ ] 10 Get Info is now Shift-Cmd-I (File menu). Settings > Keys can change either shortcut.
+Then 0.18.14's list below (items 5-7), if not done yet.
+
+TEST CHECKLIST FOR 0.18.14  (20 minutes - COPIES of pictures)
+--------------------------
+Before you unzip: move every old "Find" / "Find 2" folder away. The report must say
+"Version check: Find 0.18.14".
+[ ] 1  Build: DONE, all self-tests passed.
+[ ] 2  Settings > Photography > "After each changed file": three choices; yours from before is
+       selected (Thorough if the old box was on, Normal if off). The choice is kept after quitting.
+Speed - send the TIMING lines (Help > Show Logs Folder, newest find-....log, Cmd-F "TIMING")
+[ ] 3  Local SSD, 207 NEF+XMP+JPG, "No flush": the TIMING line. Then once with "Normal flush".
+[ ] 4  The share, same set, "No flush": the TIMING line (two runs, as before).
+       Expected: "in place: check" a few seconds (0.18.13: 31.6 s), "check + swap in" lower.
+The double-listed file
+[ ] 5  On the share, the earlier test folder: Cmd-A, edit a caption - "Completed" equals the number
+       of files, nothing failed; if the log has "listed twice, written once" or "written once, not
+       twice", the safeguard worked (please send that line).
+[ ] 6  Open _0LA6414.NEF in Photo Mechanic / Capture One: it opens, shows the last values.
+       Then show hidden files (Cmd-Shift-. in the Finder) in "01 Raws": the two older versions
+       .find-rename-0499F741-0 and .find-rename-0E3D5633-0 can be deleted once you're happy.
+Freezes
+[ ] 7  If a BEACHBALL line appears after a metadata run, send it: it now names the step
+       (Undo / refreshing the thumbnails / Info panel / report window).
+Then 0.18.13's list below (fields, editor), if not done yet.
+
+TEST CHECKLIST FOR 0.18.13  (20 minutes - COPIES of pictures)
+--------------------------
+Before you unzip: move EVERY old "Find" / "Find 2" folder out of the way. After the build, the
+report must say "Version check: Find 0.18.13".
+Build
+[ ] 1  DONE; Photo Metadata Self-Test ALL PASSED (T-PHOTO-28 with "change in place" ON; T-PHOTO-33
+       now also checks contact city, Location Created, date, Copyright Marked, Category).
+Speed (the main point of this version)
+[ ] 2  The same test as before: 200 local NEF+XMP+JPG, same settings, same kind of change.
+       Then Help > Show Logs Folder, open the newest find-....log in TextEdit, Cmd-F "TIMING".
+       Please send that one line (and the "written and checked in N s" line above it).
+[ ] 3  The same again right after (the JPEGs now have room for in-place changes): its TIMING line.
+New fields (Edit Metadata on 1 copy of a NEF with Photo Mechanic's sidecar, and 1 JPEG)
+[ ] 4  The window shows two columns: Description / Photographer contact on the left; Photographer
+       and copyright, Location (shown), Location created on the right. All 36 fields filled from
+       the picture (compare with Photo Mechanic's IPTC window).
+[ ] 5  Change one field in each group (e.g. Description Writers, Persons Shown, Copyright URL,
+       Rights Usage Terms, ISO Country Code, Location created City, Contact Email), Date Created
+       2026-11-26, Copyright Marked True. Apply. Photo Mechanic shows every change, the other
+       fields unchanged. Cmd-Z puts them back.
+[ ] 6  Date Created "26/11/2026" or Copyright Marked "maybe": Apply says what is wrong, writes nothing.
+[ ] 7  Category "category": Photo Mechanic shows "category" (XMP); the JPEG's IPTC holds "cat"
+       (IPTC allows 3 characters - Photo Mechanic does the same).
+[ ] 8  Find and Replace > Metadata: the new fields are in the field list (not Date Created or
+       Copyright Marked).
+Then 0.18.11's list below (still to do).
+
+TEST CHECKLIST FOR 0.18.12  (the build only)
+--------------------------
+[ ] 1  Move the old "Find" folder away, unzip, build: DONE, Photo Metadata Self-Test ALL PASSED
+       (T-PHOTO-28 too, with "change in place" ON in Settings).
+[ ] 2  Settings > Photography: "change in place" is still as you left it after the build.
+Then 0.18.11's list below.
+
+TEST CHECKLIST FOR 0.18.11  (20 minutes - COPIES of pictures; together with 0.18.10's list below)
+--------------------------
+Before you unzip: move the old "Find" folder out of the way (e.g. to the Desktop as "Find old"), so
+the zip makes a fresh "Find" folder and you build the new one.
+Build
+[ ] 1  The build finishes with DONE. The Photo Metadata Self-Test shows T-PHOTO-33 PASS (Find's own
+       reader and sidecar writer, checked by the real ExifTool) and still T-PHOTO-24 to 32 PASS.
+Settings
+[ ] 2  Settings > Photography > "Speed: Find's own reader and writer": 4 boxes - own reader ON, own
+       sidecar writer ON, ExifTool double check OFF, thorough flush ON. Each change is kept after
+       quitting Find; the log says what is on and off.
+Correct values (the same copies, Photo Mechanic to look)
+[ ] 3  NEFs that HAVE sidecars (Photo Mechanic made them): rate, colour class, caption with an accent
+       and a line break, add a keyword. Photo Mechanic shows everything, in the NEF and in the sidecar;
+       Camera Raw / Capture One settings in the sidecar are still there (open the .xmp in TextEdit:
+       only our fields changed). Cmd-Z puts the old values back.
+[ ] 4  NEFs WITHOUT sidecars: same; a new .xmp appears next to each, Photo Mechanic reads it.
+[ ] 5  JPEGs: the same three things; Photo Mechanic shows them.
+[ ] 6  Log (Find's log): "METADATA old values read: N by Find itself, M by ExifTool" - for NEF/JPEG/XMP
+       nearly all "by Find itself". Lines "sidecar written by Find" in the disk-io log.
+Speed - please send these numbers (log lines "... written and checked in N s")
+[ ] 7  Local disk, "change in place" ON, "Faster check" ON: caption change on 200 NEFs (with sidecars)
+       and on 200 JPEGs. Then the same with "Faster check" OFF.
+[ ] 8  The same 200 NEFs on the network share, Faster check ON.
+[ ] 9  For comparison (optional): one run with "Find's own reader" and "own sidecar writer" OFF, and
+       one with "thorough flush" OFF.
+[ ] 10 Photo Mechanic on the same 200 NEFs, same kind of change: its time, roughly.
+Then 0.18.10's list below (not tested yet).
+
+TEST CHECKLIST FOR 0.18.10  (15 minutes - copies of pictures)
+--------------------------
+Selection
+[ ] 1  Thumbnails and Photography Mode: click a picture, Shift-Right Right Right, then Shift-Left:
+       the selection shrinks by one from the right (the cursor moves back), as in Finder. Same with
+       Shift-Down then Shift-Up, and starting to the left / up first. Shift-click then Shift-arrows
+       continue from the clicked picture.
+Scrolling
+[ ] 2  A folder of 1,000+ pictures: scroll with the mouse wheel / trackpad in thumbnails and in
+       Photography Mode - smooth, no stutter once the pictures are shown; scrolling back up is instant.
+[ ] 3  Settings > Photography > Thumbnails and scrolling: memory (512 MB), prepare ahead (2 screens),
+       pictures read at the same time (4). Changing them keeps working; kept after quitting.
+RAW + JPEG
+[ ] 4  Settings: "Show RAW + JPEG pairs as one" ON. A RAW+JPEG folder in Photography Mode: only the
+       NEFs, each with a small "NEF+JPG" in its badge line; a folder with JPEGs only shows them all.
+       Plain thumbnail view shows every file.
+[ ] 5  Rate a pair: Photo Mechanic shows the stars on the NEF AND the JPEG (box "hidden JPEG gets the
+       same..." on). Copy / move / drag / Move to Trash a pair: the JPEG goes too (log: "JPEG twin
+       goes along").
+Ratings in the background
+[ ] 6  Rate pictures quickly one after another (keys 1-5, arrows): stars show at once, no progress sheet,
+       you can carry on; the small spinner at the bottom right of the pane turns while they are being
+       written (tooltip says how many). Photo Mechanic shows the right final stars. Cmd-Z works.
+[ ] 7  Rate 200 pictures and quit Find (Cmd-Q) at once: Find waits until they are written, then quits.
+[ ] 8  Edit Metadata / Find and Replace still show their progress sheet.
+Speed (in place on)
+[ ] 9  JPEG captions in place: change captions of 50 JPEGs that Find or Photo Mechanic wrote before:
+       log lines "METADATA IN PLACE ... JPEG in place ... (XMP room took up the IPTC's change)".
+[ ] 10 "Faster check" ON: times in the log vs OFF (please send both).
+[ ] 11 The build finishes with DONE.
+Then the list below.
+
+TEST CHECKLIST FOR 0.18.9  (5 minutes)
+-------------------------
+[ ] 1  Settings > Photography > ExifTool Behavior: "With Photography Mode" chosen, 4 side by side,
+       stop after 5 min. Choices kept after quitting Find.
+[ ] 2  Activity Monitor, search "perl": none while no pane is in Photography Mode. Switch a pane to
+       Photography Mode: 4 appear within a few seconds. A second pane in Photography Mode: still 4.
+       Leave it in one pane: still 4; leave it in the last (or close that pane): they end.
+[ ] 3  The first rating right after entering Photography Mode is as quick as the following ones.
+[ ] 4  "Ready at all times": quit and reopen Find - 4 perl processes right after launch, kept until
+       Find quits. "Only when needed": none until the first rating; they end after the idle time.
+[ ] 5  "ExifTools working side by side" = 2, restart Find: only 2 appear.
+Then the list below.
+
+TEST CHECKLIST FOR 0.18.8  (15 minutes - COPIES of pictures only, the first time)
+-------------------------
+[ ] 1  The build finishes with DONE; the Photo Metadata Self-Test shows T-PHOTO-32 PASS (in place,
+       with the real ExifTool checking) - please send me its two INFO lines.
+[ ] 2  Settings > Photography: "Faster: change only the metadata part of the file, in place, when
+       possible" is OFF by default; turn it ON.
+[ ] 3  Caption + rating on 200 NEF copies (local, then on the share): far quicker than before; each
+       NEF grows by only a few KB (Get Info), its modification date changes, no copies in the Trash.
+       Photo Mechanic and Capture One open them normally and show the values (also with the .xmp
+       sidecar moved away). Cmd-Z puts the old values back.
+[ ] 4  Rate 200 JPEG copies (stars only): done in place when their XMP has room (most JPEGs once
+       Find or Photo Mechanic has written to them). JPEGs whose new caption/IPTC doesn't fit go the
+       normal way automatically - same result, normal speed.
+[ ] 5  Find's log shows "METADATA IN PLACE ..." lines for the files done in place, and the time line
+       "... written and checked in N s" - please send me the times (in place ON vs OFF).
+[ ] 6  Force Quit Find (Option-Cmd-Esc) in the middle of a big in-place job: at the next start the log says
+       "RECOVERY metadata change put back" for the file that was half way, and it opens fine.
+Then the list below.
+
+TEST CHECKLIST FOR 0.18.7  (5 minutes - copies of pictures)
+-------------------------
+[ ] 1  Rate / caption 200 JPEGs: a small sheet with ONE bar ("Writing: N of 200") appears at once and
+       is gone the moment it ends; no Copies window. Clearly quicker than 0.18.6 in the Safe mode.
+[ ] 2  Stop in that sheet: it ends after the pictures being written; those keep their new values.
+[ ] 3  Find's log (Help > Show Logs Folder) has "... file(s) written and checked in N s" - please
+       send me those times for 200 JPEGs and 200 NEFs, local and on the share.
+[ ] 4  The build finishes with DONE.
+Then the list below.
+
+TEST CHECKLIST FOR 0.18.6  (10 minutes - copies of pictures)
+-------------------------
+[ ] 1  The build finishes with DONE; the Photo Metadata Self-Test has T-PHOTO-31 PASS (the
+       kept-running ExifTool, a caption with a line break).
+[ ] 2  Settings > Photography > Writing metadata: three boxes, all ON: 1 sidecar, 2 embedded XMP,
+       3 embedded IPTC. Turning 1 and 2 both off is not possible (stars need XMP). Kept after quitting.
+[ ] 3  Caption + rating on 20 NEFs without sidecars: each NEF gets a new .xmp, and Photo Mechanic shows
+       the values with the sidecar AND with the sidecar moved away (inside the NEF). In Photo
+       Mechanic's IPTC (or Find's Info panel) the caption is there as IPTC too.
+[ ] 4  The same on 20 JPEGs: XMP and IPTC inside, no .xmp files made.
+[ ] 5  Speed: 200 JPEGs or NEFs, locally and on the share - much quicker than 0.18.5 (no ExifTool
+       start for each group). Activity Monitor shows up to 4 "perl" processes while Find works;
+       they end 5 minutes after the last metadata work, or when Find quits.
+[ ] 6  A caption with two lines (Return in Edit Metadata): written, and shown on two lines in Photo
+       Mechanic.
+Then the list below.
+
+TEST CHECKLIST FOR 0.18.5  (10 minutes - copies of pictures)
+-------------------------
+[ ] 1  Settings > Photography, "Writing metadata": the RAW box is OFF, "Safe (recommended)" chosen.
+       Each choice has its description; changes are kept after quitting Find.
+[ ] 2  RAW box off: rate / caption 200+ NEFs (a copy of a job, ideally on the share): only .xmp
+       sidecars are made or updated, the NEFs keep their modification dates, it is quick. Photo
+       Mechanic shows the values. Cmd-Z puts them back.
+[ ] 3  RAW box on: edit 5 NEFs: written inside + sidecar, previous versions in the Trash (on a
+       share without a Trash: removed after the fingerprint check). Photo Mechanic agrees.
+[ ] 4  JPEGs, one run in each of the 4 modes: all written, Finder tags / labels kept, nothing hidden
+       left in the folder (Show hidden files), Cmd-Z works. "Fastest" is clearly quicker on a share.
+[ ] 5  The build finishes with DONE (the self-test checks the RAW-inside + Safe way, whatever you set).
+Then the list below.
+
+TEST CHECKLIST FOR 0.18.4  (5 minutes - use test files on the share)
+-------------------------
+[ ] 1  On a Mac/PC connected over the LAN, select a test file and press Cmd-Backspace: Find says it
+       can't go to the Trash on "<share>" and asks to delete immediately, naming the file; Cancel
+       is the main button (Return = Cancel). Cancel: nothing happens. Again, Delete: it is gone.
+[ ] 2  A test folder with files inside: same, the dialog says "(folder, with everything in it)".
+[ ] 3  On your own disk, Cmd-Backspace still moves to the Trash (no dialog). File > Delete
+       Immediately... (Option-Cmd-Backspace), or Option held in the right-click menu, asks first
+       and deletes without the Trash.
+[ ] 4  Try Delete Immediately on the share itself in the sidebar / your home folder: refused.
+Then the list below.
+
+TEST CHECKLIST FOR 0.18.3 = the 0.18.2 list below; the build must finish with DONE, also while
+another Find is open and working.
+
+TEST CHECKLIST FOR 0.18.2  (10 minutes - copies of pictures)
+-------------------------
+[ ] 1  Find and Replace: "Replace in" has a third choice, "File names and metadata". Find "2025",
+       Replace with "2026" on pictures whose names AND captions hold 2025: Preview lists both kinds
+       (Field "Name" and "Caption"). Replace: both changed. ONE Cmd-Z puts names and captions back.
+[ ] 2  Keep the window open and the files selected; type something else and press Replace (no Preview):
+       it works straight away, on the same files (also after a rename - the renamed files are what
+       is selected). Press Return = Replace.
+[ ] 3  Select other files in the pane, click back into Find and Replace: "The N selected items" shows
+       the new count and works on them.
+[ ] 4  Close the window, open it again (Option-Cmd-F), also after quitting Find: the last Find and
+       Replace texts, the "Replace in" choice and Match case are still there.
+[ ] 5  Tab and Shift-Tab move between the fields of every dialog: Find and Replace, Edit Metadata,
+       Batch Rename, Settings, the server editor, Add to Copy Queue. (Only text fields and lists,
+       unless System Preferences > Keyboard > Shortcuts > Full Keyboard Access is "All controls" -
+       then buttons, checkboxes and menus too; Ctrl-F7 switches it.)
+[ ] 6  Edit metadata of 20+ RAW files: the Copies window shows the job (pictures done, MB/s, Stop) and
+       it is clearly quicker than 0.18.1. When it finishes there is no pop-up unless something failed;
+       the details (skipped files, notes) are in the job's "Show diagnostics" and the log.
+[ ] 7  Stop during a big metadata job: it stops after the current few pictures; those keep their new
+       values, the rest are untouched; Cmd-Z puts back the ones that were done.
+Then the 0.18.0 list below (the build must finish with DONE).
+
+
+TEST CHECKLIST FOR 0.18.0  (15 minutes - use COPIES of a few pictures first)
+-------------------------
+Metadata: one set shown, RAW written inside
+[ ] 1  Copy 3 NEF files into a test folder; give one of them a caption in Photo Mechanic (it goes
+       into a sidecar). In Find's Info panel: that NEF shows ONE Description section, "Description
+       (sidecar ...)", with "Shown because: the sidecar was changed after the picture file". The
+       other two (no sidecar) show their own embedded set as before. Never two description sections.
+[ ] 2  Select all 3, File > Edit Metadata: the fields show each one's current set. Type a Headline
+       "Find test", Apply. Photo Mechanic shows the headline for all 3 - for the one with a sidecar
+       both in the sidecar and inside the NEF (PM: File Info, and with the .xmp moved away).
+[ ] 3  The pictures still open in Capture One / Photo Mechanic exactly as before (pixels untouched).
+       The Trash holds "DSC_xxxx (before metadata edit).NEF" for each NEF.
+[ ] 4  Edit > Undo: the headline is gone from the NEFs and the sidecar.
+[ ] 5  Rate a NEF with 4 (key 4): Photo Mechanic shows 4 stars (also with its sidecar removed).
+       Rating a RAW now rewrites the RAW's copy, so it takes a moment longer than before.
+[ ] 6  A JPEG and a TIFF: edit metadata as before - still works, no Trash copies for those.
+Find and Replace (File > Find and Replace..., Option-Cmd-F; also in the right-click menu)
+[ ] 7  List view, select 3 files, Replace in "File names", Find "DSC", Replace with "Gala", Preview:
+       the table lists every old -> new name; nothing has changed yet. Replace: renamed; their .xmp
+       sidecars renamed with them. Cmd-Z: all names back.
+[ ] 8  Look at "Everything in <folder>" + Include subfolders + Folder names too: folders and the files
+       in them are renamed in one go; Cmd-Z puts every name back.
+[ ] 9  A new name that already exists in the folder shows in red with the reason and is left alone;
+       the others are still renamed.
+[ ] 10 Photography Mode, Replace in "Metadata", Find "2025", Replace with "2026", fields: Caption +
+       Keywords, Preview: each picture and field with its old and new text. Replace: Photo Mechanic
+       shows the new text; Cmd-Z puts the old back. Match case on/off finds "dsc" vs "DSC" as it should.
+[ ] 11 Change any field after Preview: the table empties and Replace is greyed until you Preview again.
+I/O logs (Help > Show Logs Folder)
+[ ] 12 There are two new logs: network-io-<date>.log and disk-io-<date>.log. Copy a folder from a
+       share to the desktop: the network log has a COPY line (in=, time=, rate=), the disk log the
+       same copy (written=).
+[ ] 13 Browse a share and an FTP folder: FOLDER-READ and FTP-MLSD / FTP-LIST lines in the network log.
+       Upload to the FTP: FTP-UPLOAD out=... A failed one carries ERR=FTP-xx.
+[ ] 14 After a minute of activity: a MINUTE line in each (ops, bytes, small-reads = thumbnails,
+       previews; the disk log also "process read/written" = all of Find's disk I/O counted by macOS).
+[ ] 15 Quit Find: each log ends with SESSION TOTAL and a total-lines= line; every line is numbered
+       (N00001... / D00001...) and plain text.
+
+TEST CHECKLIST FOR 0.17.7  (5 minutes)
+-------------------------
+[ ] 1  Hold Cmd and double-click a folder in the list, in thumbnails and in Photography Mode: it
+       opens in a new window; this window stays where it was.
+[ ] 2  Cmd-click a folder in the sidebar (Favorites, Recents, a disk, a share): new window; the
+       sidebar of this window still shows where this window is.
+[ ] 3  Cmd-click a part of the path bar: that folder in a new window.
+[ ] 4  FTP: Cmd-double-click a folder in an FTP pane, Cmd-click a part of the FTP path bar, Cmd-click
+       an FTP favourite or a saved FTP server in the sidebar: each opens in a new window, already
+       signed in.
+[ ] 5  Without Cmd nothing changed: double-click opens in place, Cmd-Down / Cmd-O open in place,
+       Option-click in the sidebar opens a new pane.
+
+TEST CHECKLIST FOR 0.17.6  (3 minutes)
+-------------------------
+[ ] 1  List view: rename a file (Return, type, Return): the renamed file stays selected (moved to its
+       new place in the sort order, scrolled into view); the arrow keys go on from it.
+[ ] 2  Same for a file inside an open (expanded) subfolder, and for a folder.
+[ ] 3  Same on a network share and in a big folder (the selection doesn't jump when the folder is
+       read again a moment later).
+
+TEST CHECKLIST FOR 0.17.5  (2 minutes)
+-------------------------
+[ ] 1  Open Settings: General shows its settings (New windows open at, Show hidden files, Keep folders
+       on top, ...). Switch to Appearance and back: still there. Quit Find, open Settings again: there.
+[ ] 2  If General is still empty: Help > Show Logs Folder, today's log, send me the lines starting
+       with "Settings section".
+
+TEST CHECKLIST FOR 0.17.4  (5 minutes)
+-------------------------
+[ ] 1  Settings > General shows all its settings again (also after switching sections and back).
+[ ] 2  Settings > Appearance > "Glass (file lists, thumbnails)": slide it up - the background of the
+       lists, thumbnails and FTP lists lets the desktop show through, blurred (every other row keeps
+       a light band so rows stay easy to follow). The sidebar's Glass is separate. 0 = as before.
+       "All to 0 (flat)" sets it to 0 too; "Standard" leaves it at 0.
+[ ] 3  With it on, scroll a big folder in the list and in Photography mode: if it feels slower, lower
+       it (Test Drawing Speed shows the numbers).
+
+TEST CHECKLIST FOR 0.17.3  (about 20 minutes)
+-------------------------
+Stop in the middle of a big file
+[ ] 1  Copy one big file (a 4-5 GB PSB) to another drive and press Stop half way: it stops within
+       about a second, says Stopped, the half copy is in the Trash, nothing at the destination.
+       Same for a folder with a big file in it.
+[ ] 2  A copy that can't fit: copy something bigger than the free space of a drive (e.g. a small
+       USB stick): refused at once - "Not enough free space ... needs X, the destination has Y free.
+       Nothing was copied." (Find keeps 64 MB spare on the destination.)
+[ ] 3  Copy a big file normally (no Stop): finishes, checked, opens fine; its dates and colour tags
+       are the original's.
+Slow share
+[ ] 4  On the slow share go 4-5 levels down, then back out one level at a time (Cmd-Up, Back, the
+       path bar): each level should show at once. If there is still a beachball anywhere, Help >
+       Show Logs Folder, open today's log: lines starting with "BEACHBALL" say how long and what
+       Find was doing - send me those lines.
+Settings
+[ ] 5  Settings can be resized (drag a corner); every section scrolls when it doesn't fit; nothing is
+       cut off at the right (check Network, Storage & Maintenance, Advanced, Photography).
+Drag to other apps
+[ ] 6  Drag an mp3 from Find (list and thumbnails) onto VLC's playlist: it is added. Also try dragging
+       files to Mail, Photoshop, Photo Mechanic: they open/attach as from Finder. A drag to another app
+       never moves the file away (copy only).
+
+TEST CHECKLIST FOR 0.17.2  (about 15 minutes)
+-------------------------
+[ ] 1  Open 5-6 panes (some on a big folder still loading, one in Photography mode, one FTP), then
+       press Cmd-W as fast as you can, several times over: the panes close one by one, Find keeps
+       running. Repeat a few times (the crash was not every time).
+[ ] 2  If Find ever stops unexpectedly: reopen it, Copy Report, send me the lines.
+       (0.17.1 did not compile on High Sierra - the crash-report part; fixed here.)
+FTP folders in Favorites, and sidebar names
+[ ] 3  In an FTP pane, right-click a folder > Add "<name>" to Favorites (or right-click an empty
+       spot > Add This Folder to Favorites): it appears under Favorites with a network icon,
+       named "<folder> (<server>)". Click it: the FTP pane opens right in that folder (no password
+       asked). Option-click: in a new pane. (The server has to be saved in the sidebar.)
+[ ] 4  Right-click any favourite (FTP or local) > Name in Sidebar...: type e.g. "Deliveries": only
+       the sidebar shows the new name; the folder keeps its real name (on the server too). Empty
+       name = its own name again. Hovering shows the real place.
+[ ] 5  Remove from Sidebar removes the favourite (and its sidebar name); nothing on the server or
+       disk is touched. Files dropped on an FTP favourite are refused (drop them into the FTP pane).
+
+TEST CHECKLIST FOR 0.17.1  (about 35 minutes, plus the 0.17.0 list below if not done yet)
+-------------------------
+FTP upload of .app files (the crash)
+[ ] 1  Upload the same .app files (about 260 MB) to your FTP folder again: it runs to the end; the
+       Copies window counts every file. Afterwards the report lists any links left out (apps contain
+       links; links are never uploaded) - nothing else is skipped.
+[ ] 2  If Find ever stops unexpectedly again: open it again - it says "Find stopped unexpectedly
+       last time" and shows what it was doing. Click Copy Report and send me the lines (X001...).
+       (Also kept in ~/Library/Logs/Find as crash-....txt.)
+Copies window
+[ ] 3  Copy a big FOLDER, press Stop half way: it stops within a moment (after the file it is on),
+       says "Stopped", and nothing half-copied stays at the destination (the unfinished copy is in
+       the Trash). Same in the copy queue (Stop = Pause there).
+[ ] 4  Copying a folder: the top bar is the whole copy; the second bar ("This file: ...") is the
+       single file being copied now and restarts for each file. Copying ONE file shows one bar only.
+Glass
+[ ] 5  Settings > Appearance > Glass at 100: the desktop shows through the sidebar and Info panel,
+       blurred. If Settings shows an orange note about "Reduce transparency", that macOS setting
+       is on (System Preferences > Accessibility > Display) and has to be turned off for Glass.
+FTP copy and paste
+[ ] 6  Select files/folders in a local pane (or Finder), Cmd-C, click into the FTP pane, Cmd-V: they
+       upload (Copies window). Right-click in the FTP list > Paste (Upload Here) does the same.
+[ ] 7  Select items in the FTP pane, Cmd-C, click into a local pane, Cmd-V: they download there.
+FTP folders
+[ ] 8  Drag a folder in the FTP pane onto another folder in your own area: it moves there (with
+       everything in it). Onto a folder where you may not: refused, nothing moves.
+[ ] 9  In the FTP pane, Shift-Cmd-N (or right-click > New Folder): "untitled folder" appears with its
+       name ready to type; Return names it.
+[ ] 10 Make the FTP pane narrow and wide: Date and Size stay at the right edge, Name takes the rest.
+Slow network share - snapshots
+[ ] 11 Settings > Network: set "Remember folders on shares for" to 1 week.
+       Go through several folders on the slow share, then back out and in again: each one you have
+       been in shows at once (spinner bottom right while it is checked), also with the Date Added
+       column showing, and also after quitting and reopening Find.
+Sorting
+[ ] 12 With "Keep Folders on Top" on: sort by Name or Kind - folders on top. Sort by Date Modified,
+       Date Added, Date Created or Size (either direction) - folders and files mixed, purely by
+       date / size. Folder sizes count when "Calculate folder sizes" is on.
+
+TEST CHECKLIST FOR 0.17.0  (about 40 minutes - use COPIES and test files, not real work)
+-------------------------
+Copies window (copies no longer freeze the window)
+[ ] 1  Copy a big folder of test files to another pane (drag, or Copy to Other Pane). A separate
+       "Copies" window opens after a moment; the Find window stays usable (scroll, open folders).
+       It shows an overall bar and "File x of y, ... of ..., MB/s, ... left", and a second bar for
+       the file in progress with its name. When done it says Finished and closes by itself.
+[ ] 2  Tick "Show diagnostics": a time-stamped list of every step (+0.0s Started ...). Untick, copy
+       again: it stays unticked (remembered). Same for Move, Duplicate and Compress.
+[ ] 3  Stop during a big copy: it stops safely - no half file left at the destination (the
+       unfinished copy goes to the Trash as before); the report says what was copied.
+[ ] 4  Window > Copies and Copy Queue opens it yourself (then it stays open).
+Copy queue
+[ ] 5  Select test files, File > Add to Copy Queue...: the dialog shows "To:" with the other pane's
+       folder; Choose... picks another folder. Add: the job is listed in the Copies window under
+       "Copy queue", and while it runs it also shows on top with progress bars. Stop there pauses
+       it (Resume in the queue list).
+FTP pane (use your own test files and folders on the server)
+[ ] 6  Select a folder, Cmd-Down: it opens (double-click still works; Cmd-O too).
+[ ] 7  Upload a big test file: progress, speed and time left in the Copies window; the pane stays
+       usable while it uploads. Download a big file (drag out): the same.
+[ ] 8  Rename in place: select a file and press Return, or click its name once more after a moment:
+       the name becomes editable right in the list (without the extension selected). Return
+       renames on the server, Escape leaves it as it was. Works for folders too, where the server
+       allows it (your own folder). A name already there is refused.
+[ ] 9  Delete a test FOLDER (with a subfolder and files) in your own folder: the warning says
+       "and everything in it", permanent; Delete Permanently removes it all. In someone else's
+       folder: refused (FTP-RMD / FTP-DELE), and what was refused stays.
+[ ] 10 Make the pane narrow and wide: the Name, Date and Size columns always fit the pane.
+[ ] 11 Go into a big server folder, out, and in again: the second time it shows at once, with a
+       small spinning wheel at the bottom right while Find checks the server quietly; if anything
+       changed, the list updates by itself. Quit and reopen Find: still instant.
+Network shares
+[ ] 12 Same on an SMB share: a folder you visited shows at once (default now 1 day; Settings >
+       Network has 1 hour / 1 day / 1 week), the wheel turns while it is checked.
+Layout and looks
+[ ] 13 Every pane: the path bar has the whole top row; Back/Forward/Up, the view buttons, the
+       new-pane buttons, search and close are on the row below.
+[ ] 14 Settings > Appearance > Glass: the sidebar and Info panel now clearly show the desktop
+       blurred behind them. Depth, Glow and Dim are about twice as strong at the same value;
+       0 still turns each off ("All to 0 (flat)" = the plain look).
+[ ] 15 New Folder (Shift-Cmd-N): the name field shows what you type, letter by letter.
+[ ] 16 Settings > Photography: the arrow-key option fits in the window (explanation below it).
+Photography filters
+[ ] 17 The type menu lists only the types in the folder, with counts (e.g. "NEF (120)",
+       "JPG (40)"); pick one: only those show. Open a folder without that type: back to All types.
+[ ] 18 Stars: click the 3rd star: 3 stars or more show (a "+" after the stars). Click it again: all.
+       Option-click the 3rd: exactly 3 ("=").
+[ ] 19 Colour dots: click a dot: only that colour class shows; click a second: both; click again to
+       remove. No dot picked: everything. The sidecar filter is gone.
+Workspaces
+[ ] 20 Window > Save Windows as Workspace... now saves (SESS-03 fixed) and Open Workspace works.
+
+TEST CHECKLIST FOR 0.16.0  (about 45 minutes - use COPIES and test files, not real work)
+-------------------------
+Keychain
+[ ] 1  Settings > Network > Repair Keychain Access: a report says how many were repaired (macOS
+       may ask once per server: Always Allow). Then eject a saved SMB share and click it in the
+       sidebar: no "NetAuthSysAgent wants to use..." prompt.
+FTP as a pane (the old FTP window is gone)
+[ ] 2  Click the FTP server in the sidebar: the pane shows the server (path bar: server > folders).
+       Option-click it (or right-click > Open in New Pane): a second FTP pane opens next to it.
+[ ] 3  Double-click / Return opens a folder; Back, Up (Cmd-Up) and the path bar work; Back at the
+       top returns to the pane's local folder. Cmd-R re-reads the server folder.
+[ ] 4  Drag a test file from a local pane into the FTP pane: uploaded, sizes checked. Again: Keep
+       Both / Skip / Stop. Drag a small folder in: folders created, files inside.
+[ ] 5  Drag a file - then a small folder - from the FTP pane into a local pane (or onto a sidebar
+       folder): downloaded into it; a name clash asks Keep Both / Skip / Stop.
+[ ] 6  Right-click a file: Rename... renames it on the server (a name already there is refused);
+       Delete... (or the Delete key, or Cmd-Delete) warns "permanently" with Cancel as the main
+       button. A folder: Rename and Delete are not offered / refused.
+[ ] 7  In an FTP pane, Edit > Copy, Paste, New Folder, Duplicate etc. are greyed out (they would act
+       on the local list hidden behind it). Click a local folder in the sidebar: back to local.
+Photography mode: Subfolders
+[ ] 8  Tick "Subfolders" in the photo bar on a shoot folder with subfolders: every picture of the
+       whole tree shows; each caption starts with its subfolder. Ratings, colour classes, XMP
+       badges and filters work as usual. Open another folder: its tree shows. Untick: back to the
+       folder alone. Switching to List view switches it off.
+[ ] 9  Settings > Photography: "Arrow keys move the thumbnails in whole rows" (on): arrow keys jump
+       a row at a time with no scrolling animation; the trackpad/mouse still scrolls smoothly.
+The finish (Settings > Appearance)
+[ ] 10 Depth, Glow, Glass, Dim move live: bars get soft light, thumbnails shadows, the selection a
+       glow, the sidebar and Info panel show the desktop blurred, other panes dim (with 2+ panes).
+       "All to 0 (flat)" looks exactly like 0.15; "Standard" brings back 60/40/60/20.
+[ ] 11 Test Drawing Speed (with a big folder in Photography mode in front): a frames-per-second
+       result. Tell me the number with Standard and with flat.
+Named workspaces
+[ ] 12 Arrange 2-3 windows, Window > Save Windows as Workspace... "Editing". Rearrange, then
+       Window > Open Workspace > Editing: the windows close and the saved ones open as saved.
+       Window > Delete Workspace removes it (no files touched).
+Copy queue (use COPIES)
+[ ] 13 Select a folder of test files, File > Add to Copy Queue... (goes to the other pane's folder):
+       Window > Copy Queue shows it running, then Done. Run it again with "skip": all skipped,
+       nothing overwritten. With "keep both": numbered copies.
+[ ] 14 Queue a big copy, Pause: it stops (no half file at the destination); Resume finishes it.
+[ ] 15 Queue a copy "at a set time" 5 minutes ahead with "Wake the Mac": macOS asks for your
+       administrator password. Put the Mac to sleep: it wakes about a minute before and the copy
+       runs (Mac stays awake while copying). Report: numbered lines (Q001...).
+[ ] 16 Quit Find while a queued copy runs: it asks; after quitting and opening Find again the copy
+       carries on from the item it was on.
+Keys (Settings > Keys)
+[ ] 17 Select a command, Record Shortcut, press e.g. Ctrl-Option-K: the menu shows it and it works.
+       A shortcut already used offers to move it. Built-in Shortcut / All to Built-in undo it.
+[ ] 18 Photography: stars and colour classes keys can be changed (e.g. colour classes on Option).
+
+TEST CHECKLIST FOR 0.15.0  (about 15 minutes - use a test file you made yourself, not real work)
+-------------------------
+FTP (the server you use with FileZilla)
+[ ] 1  Edit the FTP server in the sidebar (right-click > Edit...): address ftp://<its IP>, the
+       account and password from FileZilla, "Connect when Find starts" unticked. Save.
+[ ] 2  Click it: a Find window "<name> (FTP)" opens and lists the server's folders. Double-click
+       (or Return) opens a folder; the up arrow or Cmd-Up goes back. Refresh re-reads.
+[ ] 3  Drag a small test file from a Find pane into your own folder in that window: the status
+       line says "Uploaded 1 file, sizes checked"; FileZilla shows it with the same size.
+[ ] 4  Drag the same file again: Find asks Keep Both / Skip / Stop. Keep Both uploads
+       "name 2.ext". Nothing is overwritten.
+[ ] 5  Drag a small folder (with a subfolder) in: the folders are created on the server and the
+       files land inside. .DS_Store files are left out.
+[ ] 6  Upload into someone else's folder (where you may upload): it works; if the server refuses,
+       a report with code FTP-25 / FTP-09 says so.
+[ ] 7  Select your test file(s), press Delete (or Delete...): the warning says permanent, the
+       main button is Cancel (Return = Cancel). Delete Permanently: gone (FileZilla agrees).
+[ ] 8  Select a folder and press Delete: "Folders are not deleted" - nothing happens on the server.
+[ ] 9  Try to delete a file in someone else's folder: refused (FTP-DELE), the file stays.
+[ ] 10 Select a file, Download: it lands in the folder of the Find pane you used last; a name
+       clash there asks Keep Both / Skip / Stop.
+[ ] 11 Any report has a Copy Report button: numbered plain lines (F001...) for AutoType.
+
+TEST CHECKLIST FOR 0.14.1 (0.14.0 did not compile on High Sierra; same tests)  (about 25 minutes - use COPIES of pictures for 10-12)
+-------------------------
+The share that wouldn't open (NTFS)
+[ ] 1  Disconnect it (eject in Finder too). Click it under Servers in Find: it connects and the pane
+       opens it. It is listed under Servers as connected.
+[ ] 2  Connect it in Finder first, then click it (or type its address) in Find: it opens at once.
+[ ] 3  If it still fails: the message now names code NET-ID-1. Choose Help > Network Report >
+       Copy Report and send me the report (addresses and account names only, no passwords).
+[ ] 4  Your other SMB shares still open as before.
+FTP (for now: read-only - full upload and delete come in the next installment)
+[ ] 5  Add Server with address ftp://<the FTP server's IP> and the account and password from
+       FileZilla: clicking it connects and shows the server's folders (no "\\IP\folder"
+       dialog). Tell me if macOS refuses to connect (the message gives an error number).
+Sidebar
+[ ] 6  Drag a favorite up or down: it stays where you drop it (also after quitting Find).
+       Same for saved servers, drives under Devices and shares under Network.
+[ ] 7  Drag a section heading (e.g. Servers) above another: the whole section moves. Settings >
+       Sidebar shows the same order. A row can't be dropped into another section.
+[ ] 8  Dragging files onto a sidebar folder still copies/moves them as before.
+Dialogs and Settings in the theme
+[ ] 9  Settings: sections listed down the left in the theme's colours; all text readable. Change
+       theme (Appearance): Settings, dialogs, Info and Metadata windows follow at once.
+       Any confirmation (e.g. Move to Trash of many files, a name clash): theme colours, the main
+       button in the accent colour; Return = main button, Esc = Cancel / Stop.
+       (macOS's own Open/Save panels and server password dialogs keep macOS's look.)
+Photo Mechanic colour classes (Photography mode, COPIES)
+[ ] 10 Select pictures, Cmd-3: a coloured square and the class name show on each; Photo Mechanic
+       shows colour class 3 for the same files (RAW: in the .xmp; JPEG: inside). Cmd-0 removes it.
+[ ] 11 Ctrl-4 gives four stars (plain 4 still works). Rate menu has the colour classes too.
+       Edit > Undo puts the previous colour class back.
+[ ] 12 Settings > Photography: change a class name and colour to match Photo Mechanic's
+       Preferences > General: the thumbnails and the Rate menu use them.
+       (If Ctrl-1..5 switches desktops instead, that is macOS's Mission Control shortcut:
+       System Preferences > Keyboard > Shortcuts > Mission Control.)
+
+TEST CHECKLIST FOR 0.13.0  (about 25 minutes - you need a server address and its account)
+-------------------------
+Reopening windows
+[ ] 1  Open 3 windows: one with 2 panes side by side (drag the divider so they're unequal), one
+       with 2 stacked panes and 3 tabs in one of them, one in Photography mode with the sidebar
+       collapsed and the Info panel shown. Move and size them anywhere. Quit Find (Cmd-Q).
+       Open Find: all 3 come back in the same places and sizes, with the same panes, divider
+       position, tabs (the same tab chosen), view modes, sidebar and Info panel.
+[ ] 2  Put one window on Desktop 2 (Mission Control), quit, open Find: it opens on Desktop 2.
+       The log's "Reopened windows" lines say "desktop 2" for it. If macOS refused, the line says
+       NOT MOVED (code SESS-02) and the window is on the current desktop - tell me which Mac.
+[ ] 3  Minimize one window, quit, open Find: it comes back minimized in the Dock.
+[ ] 4  Rename or move away a folder a window was showing, then open Find: that tab shows the
+       nearest folder above it that still exists. No error, nothing changed on disk.
+[ ] 5  Close every Find window (Find still running), quit, open Find: one normal new window.
+[ ] 6  Settings > General: untick "Reopen windows ...": the next start opens one normal window.
+       Tick it again: it works again from the next quit.
+[ ] 7  (If you can) unplug the second display, then open Find: windows that were on it open on the
+       main display, fully visible. Repeat test 1 on the MacBook Pro (Tahoe), including test 2.
+Saved servers
+[ ] 8  Sidebar, right-click the "Servers" heading > Add Server...: Name, Address (e.g.
+       \\192.168.1.10\Shoots), Account, Password, "Connect when Find starts". Save: it is listed
+       under Servers. Click it: it connects without asking for a password and opens. (If macOS asks
+       whether Find may use a Keychain item, choose Always Allow.)
+[ ] 9  Eject it (right-click > Eject): it stays in the sidebar (shown as not connected). Click it:
+       it connects again. A share already connected through Finder shows under Servers as
+       connected (not twice under Network).
+[ ] 10 Right-click a connected share under Network > Save as Server...: name and address filled in.
+[ ] 11 Settings > Network > Saved servers: every saved server is listed with its address, account
+       and whether it's connected. Tick/untick "Connect when Find starts", Edit..., Remove... and
+       Add Server... all work, and the sidebar's right-click menu shows the same tick.
+[ ] 12 With two servers set to connect at start and neither connected, quit and open Find: both
+       connect by themselves (no dialogs). The log says "Start-up connections: 2 to connect".
+[ ] 13 Quit and open Find again while they're still connected: nothing reconnects; the log says
+       "all 2 already connected". Opening a new window (Cmd-N) never connects anything.
+[ ] 14 A window that was showing a folder on a share that isn't connected yet at start: it shows the
+       Reconnect message first, then the folder by itself once the share has connected.
+[ ] 15 Remove a saved server with "Also delete its saved password" ticked: the password is gone
+       from Keychain Access; the share (if connected) stays connected.
+
+TEST CHECKLIST FOR 0.12.0  (about 30 minutes - use COPIES of a shoot for 4-7)
+-------------------------
+Build
+[ ] 0  The build log shows the photo self-test passing, including T-PHOTO-24 to 30 (ratings and
+       metadata written with the real ExifTool: picture data unchanged, RAW unchanged, Undo).
+Network
+[ ] 1  Type \\<server>\<share> for a share that isn't connected: a panel with a spinning wheel says
+       "Connecting to ...", counting seconds, with Stop Waiting. It goes away when the share opens.
+       Stop Waiting closes it at once; the pane stays usable.
+[ ] 2  On a share, open a big folder, go into a subfolder and back out (Cmd-Up or Back), several
+       times quickly: the parent shows at once each time. If someone changes that folder on the
+       server, the list updates by itself a moment later. Cmd-R always waits for the server.
+[ ] 3  Same with a folder opened with its triangle in list view: opens at once the second time.
+[ ] 4  Settings > Network: "Show network folders you were in recently at once ... for" keeps its
+       value (default 10 minutes); Off makes every visit wait for the server again.
+Ratings (Photography mode, on COPIES)
+[ ] 5  Select a few JPEGs, press 3: three stars show at once; the status line says "written and
+       checked". Open the same folder in Photo Mechanic: the same 3-star ratings.
+[ ] 6  Select NEF files (with and without .xmp sidecars), press 5: Photo Mechanic shows 5 stars.
+       The NEF files' modified dates are unchanged (the rating went into DSC_xxxx.xmp); a sidecar
+       was made where there was none.
+[ ] 7  Rate menu in the photo bar, and 0 (no rating): same results. Edit > Undo puts the previous
+       ratings back. A Finder colour label on a rated JPEG is still there.
+[ ] 8  Select a PSD and press 4: a report says Photoshop files are not written; nothing changes.
+Metadata
+[ ] 9  Select one JPEG, click Metadata...: its current caption, keywords, photographer etc. show.
+       Change the caption and keywords, Apply: Photo Mechanic (and Get Info in Find) show them.
+[ ] 10 Select several pictures with different captions: the caption field says "(different ...)".
+       Type a headline only and Apply: only the headline changes; each keeps its own caption.
+[ ] 11 Tick "Add these keywords..." and type a keyword: it's added, the old keywords stay.
+[ ] 12 File > Edit Metadata... does the same as the button. Edit > Undo after Apply restores.
+Search inside
+[ ] 13 Search options (More): "Look inside: Picture metadata" + a word from a caption or keyword:
+       the pictures with it are found (a RAW is found through its .xmp). Off: only names.
+[ ] 14 "Text in PDFs and documents" + a word inside a PDF or .txt: found.
+[ ] 15 "but not files containing:" a word: files whose metadata/text contains it are left out.
+[ ] 16 Details (the search report) says how many files were looked inside.
+
+NEW IN 0.18.16
+--------------
+- Photography bar: its items flow onto more rows when the pane is narrow, instead of being cut off;
+  the bar takes the height it needs.
+- Metadata Template: "Fill from XMP File" fills the template from an .xmp file (a Photo Mechanic IPTC
+  template or any sidecar) - its fields replace the template's and are ticked. The file is only read.
+- Supplemental Categories as Photo Mechanic shows them: three fields (Supplemental Category 1, 2, 3)
+  right under Rating, in both metadata windows. What is written is the one standard list (IPTC and
+  XMP), of the three in order - so Photo Mechanic and Find show the same. (A comma or semicolon inside
+  one category splits it into two, as in Find's other list fields.)
+- The template's tick boxes no longer show the word "Button".
+- The metadata windows take the size their fields need (Location created now under Description,
+  Photographer contact on the right).
+
+NEW IN 0.18.15
+--------------
+- Speed (local): "in place: write" was 6.2 s with any flush setting: before each in-place change Find
+  saves the bytes it will overwrite in its safety note as text, and made that text one byte at a time
+  with a slow call - a JPEG's metadata area (EXIF with its thumbnail) is 60 KB or more. Now about
+  80 times faster (64 KB: 115 ms -> 1.4 ms, measured here); the note is the same.
+- Speed (share): 0.18.14 read NEF/JPEG metadata in small pieces with plain reads; on your server each
+  read was a slow round trip ("in place: plan" 2.5 s -> 26 s). Mapped reading is back; the JPEG check
+  still stops before the picture data.
+- The TIMING line names the settings it ran with (flush, in place, check, mode).
+- List view: the item count counts what is shown, folders opened in the list included:
+  "20 items shown (12 in this folder)".
+- Metadata Template (Cmd-I, button "Metadata Template"): a form you fill in once and keep; a tick per
+  field says it is written (typing ticks it; an empty ticked field clears). Apply to Selected writes
+  to the pictures selected at that moment and stays open for the next selection. Everything is kept
+  for next time, also after quitting. Clear Template empties it.
+- Edit Metadata (key I with a picture selected, button "Edit Metadata"): the selected pictures' own
+  values, as before. In list view I goes on to jump-to-name when you are typing a name.
+- Get Info: Shift-Cmd-I (Cmd-I is the template). Both can be changed in Settings > Keys.
+- No "..." in button names anywhere in Find.
+
+NEW IN 0.18.14
+--------------
+- Fix (safety): a picture listed twice in one run (on a share, a folder listing taken while files are
+  renamed can name a file twice) was written twice in the same group: both in-place changes failed
+  their check and were put back, then ExifTool wrote it once and the second copy was reported as
+  failed (E-OP-VERIFY for _0LA6414.NEF). Nothing was lost. Now: folder listings never show a name
+  twice, the grid never holds a file twice, and a metadata run writes every file once, whatever the
+  list says (compared as files, not names; the log says "listed twice, written once").
+- Speed on shares: the fast in-place check of a JPEG no longer reads the whole file (its picture
+  data, which an in-place change never touches) - only the written bytes and the segments before the
+  picture. Find's own reading of NEF/JPEG metadata reads only the 64 KB pieces it needs, with plain
+  reads instead of mapping the file (also safer on a share: a network error can't stop Find).
+- Speed: a sidecar's or JPEG's new version replaces the old one in ONE rename (either the old or the
+  new is there at every moment) instead of four steps; RAWs keep their previous version in the
+  Trash as before. Each new sidecar is read back once instead of twice.
+- Settings > Photography > "After each changed file": Thorough flush (default, safest) / Normal
+  flush / No flush (fastest, as ExifTool and most apps do; see the descriptions).
+  On the local SSD the flush was almost half of the 13.6 s.
+- Beachball lines after a metadata run name the step; an old label is called old.
+
+NEW IN 0.18.13
+--------------
+- Speed: Find's own XMP reader and writer were the slow part of 0.18.11/12 (about 0.1 s per sidecar:
+  name lookups were worked out again and again). Rewritten to work everything out once: reading
+  about 8x faster, writing about 7x. Each sidecar is now read once per run, not twice.
+  Measured here on 200 NEF+XMP+JPG (Linux, same settings): 41.7 s before, 6.1 s now.
+- Log: one "METADATA TIMING" line per run - the total and each step (reading, in place, sidecars,
+  ExifTool, checks) with its seconds and number of files. Help > Show Logs Folder.
+- 21 more metadata fields, from Photo Mechanic's IPTC template: Description Writers, Category,
+  Supplemental Categories, Persons Shown, Featured Org. Name, Date Created, Copyright Marked,
+  Copyright URL, Rights Usage Terms, ISO Country Code, Location created (Sublocation, City,
+  State / Province, Country), Photographer contact (Address, City, State / Province, Zip / Postal
+  Code, Country, Phone, Email). Written to the sidecar, embedded XMP and (where IPTC has the field)
+  embedded IPTC, like the others; checked and undoable the same way.
+- IPTC field sizes: values longer than IPTC allows (e.g. Category: 3 characters, City: 32) are cut
+  in the IPTC only, as ExifTool and Photo Mechanic do; the XMP keeps the whole text. Before, such a
+  value made the check fail.
+- The Edit Metadata window has two columns in Photo Mechanic's groups, opens faster (Find's own
+  reader), and refuses a Date Created or Copyright Marked it can't write before writing anything.
+
+NEW IN 0.18.12
+--------------
+- Fix: the Photo Metadata Self-Test used your "change in place" setting for its normal-write tests, so
+  with it on, T-PHOTO-28 found no previous RAW version in the Trash (an in-place change makes none) and
+  the build stopped with E-BUILD-11. The values and picture data were right. The test now does those
+  tests the normal way, and puts your in-place setting back afterwards.
+
+NEW IN 0.18.11
+--------------
+- Find's own reader and writer for metadata (Settings > Photography > "Speed: Find's own reader and
+  writer"), so most changes no longer wait for ExifTool:
+  - The old values (for Undo, and so a RAW and its sidecar get the same full set) are read by Find
+    itself from .xmp sidecars, JPEGs and NEF/NRW/DNG/ARW/PEF/TIFF. Anything it isn't sure of (another
+    character set, extended XMP, a property written twice or with other capitals) goes to ExifTool.
+  - .xmp sidecars are written by Find itself: only our fields change, everything else in the file is
+    kept as it was; the new version is written beside the old one, read back byte for byte and value
+    for value, then swapped in (same journal and Undo as before). Optional: ExifTool double check.
+  - The "Faster check" for in-place changes now also reads every value back with Find's own reader.
+  - "Thorough flush" (on): each change waits until the drive has it on the disk itself (F_FULLFSYNC).
+    Off: the normal flush most apps use - faster, but not safe against a power cut that very moment.
+- New self-test T-PHOTO-33: the real ExifTool reads what Find wrote, and Find reads what ExifTool reads.
+- Checked here against ExifTool 13.64 on its test pictures and on about 200 randomly filled files: Find's
+  reader gave the same values in every case it accepted; sidecars Find wrote read back identically in
+  ExifTool, other properties unchanged, no new validation warnings.
+
+NEW IN 0.18.10
+--------------
+- Thumbnails / Photography Mode: Shift + arrows move the moving end of the selection (Finder's way);
+  going back the other way shrinks it instead of starting again from the first picture.
+- Smooth scrolling: each thumbnail cell (picture, name, badges) is drawn once and kept ready in memory;
+  scrolling only copies the finished cells. Thumbnails for the rows ahead are prepared in advance.
+  Settings > Photography > Thumbnails and scrolling: memory, how far ahead, how many read at once.
+- Photography Mode can show RAW + JPEG pairs as one (Settings, off by default): the RAW with a small
+  "NEF+JPG" badge; the hidden JPEG gets the same stars/labels/metadata (setting) and goes along when
+  copying, moving, dragging, trashing or deleting.
+- Ratings and colour classes are written in the background: the stars show at once, no progress
+  sheet, you go on; quick changes in a row are written in one go; a small spinner at the bottom of
+  the pane turns meanwhile; Find finishes them before quitting. All metadata writes now go through
+  one queue, so two writes never touch the same file at the same time.
+- In place, JPEG: the XMP packet's spare room now takes up a change in the IPTC's size, so captions
+  and keywords of JPEGs are changed in place too (Photoshop's IPTC digest kept current).
+- In place: optional faster check (Find reads back the bytes it wrote instead of ExifTool reading
+  every value back).
+
+NEW IN 0.18.9
+-------------
+- Settings > Photography > ExifTool Behavior: when the kept-running ExifTools start and stop -
+  ready at all times (with Find), with Photography Mode (default: started when a pane enters it, kept
+  while any pane is in it, stopped when the last leaves or closes), or only when needed. Also how many
+  work side by side (1-4) and the idle time before they stop when nothing keeps them (1-60 min).
+  When started, each runs a first small command so it is fully ready for the first real job.
+
+NEW IN 0.18.8
+-------------
+- Settings > Photography > "Faster: change only the metadata part of the file, in place" (off by
+  default). NEF, NRW, DNG, ARW, PEF, TIFF: Find's own writer puts the new XMP / IPTC block where the
+  old one was (when it fits) or at the end of the file and updates the small directory entry that
+  points to it - a few KB written instead of the whole 30-60 MB file. JPEG: in place when the new
+  XMP (and IPTC) fit the old space (Photoshop's IPTC digest kept current); otherwise the normal way.
+  Everything else in the XMP (e.g. Camera Raw settings) is kept exactly. Before each change the
+  bytes to be overwritten are noted; every value is read back by ExifTool; anything not as asked is
+  put back at once and done the normal way; a change cut off by a quit/crash is put back at the next
+  start. Tested on Linux against the real ExifTool 13.64 with its Nikon NEF, DNG and TIFF samples
+  (values read correctly, picture data hash identical, no new validation warnings).
+
+NEW IN 0.18.7
+-------------
+- JPEG picture check done natively: Find compares the picture bytes (first scan .. end of image) of the
+  original and the new version itself, instead of ExifTool's picture hash (slow, computed in Perl,
+  twice per file). Same proof, a fraction of the time. TIFF and RAW still use ExifTool's hash.
+- Metadata writes show a small sheet with one progress bar, shown at once and closed the moment the
+  work ends (no Copies window); the work only counts, the sheet looks 10 times a second.
+
+NEW IN 0.18.6
+-------------
+- ExifTool stays running ("-stay_open"): up to 4 ExifTools (one per core) are started once and fed
+  one command after another, instead of a new ExifTool (Perl start-up) for every command. Used for
+  all ExifTool work (metadata writes, reads, previews of RAW details). A hung or ended ExifTool is
+  stopped and the command goes to a one-time ExifTool, as before. They stop after 5 idle minutes
+  and when Find quits. Arguments with line breaks are sent exactly (as C strings).
+- Metadata goes to three places, each a box in Settings > Photography (all on): 1 the RAW's .xmp
+  sidecar (made when missing; an existing one is always updated), 2 the XMP inside RAW files,
+  3 the IPTC inside every picture that holds it (JPEG, TIFF, RAW types with IPTC). JPEG/TIFF keep
+  their XMP inside. Every place gets the same complete set and is checked.
+
+NEW IN 0.18.5
+-------------
+- Metadata writing made fast enough for hundreds or thousands of pictures, and configurable in
+  Settings > Photography > Writing metadata:
+  - RAW files: by default only their .xmp sidecar is written (as Photo Mechanic does by default:
+    a few KB per picture, instant on slow shares; the RAW is never touched). "Also write inside RAW
+    files" (off) rewrites the RAWs too.
+  - Files that must be rewritten (JPEG, TIFF, ...; RAW with the box on), four ways, each described:
+    Safest (separate working copy + picture fingerprint, ~4 reads + 2 writes), Safe - recommended,
+    the default (ExifTool writes the new version straight beside the original + fingerprint, ~3 reads
+    + 1 write), fingerprint on local disks only (fast on shares), Fastest (no fingerprint, values
+    still checked, 1 read + 1 write).
+  - Finder tags, labels and comments are carried to the new version.
+
+NEW IN 0.18.4
+-------------
+- Deleting on another computer over the LAN works like Finder: shared volumes usually have no Trash,
+  so Find asks "Are you sure you want to delete ...? This item will be deleted immediately. You can't
+  undo this action." (Cancel is the main button) and deletes only if you choose Delete. Also File >
+  Delete Immediately... (Option-Cmd-Backspace; Option in the right-click menu), anywhere. Never: the
+  top of a disk, a whole disk or share, your home folder and its main folders, system folders.
+
+NEW IN 0.18.3
+-------------
+- Fixed: the build stopped with E-BUILD-11 (T-PHOTO-30) when another Find was open and busy while
+  building: the test counted that Find's operation notes as its own leftovers. The test now keeps its
+  notes in its own scratch folder; the report shows the count if it ever fails.
+
+NEW IN 0.18.2
+-------------
+- Find and Replace: "File names and metadata" does both at once (metadata first, then names; one Undo).
+  It works on the pane's selection at the moment you press Preview or Replace, so you can keep it open
+  and go on; Replace works without a Preview (Return = Replace); the texts and choices are remembered.
+- Tab / Shift-Tab move between the fields of every dialog (Find's dialogs had no key order).
+- Metadata writes are faster: ExifTool runs four at a time, in smaller groups. They run as a job in
+  the Copies window (progress, speed, Stop) instead of only in the status line; the pop-up at the end
+  only appears when something failed - skipped files and notes are in the job's diagnostics.
+
+NEW IN 0.18.1
+-------------
+- Fixed: the build stopped with E-BUILD-11 because the Photo Metadata Self-Test (T-PHOTO-28) still
+  expected the pre-0.18 rule "RAW files are never written". It now checks the 0.18 rule: the RAW's
+  own metadata is written, its picture data is unchanged, its previous version is kept untouched,
+  no new sidecar is made, and Undo restores the RAW too. The self-test's previous versions now go to
+  its own scratch folder instead of your Trash.
+
+NEW IN 0.18.0
+-------------
+- Metadata, one set: Find reads a picture's own (embedded) metadata AND its sidecar and shows only
+  the one changed last (file modification dates; a tie goes to the sidecar) - in the Info panel,
+  the stars and labels, Photography Mode and the metadata editor. The Info panel says which set is
+  shown and why.
+- RAW metadata written inside: Edit Metadata (and ratings, labels) now change the RAW's own IPTC /
+  XMP text as well as its sidecar when there is one; both get the same complete set (the current
+  values with your change on top). The picture data is never touched: Find changes a copy, checks
+  every value and that the image data is identical, then swaps it in; the previous RAW goes to the
+  Trash as "NAME (before metadata edit).ext". A RAW type ExifTool can't write gets a new sidecar
+  instead (reported). PSD/PSB are still not written.
+- Find and Replace (File menu, Option-Cmd-F, right-click menu): in file names or in metadata text
+  (choose the fields), over the selected items or a whole folder with or without its subfolders, in
+  list, thumbnail and Photography Mode. Preview first (every change listed, problems in red and
+  left out), then Replace; one Undo for everything. Names: the extension is kept, a picture's
+  sidecar is renamed with it, folders inside renamed folders are handled. Metadata: written with
+  the same checked method as Edit Metadata.
+- Two new logs in Logs/Find: network-io-<date>.log (copies to/from shares, FTP commands with bytes,
+  folder reads on shares) and disk-io-<date>.log (copies and metadata writes on this Mac's disks),
+  each with a MINUTE total per active minute (including the many small reads for thumbnails and
+  previews) and a SESSION TOTAL; the disk log also gives macOS's count of all Find's disk I/O.
+  Numbered plain-ASCII lines, error codes as ERR=..., total-lines at the end; the last 10 kept.
+
+NEW IN 0.17.7
+-------------
+- Cmd-click opens in a new window, as in Finder: Cmd-double-click a folder (list, thumbnails,
+  Photography Mode, FTP), Cmd-click a sidebar item (also FTP favourites and saved servers) or a
+  part of the path bar. Keyboard opening (Cmd-Down, Cmd-O) still opens in place.
+
+NEW IN 0.17.6
+-------------
+- Fixed: after renaming in list view the selection was lost - when the item was inside an open
+  subfolder (that folder is read again a moment later) or when the folder watcher read the folder
+  again before the rename's own update had finished. The renamed item stays selected.
+
+NEW IN 0.17.5
+-------------
+- Fixed (second try): Settings > General empty. Each section is now put in its scroll view before
+  it is added to the window, instead of being moved there after General was already showing.
+
+NEW IN 0.17.4
+-------------
+- Fixed: Settings > General was empty in 0.17.3.
+- Appearance: "Glass (file lists, thumbnails)" - Glass behind the panes' contents, set separately
+  from the sidebar's (default 0).
+
+NEW IN 0.17.3
+-------------
+- Stop works inside a big file: files of 32 MB and more are copied by Find itself (macOS's copyfile,
+  same result as before) and Stop ends them within about a second; the half copy goes to the Trash.
+- A copy that can't fit the destination is refused before it starts (it used to fill the disk and
+  fail late; the half copy still always went to the Trash).
+- Shares: three things that waited for the server on the main thread (beachballs) are now done
+  without waiting: closing the watched folder when you leave it, the folder icon in the Info panel /
+  preview for the folder you came out of, and checking whether a folder with a dot in its name is a
+  "package". The log now notes every beachball ("BEACHBALL 2.3 s - while: ...").
+- Settings: the window can be resized and each section scrolls; the Network texts were shortened.
+- Dragging to other apps: also offered the way older apps (VLC) expect - as from Finder; copy, link
+  or "generic", never move.
+
+NEW IN 0.17.2
+-------------
+- Fixed: closing panes quickly one after another (Cmd-W) could crash Find. A closing pane now
+  empties its list while it can still do so safely, keeps the old rows alive a few seconds, and
+  stops its folder reads, size counts, thumbnail reads and all callbacks first.
+- Favorites: folders on a saved FTP server can be favourites (right-click in the FTP pane); any
+  favourite can be given its own name in the sidebar (right-click > Name in Sidebar...).
+- Fixed: 0.17.1 did not compile on High Sierra (crash-report call stack functions are now looked
+  up while running).
+
+NEW IN 0.17.1
+-------------
+- FTP: the program that talks to the server (curl) is run more carefully: it can no longer end Find
+  if it fails to start, stops early, or a read goes wrong - those now come back as an FTP-xx
+  error for that one file. [ ] { } in file names (common inside .app bundles) are sent as plain
+  characters (before, curl took them as a pattern).
+- If Find ever stops unexpectedly, the reason, where in the program, and what it was doing (e.g.
+  which file it was uploading) are saved; the next start offers the report (Copy Report).
+- Copies window: Stop now stops inside a folder (before the next file; the unfinished copy goes to
+  the Trash). The second bar is the single file being copied now (one file: one bar).
+- Glass: fixed - the panel under the glass was made "layer-backed", which stops macOS from blending
+  the desktop through (only plain grey showed). Settings warns if macOS "Reduce transparency" is on.
+- FTP: Copy in a local pane (or Finder) + Paste in an FTP pane uploads; Copy in an FTP pane + Paste
+  in a local pane downloads. Right-click > Paste (Upload Here) in the FTP list.
+- Network shares: the snapshot of every folder you go into is now kept also with the Date Added
+  column on (that used to switch it off) and between launches (Application Support/Find/
+  share-listings.json); folders opened with their triangle show the spinner too.
+- FTP: drag items onto a folder to put them in it (on the server, where allowed; never over a name
+  already there); New Folder (Shift-Cmd-N); columns sized like a local folder (Name takes the rest).
+- Codes: FTP-MOVE move refused; FTP-MKD new folder refused; NET-SNAP snapshots not saved.
+- Sorting: "Keep Folders on Top" applies to Name and Kind only; by Date Modified, Date Added, Date
+  Created or Size, folders and files are sorted together.
+
+NEW IN 0.17.0
+-------------
+- Copies window: every copy, move, duplicate, compress, FTP upload/download, FTP delete and copy
+  queue job runs in the background and shows in a separate window (Window > Copies and Copy
+  Queue): overall and current-file bars, files x of y, bytes, speed, time left, Stop, and "Show
+  diagnostics" (remembered) with a time-stamped list of every step. The window you work in is never
+  blocked. It opens by itself when something takes more than a moment and closes when done.
+- Copy queue: the destination is shown and can be chosen (Choose...); the queue is listed in the
+  Copies window and a running job shows its progress there.
+- FTP: Cmd-Down opens a folder; rename in place (Return, or click a selected name again), for
+  folders too; folders can be deleted with everything in them where the server allows it (your own
+  folder) - the first refusal stops it and the rest stays; columns fit the pane; each folder's last
+  listing shows at once (also after restarting Find) and is checked quietly in the background
+  (spinner bottom right). Return now renames (as in Finder); Cmd-Down / Cmd-O / double-click open.
+- Network shares: folders you visited show at once for 1 day by default (was 10 minutes), with the
+  same spinner while checked.
+- Panes: the path bar has its own row on top; the buttons and search are on the row below.
+- Finish: Glass works (lighter material, thinner tint); all effects about twice as strong at the same
+  setting, Glass default 60. 0 still turns each off.
+- Photography filters: file types present in the folder only (with counts); clickable stars (Option-
+  click = exactly); colour-class dots (pick one or several). Sidecar filter removed.
+- Fixed: New Folder name field didn't show the typing; Settings > Photography text ran out of the
+  window; Save Windows as Workspace failed (SESS-03).
+- Codes: FTP-RMD folder delete refused; FTP-BIG folder too big to delete (over 50,000 items);
+  FTP-STOP stopped by you; FTP-CHECK delete done but not confirmed; FTP-MEM remembered FTP listings
+  could not be saved (nothing else affected).
+
+NEW IN 0.16.0
+-------------
+- FTP servers open as Find panes (any number), like folders: drag in to upload, drag out to
+  download (into any local pane or sidebar folder), right-click Rename (files) and Delete (files,
+  permanent, asks first), Cmd-R to refresh, Back/Up/path bar. The separate FTP window is gone.
+  Folders are never renamed or deleted on an FTP server; nothing there is ever overwritten.
+  Commands that would act on the local folder hidden behind an FTP pane are switched off there.
+- Keychain: passwords Find saves now allow macOS's connection helper too (no more "NetAuthSysAgent
+  wants to use..." per server). Settings > Network > Repair Keychain Access fixes ones saved earlier.
+- Photography mode "Subfolders": every picture in a folder tree in one grid, each caption naming
+  its subfolder; sidecars pair only within their own folder. Links to folders are not followed,
+  packages not entered.
+- Photography mode: arrow keys can move the thumbnails in whole rows with no scrolling animation
+  (Settings > Photography, on by default); the mouse and trackpad scroll smoothly as before.
+- The finish: Depth, Glow, Glass and Dim in Settings > Appearance (all 0 = exactly the earlier
+  look), with Test Drawing Speed. Same layout and sizes as before.
+- Named workspaces: Window > Save Windows as Workspace / Open Workspace / Delete Workspace.
+- Copy queue (File > Add to Copy Queue..., Window > Copy Queue): copies wait in a list, run one at a
+  time with Find's checked copy, never overwrite (skip or keep both, chosen when queued), pause and
+  resume safely, can start at a set time and wake the Mac for it (administrator password, asked by
+  macOS), keep the Mac awake while copying, and survive quitting Find. Find must be running.
+- Custom keys: Settings > Keys - any menu command's shortcut, and the Photography star / colour
+  class modifiers.
+- Codes: SESS-03 workspace not saved; FTP-RENAME rename refused; FTP-EXISTS name already there.
+
+NEW IN 0.15.0
+-------------
+- Find's own FTP connection (plain FTP, through the curl program that comes with macOS - nothing
+  installed). An ftp:// server (saved in the sidebar, or typed in the path field) opens in a Find
+  window of its own: browse, upload (drag in, or Upload...), delete files, download files.
+- Uploads never overwrite: the folder is listed first, a clash asks Keep Both / Skip / Stop; each
+  file's size on the server is checked after it arrives. Folders are created as needed.
+- Delete is for FILES only and is permanent (FTP has no Trash): a warning names the files, and its
+  main button is Cancel. Find never deletes, renames or moves a folder on an FTP server, and never
+  works around a refusal: what the server doesn't allow is reported (codes FTP-xx).
+- Downloads go to the folder of the Find pane you used last, through Find's usual checked copy.
+- The password goes to curl privately (not on the command line); saved ones stay in the Keychain.
+- FTP servers are not connected at start (they open when clicked).
+- Codes: FTP-06 server name not found; FTP-07 can't reach the server; FTP-09 not allowed there;
+  FTP-67 account or password refused; FTP-78 not on the server; FTP-28 server stopped answering;
+  FTP-25 upload refused; FTP-DELE delete refused; FTP-SIZE size check failed (incomplete);
+  FTP-DIR folders are never deleted; FTP-56 connection broke off.
+
+NEW IN 0.14.1
+-------------
+- Fixes the High Sierra compile error in 0.14.0 (ThemedUI.swift line 34).
+
+NEW IN 0.14.0
+-------------
+- Shares are recognised whatever macOS named their folder ("Share-1"), however the server is
+  named (its IP or its name), and when connected by Finder first: Find asks macOS where it
+  mounted the share, then checks the mount table. Shares macOS marks hidden are listed too.
+  If one still can't be told apart: code NET-ID-1 and Help > Network Report (new).
+- ftp:// addresses and saved FTP servers connect through macOS (read-only for now; Find's own FTP
+  connection with upload and delete is the next installment).
+- Sidebar order by dragging: favorites, servers, drives, shares, and whole sections.
+- Dialogs, Settings and Find's other windows follow the theme. Settings lists its sections down the
+  left. Return = main button; Esc = Cancel or Stop (never a button that changes files).
+- Photo Mechanic colour classes: Cmd-1..8 (Cmd-0 removes), written into Photo Mechanic's own
+  field (XMP-photomech:ColorClass) with the same copy-check-swap safety as ratings. Ctrl-0..5 for
+  stars. Settings > Photography: class names and colours. In Photography mode Cmd-1/2/3 set colour
+  classes, so switch views with the view buttons there.
+- Log codes: NET-ID-1 connected, but which mounted folder it is could not be told.
+
+NEW IN 0.13.0
+-------------
+- Find reopens its windows where and how they were when it was quit: position and size, display,
+  desktop (Space), panes (side by side or stacked, divider positions), tabs and the chosen tab,
+  view mode per pane, sidebar width or collapsed, Info panel, minimized, front-to-back order.
+  Saved when you quit, when you switch to another app, and a few seconds after moving or resizing
+  a window (so a crash or power cut loses little). A folder that no longer exists opens at the
+  nearest folder above it; a window from a display that's gone opens on the main display.
+  Settings > General turns it off. Desktops use the only (unofficial) way macOS offers; if a macOS
+  version refuses it, the window opens on the current desktop and the log says so (SESS-02).
+- Saved servers: a "Servers" section in the sidebar keeps your server addresses whether connected
+  or not, with the account and password saved in the Keychain so clicking one connects without
+  asking. "Connect when Find starts" (sidebar right-click menu, or Settings > Network > Saved
+  servers) connects those once when Find starts, silently, one after another; shares that are
+  already connected (by Find, Finder or anything else) are recognised and left alone, and new
+  windows never reconnect anything. A share that disconnects keeps its place under Servers.
+- Settings > Network lists the saved servers with Add, Edit, Remove and the start-up tick.
+- Log codes: SESS-01 windows could not be saved for next time; SESS-02 a window could not be put
+  on its desktop (it opened on the current one).
+
+NEW IN 0.12.0
+-------------
+- Connecting to a share shows a panel with a spinning wheel, the address and the seconds so far,
+  and a Stop Waiting button (the connection is left to finish or fail by itself).
+- Network folders open at once when you come back to them: the listing you saw is shown straight
+  away and checked against the server in the background, updating the list by itself only if
+  something changed (folders opened with the triangle too). Settings > Network sets how long
+  (default 10 minutes). Refresh (Cmd-R) always waits for the server.
+- Photography mode: star ratings (keys 0-5, or the Rate menu) and a metadata editor (caption,
+  headline, keywords, title, photographer, credit, copyright, event, location, city, state,
+  country, instructions, source, job ID), written so Photo Mechanic reads them: RAW files into
+  their XMP sidecar (the RAW is never changed), JPEG and TIFF inside as XMP and IPTC, PNG and HEIC
+  as XMP. Every write is done on a copy and checked before it replaces the file (see FILE SAFETY).
+  Photoshop files are not written yet (their picture data can't be fingerprinted). Undo works.
+- Search can look inside files: picture metadata (from the picture and its XMP sidecar - only
+  the metadata part is read, never the picture itself) and the text of PDFs and text documents
+  (txt, csv, rtf, html, xml, md, log ...; not Word or Pages). A file matches by name OR contents;
+  the other conditions still apply. "but not files containing" leaves files out by contents.
+  Text in the picture itself (recognising letters in the image) is not possible on High Sierra.
+
+TEST CHECKLIST FOR 0.11.3  (10 minutes - you need a server address you normally connect to)
+-------------------------
+[ ] 1  Click the path bar to type in it: the grey hint mentions network addresses.
+[ ] 2  With a share NOT connected, type \\<server IP>\<share> (e.g. \\192.168.1.10\Shoots) and
+       press Enter: the status line says "Connecting to ...", macOS asks for the password if
+       needed, then the pane opens the share. It appears in the sidebar.
+[ ] 3  Type \\<server IP>\<share>\<a folder>\<a subfolder>: that folder opens directly.
+[ ] 4  With the share now connected, type the same address again: it opens immediately (no
+       connecting, no password).
+[ ] 5  Type smb://<server>/<share> and //<server>/<share>: same result.
+[ ] 6  Type just the server IP (192.168.1.10): macOS shows the list of shares to choose from; after
+       choosing, the pane opens the share you picked.
+[ ] 7  Type a share name that doesn't exist on the server: a clear message, nothing else happens.
+       Type a folder that doesn't exist inside a real share: the share opens and a message says
+       that folder wasn't found.
+[ ] 8  Type a wrong IP (one with no server): after a while, "The server can't be reached" - and
+       Find keeps working meanwhile (other panes, scrolling) - no beach ball.
+[ ] 9  Ordinary paths still work: ~/Pictures, /Volumes/<drive>, a path pasted with quotes.
+[ ] 10 Cancel the password dialog: "Connecting was cancelled" (or a similar message), pane stays.
+
+NEW IN 0.11.3
+-------------
+- The path field takes network addresses, like the Windows Explorer address bar:
+  \\server\share\folder, \\192.168.1.10\Share, //server/share, smb://server/share/folder,
+  cifs://..., afp://..., nfs://..., and a bare IP address (macOS then asks which share).
+  A share that is already connected opens at once; otherwise Find connects first (macOS asks for
+  the password if needed, from the keychain when saved there) and then opens the folder you typed.
+  Connecting runs in the background. A server name needs \\ or smb:// in front, as in Explorer,
+  so an ordinary folder name is never mistaken for a server.
+
+TEST CHECKLIST FOR 0.11.2  (2 minutes)
+-------------------------
+[ ] 1  Click the search field and type one letter: the search options bar (where to search, kind
+       of match, More...) appears at once - nothing is searched yet.
+[ ] 2  Change the place to search and open More (kind, extensions, size...), type the rest of the
+       name, press Enter: the search runs with those settings. The button says "Search" before
+       the first search and "Search Again" after.
+[ ] 3  Type a letter, then delete it (or press Escape) without searching: the bar goes away again.
+[ ] 4  After a search, delete the text with Backspace: the results and the bar stay; the x in the
+       field (or Escape) closes the search and shows the folder again, as before.
+[ ] 5  Do 1-3 in a second pane: each pane's bar works on its own.
+
+NEW IN 0.11.2
+-------------
+- The search options appear as soon as you start typing in the search field, so you can set them
+  before the search starts. Typing alone never starts a search: Enter or the Search button does.
+
+TEST CHECKLIST FOR 0.11.1  (2 minutes, then the 0.11.0 list below)
+-------------------------
+[ ] 1  The build log shows the safety self-check with 57 passed (T-SAFE-56 is new: old logs are
+       removed, the log being written never is - checked inside the real, optimised app).
+[ ] 2  Open Find and leave it alone for at least a minute: no crash. (The start-up clean-up runs
+       20 seconds after opening; 0.11.0 crashed there.)
+[ ] 3  Settings > Storage & Maintenance: "Last clean-up" shows today with "at startup".
+[ ] 4  Click Clean Up Now twice in a row: a result each time, no crash.
+[ ] 5  Then continue with the 0.11.0 checklist below (it was cut short by the crash).
+
+NEW IN 0.11.1
+-------------
+- Fixed: Find crashed about 20 seconds after opening, in the automatic start-up clean-up (only
+  inside Find's own folders; no file of yours could be touched). Swift 4.1's optimiser
+  mis-compiled the way the clean-up steps were written (steps passed as closures that changed a
+  shared result). The clean-up is now written as plain step-by-step code. The Linux tests now also
+  run an optimised build made like the Mac app - that build reproduced the fault (an old log was not
+  removed) - and a new self-check, T-SAFE-56, runs that exact step inside the real optimised app at
+  every build.
+- The saved-preview size limit is now changed under a lock (it can be changed from Settings while a
+  clean-up runs in the background).
+
+TEST CHECKLIST FOR 0.11.0  (about 25 minutes)
+-------------------------
+Storage & Maintenance (Find > Settings, new tab)
+[ ] 1  The tab lists every store: saved previews, search indexes, temporary files, self-test
+       folders, logs, operation notes, and the memory caches - each with size, purpose, place,
+       how long it is kept and how it is cleaned. The total and the last clean-up are shown.
+[ ] 2  Change each control (automatic on/off, at start, at quit, schedule, temporary-file age, log
+       age, preview limit). Close and reopen Settings: each keeps its value; nothing else moved.
+       Turning "Clean up automatically" off greys out start / quit / schedule.
+[ ] 3  Clean Up Now: a one-line result appears; Last clean-up shows the time and "Clean Up Now".
+[ ] 4  Open a large PSD (Space) so a preview is saved. Clear All Disposable Caches, confirm: saved
+       previews go to 0; your settings, theme, window places and search indexes are unchanged.
+       The same PSD opens again (slower the first time, then fast).
+[ ] 5  Start a big copy, and while it runs click Clean Up Now: "not run: Find is busy" - it never
+       runs during a copy, move, rename, search or index build.
+[ ] 6  With a folder indexed: Delete and Rebuild Indexes, confirm: the Search Index tab opens and
+       rebuilds each folder. A folder on a share that isn't mounted is skipped and named.
+[ ] 7  Copy Report: paste into Notepad - numbered S0001... lines and an END line.
+[ ] 8  Help > Run Safety Self-Check: 56 checks pass (T-SAFE-50 to 55 are clean-up and recovery).
+Interrupted operation recovery
+[ ] 9  In a scratch folder, start copying something big to another drive and Force Quit Find
+       (Cmd-Option-Esc) half way. Start Find: a message says an unfinished copy went to the Trash.
+       The destination has no hidden ".find-partial" file; the original is untouched.
+Network shares (do these on an SMB share, ideally a scratch folder on it)
+[ ] 10 Open a big folder on the share, go into a subfolder and straight back: instant the second
+       time (Settings > Network: "Remember a network folder's listing"). Cmd-R reads it fresh.
+[ ] 11 Settings > Network: change each control, close and reopen: each keeps its value. The tab
+       lists the mounted shares with their addresses.
+[ ] 12 Browse a folder on the share, then pull the network cable / turn off Wi-Fi (or eject the
+       share in Finder). The pane says the share is not available - not "moved or deleted" - and
+       shows Reconnect. Find never beach-balls while this happens; other panes keep working.
+[ ] 13 Reconnect the network, click Reconnect: the share mounts (password asked if needed) and the
+       pane shows the folder again. Or mount it in Finder: the pane comes back by itself.
+[ ] 14 Settings > Network: untick "keep the window where it was" and repeat 12: the pane goes to
+       your home folder instead.
+[ ] 15 Search a big folder on the share and disconnect half way: the search ends INTERRUPTED -
+       CONNECTION LOST with the results so far; Details names the share and counts what wasn't
+       searched. Search a share that isn't mounted (type its path): UNAVAILABLE.
+[ ] 16 Search a folder containing a folder you have no permission for: INCOMPLETE - PERMISSION.
+[ ] 17 Folder sizes on, open a folder on the share: no folder sizes are counted there (unless you
+       tick "Calculate folder sizes on network shares too").
+Advanced
+[ ] 18 Settings > Advanced: memory and processor time update every 2 seconds while the tab is
+       shown. Debug logging on/off keeps its value. Copy Diagnostics: numbered D0001... lines.
+       Show Logs Folder opens the logs in a Find window.
+[ ] 19 Leave Find idle for a minute with Activity Monitor open: Find uses 0% CPU.
+
+NEW IN 0.11.0  (Phases 5 and 6: storage and maintenance, network)
+--------------
+- Settings > Storage & Maintenance: every file Find keeps for itself, with size, purpose,
+  location, retention and clean-up. Automatic clean-up (at start, at quit, on a schedule; each can
+  be turned off) removes old temporary files and self-test folders, index files of folders no
+  longer indexed, unfinished preview files, previews over the size limit and old logs. Clean Up
+  Now, Clear All Disposable Caches (disk and memory; settings, themes, indexes and logs kept),
+  Delete and Rebuild Indexes, Copy Report. Clean-up never runs during a copy, move, rename,
+  search or index build, and only ever touches Find's own folders (proved by new self-checks).
+- Interrupted operations: hidden temporary items in your folders are noted before they exist; an
+  interrupted copy/save/batch rename is put right at the next start (names back, unfinished copies
+  to the Trash) and you are told.
+- Settings > Network: remember network folder listings for a short time (unchanged folders open
+  instantly; Refresh always reads fresh), folder sizes on shares off by default, how many folders a
+  share search reads at once, what to do when a share disconnects.
+- Disconnected shares: the pane says so plainly, keeps your place and offers Reconnect; it comes
+  back by itself when the share is mounted again. Searches end in one of six states: COMPLETE,
+  STOPPED, INTERRUPTED - CONNECTION LOST (the search stops at once instead of waiting on every
+  folder), UNAVAILABLE, INCOMPLETE - PERMISSION, INCOMPLETE.
+- Nothing waits for a server on the window's own thread any more: the volume list, sidebar icons,
+  item icons on shares, folder watching and drag-and-drop decisions no longer ask a server
+  anything there, so a share that stops answering can't freeze Find.
+- Settings > Advanced: debug logging, resource monitor (memory, processor time, what Find is busy
+  with, caches), Copy Diagnostics, Show Logs Folder. Settings window made wider for the new tabs;
+  the saved-preview line moved from General to Storage & Maintenance.
+
+TEST CHECKLIST FOR 0.10.3  (5 minutes - use a scratch folder with copies of a few files)
+-------------------------
+[ ] 1  Repeat what crashed: two panes, make a new folder in one, Option-drag a selection from the
+       other pane onto it and drop. The files are copied; Find keeps running.
+[ ] 2  Option-drag files over a folder row in the list and hold still until the folder opens by
+       itself: it opens normally (NOT every subfolder inside it). Drop: copied.
+[ ] 3  Expand a few folders with their triangles, then drop files into one of them from another
+       pane (with and without Option). The list reloads with the same folders open; no crash.
+[ ] 4  Option-click a folder's triangle (contents not yet opened): it and all its subfolders open.
+[ ] 5  Close it, open it once normally, close it, then Option-click the triangle again (contents
+       already read): all subfolders open, no crash.
+[ ] 6  Select a folder, Option-Right arrow: all its subfolders open. Option-Left: all close.
+XMP sidecars travel with their pictures (Photography view only)
+[ ] 7  In a scratch copy of a shoot with NEF + JPG + .xmp files: switch to Photography view, select
+       a few NEF+JPG pairs (the .xmp files are not shown) and drag them to another pane's folder.
+       Look in both folders in list view: the .xmp files moved too.
+[ ] 8  Same with Move to Other Pane (F6), Copy to Other Pane (F5), and Cmd-C then Paste / Move Here:
+       the sidecars go along each time (copied for a copy, moved for a move). Edit > Undo brings
+       pictures and sidecars back together.
+[ ] 9  Move ONLY the JPG of a NEF+JPG pair: the .xmp stays with the NEF, and a note says so.
+[ ] 10 In list view or plain thumbnail view nothing extra is moved: only what you selected.
+
+NEW IN 0.10.3
+-------------
+- Fixed a crash ("FileNode should not be expanded already") when Option-dragging files into a
+  folder. When Find re-opened folders after a reload, or macOS opened a folder you hovered over
+  during a drag, a held Option key was taken as "open all subfolders", which told the same folder
+  row to expand again while it was still expanding. Find's own expansions now ignore Option, never
+  expand a row that is expanding, and Option during a drag only means copy. The same crash could
+  also happen on an Option-click of a triangle whose folder had been opened before; fixed too.
+- New: in Photography view, moving or copying pictures takes their XMP sidecars along (they are
+  hidden there, so they could not be selected). DSC_1.xmp belongs to DSC_1.NEF and DSC_1.JPG;
+  DSC_1.NEF.xmp to DSC_1.NEF only; upper-case .XMP too. A move takes a sidecar only when all of its
+  pictures move - moving just the JPG leaves the .xmp with the NEF (you get a note). Works for
+  dragging, F5/F6, Cmd-C + Paste / Move Here and Move To / Copy To. Same safe copy/move: never
+  overwrites, asks about name clashes, one Undo puts everything back. Dragging out to Finder
+  still takes only the pictures.
+
+TEST CHECKLIST FOR 0.10.2  (about 10 minutes - use a scratch folder with copies of a few files)
+-------------------------
+First row
+[ ] 1  Open five or six folders you have NOT visited before (double-click, sidebar, path field):
+       the first item is fully visible directly under the column headings every time.
+[ ] 2  In a long folder, arrow down past the bottom, then hold the up arrow back to the top: the
+       first item ends fully visible under the headings, not hidden behind them.
+[ ] 3  Scroll half way down a folder, open a subfolder, go back: still the same position.
+Drag and drop - list view
+[ ] 4  Drag a file by its name or icon onto a folder row: the folder row lights up; drop: the file
+       moves into it (same drive). Edit > Undo puts it back.
+[ ] 5  Select several files, drag them by one of their names onto a folder: all of them move.
+[ ] 6  Hold Option while dropping: the files are COPIED instead (the pointer shows a green +).
+[ ] 7  Drag files onto the empty part of another pane (Ctrl-Cmd-2 for a second pane): the whole
+       pane lights up and they go into that pane's folder. Both panes update.
+[ ] 8  Drag files onto a place in the sidebar (a favourite, Desktop, a drive): they go there.
+       Onto another drive or a server: they are COPIED (originals stay), as in Finder.
+[ ] 9  Drag a folder onto itself or onto one of its own subfolders: nothing lights up, nothing happens.
+[ ] 10 Drop where a file of the same name exists: Keep Both / Skip / Replace / Stop is asked first.
+[ ] 11 Drag a file from Finder into a Find pane: it is moved/copied by Find the same way.
+       Drag a file from Find to Finder or the desktop: it is copied.
+[ ] 12 Drag from the empty space to the right of a name: rows are selected (no files dragged).
+Drag and drop - Photography (thumbnail) view
+[ ] 13 Press on empty space between thumbnails and drag: a selection rectangle selects every
+       picture it touches. Command or Shift while starting: adds to the current selection.
+[ ] 14 Drag one thumbnail onto a folder thumbnail, a sidebar place or another pane: it moves there.
+[ ] 15 Select a range (Shift-click or rectangle), then drag any one of the selected thumbnails: the
+       whole selection goes along. A plain click (no drag) on one of them selects just that one.
+Rename must not start from a drag
+[ ] 16 Click a file once (it becomes the only selection). Press on its name again and drag it
+       somewhere: it is dragged, and NO rename field appears afterwards. Same in Photography view.
+[ ] 17 Click the selected name again and wait a second without moving: rename starts (as before).
+       Press and hold on the name for more than a second without letting go: no rename.
+
+NEW IN 0.10.2
+-------------
+- Fixed (properly this time): the first item hidden under the column headings. 0.10.1 only fixed
+  coming back to a folder. Opening a NEW folder used the system's "scroll row 0 into view", which
+  on High Sierra counts the strip under the headings as visible and so parked the first row behind
+  them. The list now does all its own scrolling (opening folders, arrow keys, clicking, selecting,
+  returning) and measures how much of the list the headings cover.
+- New: drag and drop of files everywhere - from the list or the thumbnails onto folders (in the
+  list, the thumbnails, other panes, the sidebar), and to/from Finder. Same drive = move, other
+  drive = copy, Option = copy, Command = move. It uses the same safe copy/move as Paste: never
+  overwrites, asks about name clashes, a cross-drive move keeps the verified copy and puts the
+  original in the Trash, Undo works.
+- New: selection rectangle in Photography view (drag from empty space).
+- Fixed: pressing on an already-selected name and dragging could start renaming afterwards.
+  Any drag now cancels the pending rename, and it never starts while the button is still held.
+
+TEST CHECKLIST FOR 0.10.1  (2 minutes)
+-------------------------
+[ ] 1  Open several folders you have visited before, and some new ones, and go back up: the first
+       item is always fully visible under the column headings (no need to scroll up).
+[ ] 2  Scroll half way down a folder, open a subfolder, go back: still the same position.
+
+NEW IN 0.10.1
+-------------
+- Fixed: folders opened with the first item hidden under the column headings. Coming back to a
+  folder clamped the remembered position to 0, but with the headings over the list the top is
+  one heading-height above 0.
+
+TEST CHECKLIST FOR 0.10.0  (about 15 minutes)
+-------------------------
+[ ] 1  Home folder in the list: every name sits centred in its row, none cut off at the top.
+       Scroll, change the font size in Settings > Appearance, and check again.
+Compare Folders
+[ ] 2  Open two panes on two copies of a shoot (e.g. card copy vs backup). File > Compare Folders
+       (Ctrl-Cmd-K): a window lists what is only in the left, only in the right, and different
+       (size or date). The filter shows each group; "Same" and "Everything" too.
+[ ] 3  Tick "Compare contents byte for byte" and Compare again: files with the same size and date
+       but different contents show as "Different (contents)". Stop interrupts a long run.
+[ ] 4  Double-click a row: the pane goes to that item and selects it. Copy Report: plain numbered text.
+[ ] 5  With only one pane, Compare Folders asks which folder to compare with.
+Find Duplicates
+[ ] 6  File > Find Duplicates: choose a minimum size, Find Duplicates. Groups of identical files
+       appear, biggest waste first, with the space in extra copies.
+[ ] 7  "Select Extra Copies (keep oldest)" selects all copies but the oldest in each group.
+       Move Selected to Trash asks first, then moves them; Edit > Undo puts them back.
+[ ] 8  Select every copy of one file and try Move to Trash: Find refuses (one copy always stays).
+[ ] 9  With two panes open, "Also search the other panes' folders" finds duplicates across both.
+If anything fails: Help > Copy Current Log to Clipboard, AutoType it, and tell me the step number.
+
+NEW IN 0.10.0  (Phase 4c: compare and duplicates)
+---------------
+- Compare Folders (Ctrl-Cmd-K): this pane's folder against the next pane's (or a chosen one), with
+  or without subfolders; size and date, or contents byte for byte. Read-only.
+- Find Duplicates: same size -> quick hash of start and end -> full hash -> byte-for-byte check, so
+  only truly identical files are listed. Moving extra copies to the Trash asks first, never removes
+  the last copy, and is undoable.
+- Fixed: some list rows could draw their names too high (cut off) when a new row was made at one
+  height and then given the real row height.
+
+TEST CHECKLIST FOR 0.9.0  (about 20 minutes)
+------------------------
+Fixes
+[ ] 1  Photography Mode: a clear blue frame around the thumbnail area.
+[ ] 2  Up to 6 panes.
+[ ] 3  Each pane has small arrows at the bottom right: they move the pane one place left/right
+       (up/down when stacked), keeping the pane widths. Also Window > Move Pane Left/Right.
+[ ] 4  A fresh list shows only Modified and Size next to Name (right-click the column header to
+       add others back).
+[ ] 5  Next to the side-by-side button there is a stacked one (box with a horizontal line): it opens
+       a pane and stacks the panes top to bottom. The side-by-side button puts them back next to
+       each other (they still stack by themselves if the window is too narrow). Window > Arrange
+       Panes Side by Side / Stacked switch without opening a pane.
+[ ] 6  Path bar: folder names show in full when there is room; only when space runs out are they
+       shortened (in the middle).
+[ ] 7  Space on a multi-page PDF: page 1 at the top; the scroll bar matches the theme.
+[ ] 8  Drag-select: press in the empty space to the right of a name (or on a Size/Date) and drag
+       down: every row you pass is selected. Pressing on the name or icon and dragging still drags
+       the files.
+[ ] 9  Option-click a folder in the list or the grid: it opens in a new pane. Option-click the
+       triangle in front of a folder still opens all its subfolders.
+Batch rename (Phase 4b)
+[ ] 10 Select several files, press Return (or right-click > Rename N Items...). Try each mode:
+       Replace Text, Add Text, Format (e.g. Wedding_001...), Change Case, and the extension choice.
+       The list shows every "Now -> Becomes" as you type.
+[ ] 11 Make two files get the same name, or a name that already exists in the folder: they are
+       marked in red and Rename stays off until fixed.
+[ ] 12 Rename: all files renamed and selected. Edit > Undo: all back in one step; Redo: renamed again.
+[ ] 13 Help > Run Safety Self-Check: 50 checks pass (T-SAFE-44 to 49 are batch rename).
+If anything fails: Help > Copy Current Log to Clipboard, AutoType it, and tell me the step number.
+
+NEW IN 0.9.0  (Phase 4b: batch rename)
+--------------
+- Batch rename with live preview: replace text, add text, name + number, change case, extension
+  case. Checked first (invalid names, duplicates, existing files). Runs in two steps through
+  temporary names with the no-overwrite rename, so swaps and case-only changes are safe; any
+  failure puts every item back. One Undo for the whole batch.
+- Pane arrows, stacked layout button and menu items, up to 6 panes, Option-click folders into a
+  new pane, drag-select from the empty part of rows, full path names, Modified + Size default
+  columns, PDF previews at page 1 with a themed scroll bar, visible Photography outline.
+
+TEST CHECKLIST FOR 0.8.0  (about 20 minutes)
+------------------------
+Panes
+[ ] 1  Click the split-box button (next to the view buttons): a second pane opens beside the first,
+       at your start folder, in the same window (the window keeps its size if both fit). Each pane
+       has its own path bar, search field and view buttons. Option-click the button: the new pane
+       opens at the same folder.
+[ ] 2  Option-click a folder or drive in the sidebar: it opens in a new pane. Right-click a folder
+       > Open in New Pane also works. Up to 4 panes.
+[ ] 3  Drag the divider between two panes: each is resized side to side. Make the window narrow:
+       the panes stack on top of each other (equal heights, no vertical dragging); widen it again:
+       side by side.
+[ ] 4  Click in a pane: its top bar gets a blue line; the window title, the sidebar highlight
+       and the inspector (Option-Cmd-I) follow it. Showing the inspector widens the window
+       instead of squeezing the panes; hiding it gives the width back.
+[ ] 5  Tab moves between panes. F5 copies, F6 moves the selection into the next pane's folder.
+[ ] 6  The circled x at the top right of a pane closes it (Ctrl-Cmd-W too). Cmd-W closes a tab;
+       the last tab closes the pane; the last pane closes the window.
+Sidebar, rename, keyboard
+[ ] 7  Drag the sidebar divider to the far left: the sidebar collapses; drag it back to open it.
+       Option-Cmd-S hides and shows it.
+[ ] 8  Click a selected file's name once more and wait: after about a second it becomes editable.
+       A double-click never starts a rename (it opens). Same in the grid.
+[ ] 9  Hold Down (and Up) in a long folder: the selection never leaves the view; one more row
+       is always visible ahead of it.
+Network speed
+[ ] 10 Open the slow folders on the network share again (many folders, many big files): they
+       should appear much faster. The build's Photo Metadata Self-Test now compares the fast
+       listing with the old one (T-LIST lines).
+Preview and windows
+[ ] 11 Space on a folder, an app and an InDesign document: a small glance card (icon, name,
+       kind, size, dates, location); folder sizes fill in after a moment.
+[ ] 12 Space on a multi-page PDF: it opens at page 1.
+[ ] 13 Select 5 files, Cmd-I: the Info windows line up from the top left, side by side, then the
+       next row below. Cmd-W closes them one at a time. Cmd-W also closes Compare.
+Photography
+[ ] 14 Photography Mode: the thumbnail area has a blue outline. Contact Sheet and Compare are
+       real buttons; no "54 of 54" tally. Your contact sheet PDFs appear among the pictures.
+[ ] 15 Compare 4 JPEGs and 2 PSDs: pictures appear right away (the grid's thumbnails), then sharpen.
+If anything fails: Help > Copy Current Log to Clipboard, AutoType it, and tell me the step number.
+
+NEW IN 0.8.0  (Phase 4a, redone: panes in one window)
+--------------
+- Panes inside one window, replacing 0.7.0's paired windows: one sidebar, one inspector (right
+  edge, follows the focused pane), up to 4 panes, each with its own tabs, path bar, search,
+  view buttons and status bar. Side by side when they fit (minimum width = 10 characters of a
+  name plus the visible columns at their narrowest), stacked otherwise; widths drag, heights don't.
+- Sidebar collapses (drag or Option-Cmd-S). Click-again rename. One row of look-ahead.
+- Fast folder listing with getattrlistbulk: hundreds of items per request to the server instead of
+  one per item, Date Added included. Every record is checked; if one doesn't add up, Find falls back
+  to the classic way for the session and logs it.
+- Glance card for folders, apps and documents; PDFs start at page 1; Get Info windows tile;
+  Cmd-W closes any window; faster Compare; Photography Mode outline, real buttons, contact sheets
+  shown, tally removed.
+
+TEST CHECKLIST FOR 0.7.0  (about 10 minutes; do the 0.6.1 list below first)
+------------------------
+[ ] 1  Window > Dual Pane (Ctrl-Cmd-2): this window fills the left half of the screen and a second
+       window, at the same folder, the right half.
+[ ] 2  Tab jumps between the two panes (also Window > Go to Other Pane). In a text field
+       (search, rename) Tab still behaves normally.
+[ ] 3  In the right pane open another folder. In the left pane select a few files and press F5
+       (or File > Copy to Other Pane, or right-click): they are copied there and selected in the
+       right pane. Name clashes ask Keep Both / Skip / Replace as usual. Cmd-Z undoes.
+       (If F5 controls the keyboard brightness, use fn-F5, or the menu.)
+[ ] 4  F6 moves instead of copies. Across drives: copied, checked, then the originals go to Trash.
+[ ] 5  Window > Show Same Folder in Other Pane, and Swap Panes, do what they say.
+[ ] 6  Copying a folder into a folder inside itself is refused with a message.
+[ ] 7  Close one pane: the other carries on as a normal window; Dual Pane pairs it again.
+If anything fails: Help > Copy Current Log to Clipboard, AutoType it, and tell me the step number.
+
+NEW IN 0.7.0  (Phase 4a: dual pane)
+--------------
+- Dual pane as two paired windows side by side, each half of the screen. Tab switches;
+  F5 copies and F6 moves into the other pane's folder (same safe copy/verify/no-overwrite path,
+  undoable); Show Same Folder in Other Pane; Swap Panes.
+
+TEST CHECKLIST FOR 0.6.1  (about 15 minutes)
+------------------------
+[ ] 1  Rename in place: select a file, press Return. The name becomes editable right there, with
+       the part before the extension selected. Type, press Return: renamed. Escape cancels;
+       clicking elsewhere keeps the new name. Same in the thumbnail grid. New Folder
+       (Cmd-Shift-N) opens its name for editing at once. Undo (Cmd-Z) still works.
+[ ] 2  Hold Down in a long folder (local and on the network share): the list moves smoothly on
+       every key repeat; the status bar and inspector catch up when you let go.
+[ ] 3  Scroll halfway down a folder, open a subfolder, go back up (Cmd-Up or Back): the list is
+       exactly where it was. Same in the thumbnail grid.
+[ ] 4  Right-click: "Compress", "Preview", "Quick Look", "Copy" without the file name
+       (several items: "Compress 3 Items").
+[ ] 5  Grid: long names wrap onto up to 3 lines, readable, then end with "...".
+[ ] 6  The view buttons (list, thumbnails, camera = Photography Mode) are in the top bar next to
+       the search field. Cmd-1 / 2 / 3 still work and the buttons follow.
+[ ] 7  Space on a PSD or PSB: Photoshop's small thumbnail shows at once ("quick thumbnail"),
+       the sharp picture follows. Space on the same file again later: sharp at once
+       ("saved preview"). Settings > General shows the saved previews and a Clear button.
+[ ] 8  Space on a portrait PDF: the window takes the page's shape and shows the whole page.
+       The next photo goes back to your usual window size.
+[ ] 9  Contact Sheet: choose Columns and Rows. Long names wrap fully under each picture (the
+       pictures get smaller where needed). A one-picture sheet says "1 picture". The PDF opens
+       in Adobe Acrobat by itself.
+[ ] 10 Compare opens filling the screen.
+[ ] 11 Sidebar: an eject symbol at the end of each external drive and network share; click it
+       (or right-click > Eject). A Find window showing that drive goes to your home folder first.
+       If macOS refuses (the drive is in use), Find says so.
+If anything fails: Help > Copy Current Log to Clipboard, AutoType it, and tell me the step number.
+
+NEW IN 0.6.1
+------------
+- Rename in place (Return), in the list and the grid, like Finder. New folders open for naming.
+- Smooth key repeat: colour tags are read in the background; status, inspector and grid follow
+  when the selection pauses; dotted folder names no longer trigger a disk check each.
+- Coming back to a folder restores its scroll position.
+- Shorter right-click labels. Grid names wrap to 3 lines.
+- View buttons in the top bar.
+- Photoshop previews: instant small thumbnail, sharp picture after; the sharp preview is saved
+  (~/Library/Caches/Find/Previews, up to 1 GB, oldest removed first, Clear in Settings) so the next
+  look is instant. Large TIFFs (50 MB+) are treated the same. Neighbouring Photoshop files are
+  never read ahead.
+- PDF previews take the page's shape.
+- Contact sheets: columns and rows, full wrapped names, opened in Acrobat, "1 picture".
+- Compare fills the screen. Check Sidecars removed (badges and the sidecar filter stay).
+- Eject volumes from the sidebar.
+
+TEST CHECKLIST FOR 0.6.0  (about 20 minutes; do the 0.5.1 list below first if not done yet)
+------------------------
+[ ] 1  View > as Thumbnails (Cmd-2) in a folder of RAW files: a grid appears; thumbnails fill
+       in quickly, sharp, portrait shots upright. Scroll through a large folder: smooth.
+       Cmd-1 goes back to the list. Find remembers the view you used last.
+[ ] 2  The slider in the bar (or Cmd-= / Cmd-minus) changes the thumbnail size.
+[ ] 3  In the grid: click, Cmd-click, Shift-click and arrow keys select; double-click or Cmd-Down
+       opens; Return renames; Space previews; right-click gives the usual menu; Cmd-A selects all.
+       Switch to the list: the same items are selected.
+[ ] 4  View > Photography Mode (Cmd-3): only folders and pictures; .xmp files are hidden and their
+       pictures show "XMP". Stars and labels from your sidecars (e.g. Photo Mechanic ratings)
+       appear under the pictures as details are read ("reading details 120/400" in the bar).
+[ ] 5  Filters: Format "RAW"; Rating "3 stars or more"; Label "Red"; Sidecar "Missing sidecar";
+       and type a camera or lens (e.g. "Z 8" or "24-120"). The bar says "N of M pictures".
+       Change a rating in Photo Mechanic, come back and press Cmd-R: the new rating shows.
+[ ] 7  Select 2 to 4 pictures > Compare (bar, File menu or right-click): side by side, each with
+       camera, lens, focal length, aperture, shutter, ISO and rating.
+[ ] 8  Contact Sheet...: choose pictures across, paper and title; a PDF appears in the folder and
+       is selected. Open it in Preview: names (and settings) under each picture, page numbers.
+       Make it again: the second one is "... Contact Sheet 2.pdf" (nothing overwritten).
+       Edit > Undo moves the new PDF to the Trash.
+[ ] 9  Search results also show as thumbnails in Cmd-2 / Cmd-3.
+[ ] 10 Help > Run Safety Self-Check (44 checks) and Run Photo Metadata Self-Test pass.
+If anything fails: Help > Copy Current Log to Clipboard, AutoType it, and tell me the step number.
+
+NEW IN 0.6.0  (Phase 3b: photography)
+--------------
+- Thumbnail view (Cmd-2): only the thumbnails on screen are loaded, RAW from the embedded camera
+  preview. Thumbnails are kept in memory only. Selection is shared with the list.
+- Photography Mode (Cmd-3): pictures and folders only, sidecars shown as an XMP badge, star
+  ratings and labels (sidecar first, then embedded), filters for format, rating, label, sidecar
+  and camera/lens. Details are read once per file and remembered until the file or its sidecar
+  changes; macOS reads what it can, ExifTool reads the rest in batches of 50.
+- Compare: 2 to 4 pictures side by side with their camera settings.
+- Contact Sheet: PDF with 2 to 10 pictures across on Letter, A4 or Tabloid, names and settings,
+  header and page numbers. Saved as a new file only: written under a hidden temporary name, read
+  back to check, then given its name without overwriting anything. Undo moves it to the Trash.
+- Find still never writes into your pictures or sidecars: ratings and labels are only read.
+
+TEST CHECKLIST FOR 0.5.1  (about 10 minutes)
+------------------------
+[ ] 1  Select a NEF and press Space: Find's Fast Preview opens almost at once. The caption says
+       "embedded camera preview". Space or Escape closes it.
+[ ] 2  With it open, hold Down to run through a shoot: each picture appears immediately (the next
+       ones are prepared ahead). Up goes back. Typing, Space and Escape still work in the list,
+       because the preview window never takes the keyboard.
+[ ] 3  A portrait (vertical) RAW shows upright. A JPEG, TIFF and PSD also preview.
+[ ] 4  Option-Space (or double-click the picture) fills the screen; again to go back. Move and
+       resize the preview window: it opens there next time.
+[ ] 5  A PDF scrolls through its pages, a text file shows its text, a video plays. Other files
+       show their system thumbnail; Cmd-Y (File > Quick Look (macOS)) still opens Apple's Quick Look.
+[ ] 6  Settings > General > "Space bar opens macOS Quick Look instead": Space now opens Apple's
+       Quick Look. Untick it again.
+[ ] 7  Cmd-I on a JPEG and a NEF: the Get Info window shows the picture, the file facts, the photo
+       details and a Copy Info button. Cmd-I on a folder counts its size.
+[ ] 8  Section headings in the inspector and Get Info: regular weight, white, a size above the rows.
+[ ] 9  Right-click a few files > Copy Info as Text (also Edit menu, Ctrl-Cmd-C); paste into
+       TextEdit: numbered plain lines (L0001 ...) for all of them, ending with a total line.
+       The status bar says "Copied info for N items".
+[ ] 10 Help > Run Photo Metadata Self-Test passes (now including the embedded-preview checks).
+If anything fails: Help > Copy Current Log to Clipboard, AutoType it, and tell me the step number.
+
+NEW IN 0.5.1
+------------
+- Fast Preview (Space): Find's own preview window, much quicker than Quick Look for photos.
+  RAW files show the camera's embedded JPEG (read straight from the file, the way Photo Mechanic
+  does, never developed); other images are decoded at screen size; the next two and the previous
+  picture are prepared in the background. PDFs, text and video/audio get light built-in viewers.
+  Previews are kept in memory only (the last 12), so there is nothing on disk to clean up.
+  Apple's Quick Look is still on Cmd-Y, and Settings can make Space open it instead.
+- Get Info (Cmd-I) now shows the same contents as the inspector: preview, photo details, Copy Info.
+- Copy Info as Text on the right-click and Edit menus (Ctrl-Cmd-C), for one or many items.
+- Inspector headings are no longer bold or blue: regular weight, text colour, slightly larger.
+- Thumbnails of JPEGs are decoded from the image itself; before, macOS could hand back the
+  small thumbnail stored inside the file, which looked soft.
+
+TEST CHECKLIST FOR 0.5.0  (about 15 minutes)
+------------------------
+[ ] 1  Select a JPEG and press Space: the native Quick Look panel opens. Space again closes it.
+       Escape also closes it.
+[ ] 2  With Quick Look open, press Down / Up: the selection moves in the list and the preview
+       follows. Try a NEF or DNG, a PSD, a PDF and a video: each previews as it does in Finder.
+[ ] 3  Select several photos and press Space: the panel steps through them with Left / Right,
+       and its index-sheet and full-screen buttons work. Cmd-Y and right-click > Quick Look also work.
+[ ] 4  View > Show/Hide Inspector (Option-Cmd-I): the panel appears on the right with a preview
+       and FILE facts at once (name, extension, kind, size, full path, dates, permissions);
+       owner, tags and Date Added fill in a moment later. Hide it: the list takes the space back.
+       Quit and reopen Find: the inspector is as you left it.
+[ ] 5  Select a RAW file from one of your shoots: IMAGE (dimensions, megapixels, aspect, profile),
+       CAMERA (make, model, lens, focal length, aperture, shutter, ISO, exposure comp.) and, when
+       present, LOCATION and DESCRIPTION (rating, keywords, creator, copyright). Compare a few
+       values with Photo Mechanic.
+[ ] 6  A RAW file with an .xmp sidecar (e.g. rated in Photo Mechanic or Capture One): a SIDECAR
+       section shows its rating, label and keywords. A RAW without one says "None found".
+[ ] 7  Arrow quickly down through a folder of 200+ RAW files with the inspector open: the list
+       stays smooth; the inspector catches up when you stop. Go back to a file you saw: it shows
+       instantly (not read again).
+[ ] 8  Nothing selected: the inspector describes the folder you are in. Several selected: counts,
+       total size and kinds.
+[ ] 9  Copy Info, paste into TextEdit: plain numbered lines (L0001 ...) ready for AutoType.
+       "All Metadata (ExifTool)" lists every tag of the selected file (takes a second or two).
+[ ] 10 A Z8 (or other recent body) NEF, or a CR3: if High Sierra can't read it, the sections are
+       labelled "(via ExifTool)" and show the camera, lens and exposure anyway.
+[ ] 11 Help > Run Photo Metadata Self-Test passes. (The build also ran it: PHOTO METADATA TEST
+       in build-log.txt.)
+If anything fails: Help > Copy Current Log to Clipboard, AutoType it, and tell me the step number.
+
+NEW IN 0.5.0  (Phase 3a: preview and inspection)
+--------------
+- Quick Look: Space (or Cmd-Y, or right-click > Quick Look) opens the native macOS Quick Look
+  panel, the same one Finder uses, with the same previews, full screen and index sheet.
+  Up/Down move through the list while it is open. Quick Look keeps its own preview cache inside
+  macOS; Find adds no preview cache, so there is nothing extra to clean up.
+- Inspector (View > Show/Hide Inspector, Option-Cmd-I): preview, file facts at once, then photo
+  metadata in the background using macOS's own ImageIO (EXIF, IPTC, embedded XMP, GPS) and the
+  XMP sidecar next to a RAW file. Metadata is read only while the inspector is open, only after
+  the selection settles, and never twice for an unchanged file. Copy Info gives plain numbered
+  text.
+- ExifTool 13.64 is bundled inside Find.app (about 13 MB, run by macOS's own Perl). Find uses it
+  automatically when High Sierra can't read a file's details (newer RAW bodies such as the Z8,
+  Canon CR3), and for "All Metadata". It is only ever run read-only: fixed arguments with no
+  write options, and no personal ExifTool settings file is loaded. ExifTool is by Phil Harvey,
+  free software under the same terms as Perl; its licence is in Resources/exiftool/LICENSE.
+- Phase 3b next: thumbnail grid and contact sheet, photography mode, missing/orphaned sidecar
+  checks, rating and metadata filters, side-by-side comparison.
+
+TEST CHECKLIST FOR 0.4.1  (about 5 minutes)
+------------------------
+[ ] 1  On a network share, open a folder and make a New Folder (Cmd-Shift-N). The folder
+       appears, Find stays in the folder you were in, and there is no "moved or deleted" message.
+       Rename it and move it to the Trash: same, no false message.
+[ ] 2  Do the same in a local folder: same result.
+[ ] 3  In Finder, rename the folder Find is showing (a local test folder). Within about a
+       second Find says it was moved or deleted and goes up to its parent. This message
+       now only appears when the folder is really gone.
+[ ] 4  Help > Run Safety Self-Check: 40 checks pass (T-SAFE-35 to 39 are the new ones).
+If anything fails: Help > Copy Current Log to Clipboard, AutoType it, and tell me the step number.
+The log has a "WATCH ... result ..." line for every delete/rename signal macOS sends, so a
+false alarm on a share shows up as "result still-there".
+
+NEW IN 0.4.1
+------------
+- Fixed: on network shares, making a new folder (or other changes) could show "The folder
+  ... was moved or deleted" and jump to the parent, though nothing had happened. Shares send
+  macOS "deleted/renamed" signals for ordinary changes, and Find believed them. Nothing on disk
+  was affected; Find only navigated away. Now each signal is checked on the disk: Find leaves
+  a folder only if it is missing twice, a second apart. If the share can't be reached, Find
+  stays and shows "Can't open this folder" instead. A folder that sends 3 false signals in
+  10 seconds stops being watched; use View > Refresh (Cmd-R) to update it.
+
+TEST CHECKLIST FOR 0.4.0  (about 15 minutes)
+------------------------
+[ ] 1  Similar names: Cmd-F, set the match menu to "Name is similar to (allows typos)", search a
+       name you know with one letter wrong or two letters swapped (e.g. "weding" for "wedding").
+       It is found; the Match column says "1 typo". Sort by Match: exact matches first.
+[ ] 2  Similar names, sensible limits: a 3-letter word with a typo ("cat" for "cut") finds
+       nothing; accents and _ - . are ignored ("cafe menu" finds "Cafe_Menu.pdf").
+       Several words in any order work ("smith wedding" finds "Wedding_Smith.jpg").
+[ ] 3  Settings > Search Index > Add Folder: pick a big local folder you search often.
+       It builds with a progress line and then shows items, folders, size on disk, date.
+[ ] 4  Search inside that folder (Use index ticked). It is faster than before. Click
+       "Search details": the method says "index", with how many folders came from the index.
+[ ] 5  In Finder, add a file, rename one and delete one inside the indexed folder. Search again
+       in Find: the new and renamed files are found, the deleted one is not. The details say a
+       few folders were "read from disk".
+[ ] 6  Untick "Use index" in the search bar and search again: identical results; the method
+       says "direct". Do the same search with a size condition (More > Size): always "direct".
+[ ] 7  Exclude Folder: exclude a subfolder, search for something inside it: still found
+       (read directly). Remove: the index file goes away; the folder itself is untouched.
+[ ] 8  Try to add a folder on a network drive: refused with an explanation.
+[ ] 9  Help > Run Index Self-Test passes (27 checks). Safety and Search self-tests still pass.
+If anything fails: Help > Copy Current Log to Clipboard, AutoType it, and tell me the step number.
+
+NEW IN 0.4.0
+------------
+- "Name is similar to (allows typos)": finds near matches. Case, accents and separators are
+  ignored; words can be in any order; each word may have a few mistakes depending on its
+  length (1-3 letters: none, 4-6: 1, 7-10: 2, longer: 3). A mistake is a wrong, missing or
+  extra letter, or two neighbouring letters swapped. A Match column shows how close each is.
+- Search indexes (Phase 2b), optional, for local folders you choose (Settings > Search Index).
+  Each search checks every indexed folder's change stamp and re-reads only changed folders,
+  then re-checks every match on the disk, so results are always the same as a direct search.
+  No background process: the index is checked and updated only when you search.
+  Size/date searches, network locations, and "Use index" unticked always search directly.
+  The search details always say which method was used. Indexes hold names, sizes and dates
+  only (never contents) in ~/Library/Application Support/Find/Indexes.
+
+NEW IN 0.3.0
+------------
+- Rows are laid out so icon and text are always centred vertically.
+- Sidebar sections fold away when you click their title (remembered). Settings > Sidebar:
+  show/hide and reorder sections, how many Recent/Frequent places, Reset. Right-click a section
+  title to hide it; right-click a favourite to move it up/down or remove it.
+- Optional folder sizes (View > Calculate Folder Sizes, or Settings > General). Off by default.
+  Counted in the background, two folders at a time, after the list is shown, so browsing
+  speed is unchanged. Counting stays on the folder's own drive. Refresh (Cmd-R) recounts.
+- Option+Right / Option+Left (and Option-click on a triangle) open / close a folder with all
+  its subfolders, like Finder. Links are never followed; stops after 3,000 folders.
+- Right-click menu: Move To / Copy To removed (still in the File menu); Finder's colour labels
+  added (Red, Orange, Yellow, Green, Blue, Purple, Gray). They are real Finder tags, shown as
+  dots after the name, and can be undone. Only the item's tags change, never its contents.
+
+NEW IN 0.2.0
+------------
+- Window placement fixed: new windows fill the quarters in order (AppKit was shifting windows;
+  every placement decision is now written to the log)
+- Folders expand in place with disclosure triangles (click the triangle, or Right/Left arrow),
+  like Finder's list view. Several folders' contents can be open at once.
+- Date Added column. Columns are compact by default and stay on the right edge; Name takes the
+  rest of the width and follows the window. Drag a column edge to widen it; dates get longer as
+  their column gets wider. Right-click the header (or View > Show Columns) to choose columns.
+- Scroll bars drawn in the theme colors with a faint divider line.
+- Right-click menus now match Finder: Open, Open in New Tab, Open in New Window, Open With,
+  Show Package Contents, Move to Trash, Get Info, Rename, Compress, Duplicate, Make Alias,
+  New Folder with Selection, Copy, Sort By, Show Columns, Show Hidden Files, Services
+  (e.g. New Terminal at Folder). Find additions: Copy Path, Copy Name, Move To, Copy To,
+  Select All .ext Files, Search in This Folder, Open in Terminal, Show in Finder, Add to Sidebar.
+- SEARCH (Phase 2a), see below.
+
+SEARCH
+------
+Cmd-F (or click the search field at the top right), type, press Return.
+The search bar shows WHERE you are searching (always visible) and lets you pick:
+  This folder only / This folder and subfolders / Selected folders and subfolders /
+  This drive / All local drives / This network location / All locations
+Name contains / is / begins with / ends with / wildcard (* ?) / regular expression,
+Match case, Include System Files (off by default), Hidden files.
+"More" adds: files or folders, extensions (nef, dng), size range in MB, modified after/before,
+folder name, inside packages, follow folder links, match all / any.
+Results appear as they are found; sort them while the search runs. Stop at any time.
+Every search ends with an honest status:
+  "Complete" only when every folder in scope was read.
+  "INCOMPLETE" lists exactly which folders could not be searched and why (permission,
+  missing, disconnected). Folders skipped because of a setting (hidden, system, packages,
+  links, other drives) are counted, with examples, under "Search details".
+Double-click a result to open it; right-click > Show in Enclosing Folder. Escape leaves search.
+The optional index (Phase 2b) comes next, once direct search is confirmed on your Mac.
+
+WHAT WAS IN PHASE 1
+-------------------
+- Single-pane browser with sidebar (Favorites, Frequent, Recent, Devices, Network)
+- Path bar: click a part to jump there; click the empty area (or Cmd-Shift-G) to type a path
+- List view with sortable columns (Name, Date Modified, Date Created, Size, Kind);
+  right-click the column header to show/hide columns; widths and sort are remembered
+- Tabs (Cmd-T new, Cmd-W close, Cmd-Shift-] / [ next/previous); each tab has its own history
+- New windows open in screen quarters (top-left, top-right, bottom-left, bottom-right);
+  Window > Move Window to Quarter puts a window back into a quarter
+- Rename, New Folder, Duplicate, Move To, Copy To, Move to Trash, Copy / Paste / Move Here,
+  Open, Open With, Show in Finder, Copy Path, Copy Name, Add to Sidebar, Undo/Redo
+- Folders update by themselves when their contents change (local drives)
+- Settings > Appearance: every color, font, text size, row spacing, highlight accent;
+  presets Graphite (default: dark grey, white text, dull light blue accent), Light, Navy,
+  High Contrast; save your own themes
+- Help menu: Safety Self-Check, copy last report / current log to the clipboard, logs folder
+
+KEYBOARD
+--------
+Return rename      Cmd-O / Cmd-Down open      Cmd-Up enclosing folder     Cmd-[ / Cmd-] back/forward
+Cmd-Delete Trash   Cmd-D duplicate            Cmd-Shift-N new folder      Cmd-Shift-M move to
+Cmd-C copy items   Cmd-V copy items here      Cmd-Option-V move items here
+Cmd-Option-C copy path   Cmd-Shift-. show hidden files   Cmd-R refresh   Cmd-, settings
+Cmd-F search   Cmd-Shift-F search in selected folder   Cmd-I get info   Cmd-L make alias
+Cmd-Option-O open in new window   Cmd-Control-N new folder with selection
+Right arrow / Left arrow expand / collapse a folder (add Option for all subfolders)
+Cmd-Shift-H home   Cmd-Shift-D desktop   Cmd-Shift-A applications   Cmd-Option-L downloads
+
+NOT YET (later phases)
+----------------------
+Phase 3 Quick Look (spacebar), inspector, thumbnails, photography mode
+Phase 4 dual pane, batch rename, compare, duplicates   Phase 5 cache cleanup settings
+Phase 6 network-specific handling

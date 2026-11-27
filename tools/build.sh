@@ -1,7 +1,7 @@
 #!/bin/bash
 # tools/build.sh <legacy|modern> [--no-python] [--no-dmg] [--no-selftest]
 #
-# Builds build/PhotoLab.app (universal: x86_64 + arm64) and build/PhotoLab2.dmg.
+# Builds build/PhotoLab.app (universal: x86_64 + arm64) and build/PhotoLab.dmg.
 # Writes build/build-log.txt: plain ASCII, numbered lines (B0001...), failures as E-BUILD-n.
 #
 # Python runtime for the brain: python-build-standalone, one per architecture, fetched by
@@ -58,8 +58,6 @@ note "SDK: $SDK"
 # ---- Guards --------------------------------------------------------------------------------
 bash tools/check_mutations.sh >> "$RAW" 2>&1 || fail "E-BUILD-1" "file-safety guard (Swift): see build-raw.txt"
 note "guard: Swift file-changing APIs only in the allowed files"
-bash tools/check_mutations_py.sh >> "$RAW" 2>&1 || fail "E-BUILD-1" "file-safety guard (Python): see build-raw.txt"
-note "guard: Python file-changing APIs only in the allowed files"
 bash tools/check_compat.sh >> "$RAW" 2>&1 || fail "E-BUILD-1" "10.13 compatibility guard: see build-raw.txt"
 note "guard: no Swift features that need macOS 10.15+"
 
@@ -76,7 +74,7 @@ for pair in "x86_64:$TARGET_X86_64" "arm64:$TARGET_ARM64"; do
   ARCH="${pair%%:*}"; TARGET="${pair#*:}"
   if "$SWIFTC" -O -wmo -swift-version 5 -module-name PhotoLab \
       -sdk "$SDK" -target "$TARGET" \
-      -framework AppKit -framework Quartz -framework NetFS -framework QuickLook \
+      -framework AppKit -framework Quartz -framework NetFS -framework QuickLook -framework AVKit \
       ${RPATH_FLAGS[@]+"${RPATH_FLAGS[@]}"} \
       "${SOURCES[@]}" -o "$OBJ/PhotoLab-$ARCH" >> "$RAW" 2>&1; then
     note "compile $ARCH ($TARGET): ok"
@@ -100,8 +98,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
   <key>CFBundleName</key><string>PhotoLab</string>
-  <key>CFBundleDisplayName</key><string>PhotoLab 2</string>
-  <key>CFBundleIdentifier</key><string>com.smp.photolab2</string>
+  <key>CFBundleDisplayName</key><string>PhotoLab</string>
+  <key>CFBundleIdentifier</key><string>com.smp.photolab</string>
   <key>CFBundleExecutable</key><string>PhotoLab</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
@@ -110,6 +108,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersionByArchitecture</key>
   <dict><key>x86_64</key><string>$MIN_SYSTEM</string><key>arm64</key><string>${TARGET_ARM64##*macosx}</string></dict>
   <key>NSHighResolutionCapable</key><true/>
+  <key>CFBundleIconFile</key><string>PhotoLab</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.photography</string>
+  <key>NSHumanReadableCopyright</key><string>Internal tool. Based on Find 0.18.16.</string>
   <key>CFBundleDocumentTypes</key>
   <array><dict>
     <key>CFBundleTypeName</key><string>Folder or file</string>
@@ -136,26 +137,19 @@ if [ "$EMBED_SWIFT_RUNTIME" = 1 ]; then
   fi
 fi
 
-# Brain source
-mkdir -p "$APP/Contents/Resources/brain"
-cp brain/run_brain.py "$APP/Contents/Resources/brain/"
-rsync -a --exclude '__pycache__' --exclude '*.pyc' brain/photolab_brain "$APP/Contents/Resources/brain/" \
-  || fail "E-BUILD-3" "could not copy the brain"
-note "brain: $(find "$APP/Contents/Resources/brain" -name '*.py' | wc -l | tr -d ' ') Python files"
-
-# Python runtimes
-if [ "$WITH_PYTHON" = 1 ]; then
-  for ARCH in x86_64 arm64; do
-    DEST="$APP/Contents/Resources/python-$ARCH"
-    if bash tools/fetch_python.sh "$ARCH" "$DEST" >> "$RAW" 2>&1; then
-      note "python-$ARCH: $("$DEST/bin/python3" -c 'import platform;print(platform.python_version())' 2>/dev/null || echo 'bundled (other architecture, not runnable here)')"
-    else
-      fail "E-BUILD-7" "could not fetch the Python runtime for $ARCH (see build-raw.txt; or build with --no-python)"
-    fi
-  done
+# ExifTool (Perl, run by /usr/bin/perl): metadata reading/writing (Find's ExifToolServer).
+if [ -f Resources/exiftool/exiftool ] && cp -R Resources/exiftool "$APP/Contents/Resources/exiftool"; then
+  note "ExifTool bundled: $(/usr/bin/perl "$APP/Contents/Resources/exiftool/exiftool" -config "" -ver 2>&1 | head -1)"
 else
-  note "python: not bundled (--no-python)"
+  fail "E-BUILD-3" "ExifTool could not be bundled"
 fi
+if iconutil -c icns Resources/PhotoLab.iconset -o "$APP/Contents/Resources/PhotoLab.icns" >> "$RAW" 2>&1; then
+  note "icon: ok"
+else
+  note "WARN icon could not be built (generic icon)"
+fi
+# The Python brain is not wired into the Find-based app yet (PLAN.md): not bundled.
+note "brain: not bundled in this phase"
 
 # ---- Sign ----------------------------------------------------------------------------------
 # Inside out: every Mach-O file (Python runtimes, extension modules, Swift runtime) on its own,
@@ -173,22 +167,29 @@ else
   fail "E-BUILD-5" "codesign failed on the app bundle"
 fi
 
-# ---- Self-test -----------------------------------------------------------------------------
+# ---- Self-tests (Find's): Safety Self-Check, Search, Index, Photo Metadata ----------------
 if [ "$WITH_SELFTEST" = 1 ]; then
-  # Native slice first; on Apple Silicon also the Intel slice under Rosetta when available.
+  EXE="$APP/Contents/MacOS/PhotoLab"
+  VOUT="$("$EXE" --version 2>&1)"
+  note "version check: $VOUT"
+  case "$VOUT" in PhotoLab*) ;; *) fail "E-BUILD-7" "the built app did not start" ;; esac
   RUNNERS=("native")
   if [ "$(uname -m)" = "arm64" ] && arch -x86_64 /usr/bin/true >/dev/null 2>&1; then RUNNERS+=("x86_64"); fi
   for R in "${RUNNERS[@]}"; do
-    ST="$BUILD/selftest-$R.txt"
-    if [ "$R" = native ]; then CMD=("$APP/Contents/MacOS/PhotoLab" --self-test)
-    else CMD=(arch -x86_64 "$APP/Contents/MacOS/PhotoLab" --self-test); fi
-    if "${CMD[@]}" > "$ST" 2>&1; then
-      grep -E '^SELFTEST' "$ST" | while IFS= read -r l; do note "[$R] $l"; done
-    else
-      grep -E '^SELFTEST' "$ST" | while IFS= read -r l; do note "[$R] $l"; done
-      tail -n 30 "$ST" >> "$RAW"
-      fail "E-BUILD-8" "self-test failed ($R)"
-    fi
+    for T in selfcheck searchtest indextest phototest; do
+      ST="$BUILD/$T-$R.txt"
+      if [ "$R" = native ]; then "$EXE" --$T > "$ST" 2>&1; else arch -x86_64 "$EXE" --$T > "$ST" 2>&1; fi
+      RC=$?
+      SUM="$(grep -iE 'passed|failed|PASS|FAIL' "$ST" | tail -n 1)"
+      note "[$R] $T rc=$RC ${SUM}"
+      grep -E '^(FAIL|E-|W-)' "$ST" | head -n 20 | while IFS= read -r l; do note "[$R]   $l"; done
+      if [ "$T" = phototest ]; then
+        [ $RC -eq 2 ] && fail "E-BUILD-11" "photo metadata self-test: a file changed while being read ($R)"
+      elif [ $RC -ne 0 ]; then
+        tail -n 30 "$ST" >> "$RAW"
+        fail "E-BUILD-8" "$T failed ($R)"
+      fi
+    done
   done
 fi
 
@@ -197,9 +198,9 @@ if [ "$WITH_DMG" = 1 ]; then
   STAGE="$BUILD/dmg-stage"; rm -rf "$STAGE"; mkdir -p "$STAGE"
   cp -R "$APP" "$STAGE/"
   ln -s /Applications "$STAGE/Applications"
-  DMG="$BUILD/PhotoLab2.dmg"; rm -f "$DMG"
-  if hdiutil create -volname "PhotoLab 2" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >> "$RAW" 2>&1; then
-    note "disk image: build/PhotoLab2.dmg ($(du -h "$DMG" | cut -f1))"
+  DMG="$BUILD/PhotoLab.dmg"; rm -f "$DMG"
+  if hdiutil create -volname "PhotoLab" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >> "$RAW" 2>&1; then
+    note "disk image: build/PhotoLab.dmg ($(du -h "$DMG" | cut -f1))"
   else
     fail "E-BUILD-6" "hdiutil could not create the disk image (build/PhotoLab.app is still usable)"
   fi

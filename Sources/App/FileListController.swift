@@ -1,1133 +1,1313 @@
 // FileListController.swift
-// Finder-style list view with disclosure triangles: Name / Date Modified / Size / Kind.
-// - Expanding a folder asks the window to list it in the background; if that takes longer than
-//   0.15 s a "Loading..." row with a small spinner appears under the folder.
-// - Re-listing keeps expanded subfolders open and the selection (by path): folder nodes are
-//   reused by path, so NSOutlineView keeps their state.
-// - No disk access on the main thread: icons and kinds come from the file extension only.
-// - Drag and drop: rows drag out as file URLs; files dropped on a folder row go into it, dropped
-//   anywhere else into the folder the row is in (or the window's folder). Like Finder: move on
-//   the same volume, copy to another; Option copies, Command moves.
+// The file list: an outline (folders expand in place with disclosure triangles, like Finder's list view).
+// Loads folders off the main thread, sorts, shows columns, watches for changes.
+// Also shows search results (a flat list with an extra "Folder" column).
 
 import AppKit
 
-final class FileNode: NSObject {
+/// One row in the outline.
+final class FileNode {
     var entry: FileEntry
-    /// nil = never listed; otherwise the listed children (unfiltered, unsorted).
-    var allChildren: [FileEntry]?
-    /// Sorted + filtered children shown in the outline (may hold the placeholder).
-    var shown: [FileNode] = []
+    weak var parent: FileNode?
+    /// nil = not loaded yet.
+    var children: [FileNode]? = nil
     var loading = false
-    var showPlaceholder = false
-    var error: String?
-    let isPlaceholder: Bool
-    /// Files of the set this row stands for (rank order), when sets are on; else empty.
-    var members: [FileEntry] = []
-    var isSet: Bool { return members.count > 1 }
-    /// What the Name column shows: a set by its name without extension (the Ext column has them).
-    var displayName: String { return isSet ? FileOperations.split(entry.name).stem : entry.name }
+    var error: ReadProblem? = nil
 
-    init(entry: FileEntry, placeholder: Bool = false) {
+    init(_ entry: FileEntry, parent: FileNode?) {
         self.entry = entry
-        self.isPlaceholder = placeholder
+        self.parent = parent
     }
 
-    var isExpandableFolder: Bool { return !isPlaceholder && entry.isDirectory && !entry.isPackage }
+    var path: String { return entry.path }
 }
 
-final class FileOutlineView: NSOutlineView {
-    var onOpen: (() -> Void)?
-    var onRename: (() -> Void)?
-    var onTrash: (() -> Void)?
-    var onSpace: (() -> Void)?
-    var onEscape: (() -> Void)?
-    var contextMenu: (() -> NSMenu?)?
-    private var lastTypeSelect = Date.distantPast
-
-    /// Return or M: rename (Photo Mechanic and Finder). Cmd-E / Cmd-Down: open.
-    /// Backspace / forward Delete / Cmd-Backspace: move to Trash.
-    /// "m" right after other typing is type-select, not rename.
-    override func keyDown(with event: NSEvent) {
-        let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
-        if (event.keyCode == 36 || event.keyCode == 76) && mods.isEmpty { onRename?(); return }          // Return, Enter
-        if (event.keyCode == 51 || event.keyCode == 117) && (mods.isEmpty || mods == [.command]) {      // Backspace, Delete
-            onTrash?(); return
-        }
-        if mods == [.command] && chars == "e" { onOpen?(); return }
-        if event.keyCode == 49 && mods.isEmpty && Date().timeIntervalSince(lastTypeSelect) > 1.0 { onSpace?(); return }   // Space
-        if event.keyCode == 53 && mods.isEmpty, PreviewWindow.shared.isOpen { onEscape?(); return }                       // Esc
-        if mods.isEmpty && chars == "m" && Date().timeIntervalSince(lastTypeSelect) > 1.0 { onRename?(); return }
-        // Only letters and digits are typing: an arrow key must not turn the next Space into a
-        // type-select space (that jumped to the first row).
-        if (mods.isEmpty || mods == [.shift]), let ch = chars.first, ch.isLetter || ch.isNumber { lastTypeSelect = Date() }
-        super.keyDown(with: event)
+final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate {
+    struct ColumnDef {
+        let id: String
+        let title: String
+        let width: CGFloat
+        let minWidth: CGFloat
+        let sortKey: SortColumn?
     }
 
-    override func menu(for event: NSEvent) -> NSMenu? {
-        let row = self.row(at: convert(event.locationInWindow, from: nil))
-        if row >= 0 && !selectedRowIndexes.contains(row) {
-            selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-        }
-        return contextMenu?() ?? super.menu(for: event)
-    }
-}
+    /// Name first and widest; the others are compact by default and sit on the right edge.
+    static let columns: [ColumnDef] = [
+        ColumnDef(id: "name", title: "Name", width: 400, minWidth: 140, sortKey: .name),
+        ColumnDef(id: "folder", title: "Folder", width: 180, minWidth: 60, sortKey: nil),
+        ColumnDef(id: "match", title: "Match", width: 64, minWidth: 44, sortKey: .match),
+        ColumnDef(id: "modified", title: "Modified", width: 74, minWidth: 54, sortKey: .modified),
+        ColumnDef(id: "created", title: "Created", width: 74, minWidth: 54, sortKey: .created),
+        ColumnDef(id: "added", title: "Added", width: 74, minWidth: 54, sortKey: .added),
+        ColumnDef(id: "size", title: "Size", width: 64, minWidth: 44, sortKey: .size),
+        ColumnDef(id: "kind", title: "Kind", width: 70, minWidth: 44, sortKey: .kind),
+    ]
 
-enum FileIcons {
-    private static var byExt: [String: NSImage] = [:]
-    private static var kinds: [String: String] = [:]
-
-    static func icon(for e: FileEntry) -> NSImage? {
-        if e.isDirectory && !e.isPackage { return NSImage(named: NSImage.folderName) }
-        let key = e.isPackage ? e.ext : (e.ext.isEmpty ? "public.data" : e.ext)
-        if let i = byExt[key] { return i }
-        let t0 = Date()
-        let i = NSWorkspace.shared.icon(forFileType: key)
-        i.size = NSSize(width: 16, height: 16)
-        byExt[key] = i
-        let ms = Date().timeIntervalSince(t0) * 1000
-        if ms > 50 {
-            Stats.noteSlowIcon(ms)
-            Log.info(String(format: "slow icon: .%@ took %.0f ms", key, ms))
-        }
-        return i
-    }
-
-    static func kind(for e: FileEntry) -> String {
-        if e.isDirectory && !e.isPackage { return "Folder" }
-        if e.kind == .symlink { return "Alias" }
-        let ext = e.ext
-        if ext.isEmpty { return "Document" }
-        if let k = kinds[ext] { return k }
-        var text = ext.uppercased() + " file"
-        if let uti = UTTypeCreatePreferredIdentifierForTag(kUTTagClassFilenameExtension, ext as CFString, nil)?.takeRetainedValue(),
-            let d = UTTypeCopyDescription(uti)?.takeRetainedValue() as String?, !d.isEmpty {
-            text = d.prefix(1).uppercased() + d.dropFirst()
-        }
-        kinds[ext] = text
-        return text
-    }
-}
-
-final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSTextFieldDelegate {
-    /// What the window lays out: the scroll view plus an overlay (message + spinner) on top of it.
-    /// The overlay must be a sibling above the scroll view: views added inside a scroll view are
-    /// drawn over by the list (0.1.3-0.1.5 showed neither message nor spinner).
-    let view = OverlayContainer()
+    let table = FileTableView()
     let scroll = NSScrollView()
-    let table = FileOutlineView()
-    private let message = PassThroughLabel(labelWithString: "")
-    private let spinner = NSProgressIndicator()
-    private var roots: [FileNode] = []
-    private var rootEntries: [FileEntry] = []
-    /// Folder path -> node, for every folder node currently in the tree.
-    private var nodesByPath: [String: FileNode] = [:]
-    /// > 0 while the app itself reloads or re-expands rows. AppKit posts "will expand" for those
-    /// too; answering them with a new listing caused an endless reload loop (0.1.4).
-    private var quiet = 0
+    private(set) var path = ""
+    private(set) var roots: [FileNode] = [] {
+        didSet { scheduleRootsChanged() }
+    }
+    /// Told (once per run-loop turn) whenever the top-level items change: the thumbnail grid follows it.
+    var onRootsChanged: (() -> Void)?
+    private var rootsChangePending = false
 
-    private func quietly(_ work: () -> Void) {
-        quiet += 1
-        work()
-        quiet -= 1
+    private func scheduleRootsChanged() {
+        if rootsChangePending { return }
+        rootsChangePending = true
+        DispatchQueue.main.async { [weak self] in
+            self?.rootsChangePending = false
+            self?.onRootsChanged?()
+        }
     }
 
-    var sortKey: EntrySort.Key = .name
-    var ascending = true
-    var foldersFirst = true
-    var showHidden = false
-    /// View > Show Folders Only.
-    var foldersOnly = false
-    /// Filter bar (Cmd-F): rows whose name contains this (any case). Expanded folders stay, so
-    /// their matching contents show; empty = no filter.
-    var filterText = ""
-
-    private func matches(_ n: FileNode) -> Bool {
-        if n.entry.name.localizedCaseInsensitiveContains(filterText) { return true }
-        return n.members.contains { $0.name.localizedCaseInsensitiveContains(filterText) }
+    /// Narrowest useful width: the name column showing about 10 characters (after the icon) plus every
+    /// other visible column at its narrowest, the scroll bar and the column gaps.
+    var minimumUsefulWidth: CGFloat {
+        let charW = ThemeManager.shared.font.pointSize * 0.6
+        var w: CGFloat = 26 + 10 * charW + 16
+        for c in table.tableColumns where !c.isHidden && c.identifier.rawValue != "name" {
+            w += c.minWidth + table.intercellSpacing.width
+        }
+        return ceil(w)
     }
 
-    private func filtered(_ list: [FileNode]) -> [FileNode] {
-        if filterText.isEmpty { return list }
-        return list.filter { n in n.isPlaceholder || matches(n) || (n.isExpandableFolder && table.isItemExpanded(n)) }
+    /// Top-level items in their current order (the folder's contents, or search results).
+    var rootEntries: [FileEntry] { return roots.map { $0.entry } }
+    private(set) var result = FolderReadResult()
+    private(set) var loading = false
+    private(set) var loadMillis = 0
+    var spec: SortSpec = Prefs.sortSpec
+
+    /// Search results mode: flat list, nothing expands, "Folder" column shown.
+    private(set) var resultsMode = false
+    /// "Similar to" searches show how close each match is.
+    var showMatchColumn = false
+
+    var onLoaded: (() -> Void)?
+    /// 0.17: a remembered network listing is being checked in the background (spinner bottom right).
+    var onBackgroundCheck: ((Bool) -> Void)?
+    /// 0.17: true while a name is being edited in place - background reloads wait until it is done.
+    var holdReloads: (() -> Bool)?
+    var onSelectionChanged: (() -> Void)?
+    /// 0.18.15: rows shown changed (a folder opened or closed in the list): the item count follows.
+    var onRowsChanged: (() -> Void)?
+    var onOpen: ((FileEntry) -> Void)?
+    var onFolderGone: ((String) -> Void)?
+
+    private var token = 0 {
+        didSet { currentToken.value = token }
+    }
+    private let currentToken = AtomicInt()
+    private var expandedPaths = Set<String>()
+    private var watchers: [String: DispatchSourceFileSystemObject] = [:]
+    let quickLook = QuickLookSource()
+    private var tagObserver: NSObjectProtocol?
+
+    /// Colour tags arrived for some paths: redraw just those visible rows' names.
+    private func tagsRead(_ paths: Set<String>) {
+        let visible = table.rows(in: table.visibleRect)
+        if visible.length <= 0 { return }
+        var rows = IndexSet()
+        for r in visible.location..<(visible.location + visible.length) {
+            if let n = table.item(atRow: r) as? FileNode, paths.contains(n.path) { rows.insert(r) }
+        }
+        if !rows.isEmpty { table.reloadData(forRowIndexes: rows, columnIndexes: IndexSet(integer: 0)) }
+    }
+    /// Files dropped: (paths, destination folder, move). Set by the pane.
+    var onDrop: (([String], String, Bool) -> Void)?
+
+    /// Set before loading a folder to restore its earlier scroll position.
+    var pendingScrollY: CGFloat?
+    private var restoredScroll = false
+
+    func scrollTo(y: CGFloat) {
+        table.layoutSubtreeIfNeeded()
+        // Header-aware: the top is one header-height above 0 (see FileTableView.scrollListTo).
+        table.scrollListTo(y: y)
+        restoredScroll = true
     }
 
-    /// Double-click, Cmd-E, Cmd-Down.
-    var onOpen: (([FileEntry]) -> Void)?
-    /// Space (a folder opens in the contact sheet).
-    var onSpace: (() -> Void)?
-    /// Cmd-double-click on a folder: it opens in a new window.
-    var onOpenInNewWindow: ((FileEntry) -> Void)?
-    /// Return / M, Backspace: the window decides what to rename or trash.
-    var onRenameRequest: (() -> Void)?
-    var onTrashRequest: (() -> Void)?
-    /// A rename typed in place: (item, new name).
-    var onRenameCommit: ((FileEntry, String) -> Void)?
-    /// Name to start editing as soon as it shows up (new folder).
-    var pendingEdit: String?
-    var onSelectionChange: (() -> Void)?
-    /// The window lists `path` in the background and then calls setChildren(...).
-    var onNeedChildren: ((String) -> Void)?
-    /// The set of expanded folders changed (the window watches them).
-    var onExpandedChange: ((Set<String>) -> Void)?
-    /// Files dropped: (paths, destination folder, copy or move).
-    var onDrop: (([String], String, TransferKind) -> Void)?
-    /// The folder the window shows (drops between top-level rows go here).
-    var rootPath = "/"
+    var scrollY: CGFloat { return scroll.contentView.bounds.origin.y }
+    /// Folders whose watch events proved false; 3 within 10 s pauses watching that folder.
+    private var falseAlarms: [String: [Date]] = [:]
+    private var watchPaused: Set<String> = []
+    private var reloadScheduled = Set<String>()
+    private let cornerFill = FillView()
 
-    private let dateFormatter: DateFormatter = {
+    /// Folder reads for expanded folders: a few at a time, so expanding a big tree can't flood the system.
+    private let childQueue: OperationQueue = {
+        let q = OperationQueue()
+        q.maxConcurrentOperationCount = 4
+        q.qualityOfService = .userInitiated
+        return q
+    }()
+
+    /// Optional folder sizes: counted in the background, two folders at a time, after the list is shown.
+    private let sizeQueue: OperationQueue = {
+        let q = OperationQueue()
+        q.maxConcurrentOperationCount = 2
+        q.qualityOfService = .utility
+        return q
+    }()
+    private let sizeGeneration = AtomicInt()
+    private var folderSizeCache: [String: Int64] = [:]
+    private var sizeResortScheduled = false
+
+    /// Folders being opened with Option (all subfolders too). Capped so a huge tree can't run away.
+    private var recursiveRoots = Set<String>()
+    private var recursiveCount = 0
+    static let recursiveLimit = 3000
+    /// NSOutlineView does not retain its items. Replaced nodes are kept alive until the view has moved on.
+    private var retired: [[FileNode]] = []
+
+    /// 0.17.1: the pane is closing. NSOutlineView does NOT keep its rows' items alive, so it must be
+    /// emptied while its data source is still there, and the old rows kept alive a little longer - a
+    /// pane closed while the view was still being drawn or a folder still loading (Cmd-W quickly, several
+    /// times) otherwise pointed at rows that were already gone and Find crashed.
+    func shutdown() {
+        token += 1                       // every load, child read and size count still running is ignored
+        childQueue.cancelAllOperations()
+        sizeQueue.cancelAllOperations()
+        sizeGeneration.value += 1
+        stopWatching()
+        if let o = tagObserver { NotificationCenter.default.removeObserver(o); tagObserver = nil }
+        onRootsChanged = nil; onLoaded = nil; onSelectionChanged = nil; onRowsChanged = nil; onOpen = nil; onFolderGone = nil
+        onDrop = nil; onBackgroundCheck = nil; holdReloads = nil
+        let old = roots + retired.flatMap { $0 }
+        FileListController.graveyard.append(old)
+        roots = []
+        expandedPaths.removeAll()
+        loading = false
+        table.reloadData()
+        table.delegate = nil
+        table.dataSource = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            if !FileListController.graveyard.isEmpty { FileListController.graveyard.removeFirst() }
+        }
+    }
+    private static var graveyard: [[FileNode]] = []
+
+    private func retire(_ nodes: [FileNode]?) {
+        guard let n = nodes, !n.isEmpty else { return }
+        retired.append(n)
+        DispatchQueue.main.async { [weak self] in
+            guard let s = self, !s.retired.isEmpty else { return }
+            s.retired.removeFirst()
+        }
+    }
+
+    private let longDate: DateFormatter = {
         let f = DateFormatter()
         f.dateStyle = .medium
         f.timeStyle = .short
-        f.doesRelativeDateFormatting = true
+        return f
+    }()
+    private let mediumDate: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .short
+        return f
+    }()
+    private let shortDate: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .none
         return f
     }()
 
     override init() {
         super.init()
-        let columns: [(String, String, CGFloat, EntrySort.Key)] = [
-            ("name", "Name", 300, .name), ("ext", "Ext", 100, .ext), ("modified", "Date Modified", 165, .modified),
-            ("size", "Size", 75, .size), ("kind", "Kind", 130, .kind)]
-        for (id, title, width, key) in columns {
-            let c = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
-            c.title = title
-            c.width = width
-            c.minWidth = 50
-            c.sortDescriptorPrototype = NSSortDescriptor(key: key.rawValue, ascending: true)
+        for def in FileListController.columns {
+            let c = NSTableColumn(identifier: itemID(def.id))
+            c.headerCell = ThemedHeaderCell(textCell: def.title)
+            c.width = def.width
+            c.minWidth = def.minWidth
+            if let k = def.sortKey { c.sortDescriptorPrototype = NSSortDescriptor(key: k.rawValue, ascending: true) }
+            c.resizingMask = def.id == "name" ? [.autoresizingMask, .userResizingMask] : .userResizingMask
             table.addTableColumn(c)
-            if id == "name" { table.outlineTableColumn = c }
         }
+        table.outlineTableColumn = table.tableColumns.first
+        let widths = Prefs.columnWidths
+        for c in table.tableColumns where c.identifier.rawValue != "name" {
+            if let w = widths[c.identifier.rawValue], w >= 40 { c.width = CGFloat(w) }
+        }
+        // The Name column absorbs all width changes, so the other columns stay on the right edge.
+        // "First column only" is raw value 5; its Swift name differs between SDKs, the number does not.
+        if let firstOnly = NSTableView.ColumnAutoresizingStyle(rawValue: 5) {
+            table.columnAutoresizingStyle = firstOnly
+        }
+        table.allowsColumnReordering = false
         table.allowsMultipleSelection = true
-        table.usesAlternatingRowBackgroundColors = true
-        // The Name column takes all free width; the others keep their size. Widths are not saved:
-        // a user's resizing lasts as long as the window, new windows start from these defaults.
-        table.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
-        table.rowHeight = 20
-        table.indentationPerLevel = 14
+        table.allowsColumnResizing = true
+        table.allowsTypeSelect = true
+        table.focusRingType = .none
+        table.intercellSpacing = NSSize(width: 0, height: 0)
+        table.indentationPerLevel = 16
         table.autoresizesOutlineColumn = false
+        table.selectionHighlightStyle = .regular
+        table.rowSizeStyle = .custom
         table.dataSource = self
         table.delegate = self
+        table.quickLook = quickLook
+        tagObserver = NotificationCenter.default.addObserver(forName: .findTagsRead, object: nil, queue: .main) { [weak self] n in
+            guard let s = self, let paths = n.userInfo?["paths"] as? [String] else { return }
+            s.tagsRead(Set(paths))
+        }
+        quickLook.table = table
+        quickLook.selection = { [weak self] in return self?.selectedPaths() ?? [] }
+        table.onSpace = { [weak self] in self?.previewSelection() }
+        table.onOptionSpace = { [weak self] in
+            guard let s = self else { return }
+            if !FastPreview.shared.isVisible { s.quickLook.close(); FastPreview.shared.toggle(for: s) }
+            FastPreview.shared.toggleFill()
+        }
+        table.onEscape = {
+            if FastPreview.shared.isVisible { FastPreview.shared.close(); return true }
+            return false
+        }
         table.target = self
         table.doubleAction = #selector(doubleClicked(_:))
-        table.onOpen = { [weak self] in self?.openSelection() }
-        table.onRename = { [weak self] in self?.onRenameRequest?() }
-        table.onTrash = { [weak self] in self?.onTrashRequest?() }
-        table.onSpace = { [weak self] in self?.onSpace?() }
-        table.onEscape = { PreviewWindow.shared.closeAndReturn() }
-        table.contextMenu = { [weak self] in self?.contextMenu() }
-        table.sortDescriptors = [NSSortDescriptor(key: EntrySort.Key.name.rawValue, ascending: true)]
-        table.registerForDraggedTypes([.fileURL])
-        table.setDraggingSourceOperationMask([.copy, .move], forLocal: true)
-        table.setDraggingSourceOperationMask([.copy, .move, .generic], forLocal: false)
-        table.draggingDestinationFeedbackStyle = .regular
-        setUpColumnMenu()
-
+        // 0.17.3: to other apps like Finder offers it - copy, link or "generic" (VLC, older apps accept only
+        // that) - but never move (another app can't take files away from Find's folders by a drag).
+        table.setDraggingSourceOperationMask([.copy, .link, .generic], forLocal: false)
+        // Inside Find: copy or move (onto folders, other panes, the sidebar).
+        table.setDraggingSourceOperationMask([.copy, .move, .generic], forLocal: true)
+        table.registerForDraggedTypes(FileDrag.types)
+        if spec.column == .name || FileListController.columns.contains(where: { $0.sortKey == spec.column }) {
+            table.sortDescriptors = [NSSortDescriptor(key: spec.column.rawValue, ascending: spec.ascending)]
+        }
+        let headerMenu = NSMenu()
+        for def in FileListController.columns where def.id != "name" && def.id != "folder" && def.id != "match" {
+            let mi = NSMenuItem(title: def.title == "Modified" ? "Date Modified" : (def.title == "Created" ? "Date Created" : (def.title == "Added" ? "Date Added" : def.title)),
+                                action: #selector(toggleColumn(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.representedObject = def.id
+            headerMenu.addItem(mi)
+        }
+        table.headerView?.menu = headerMenu
+        table.cornerView = cornerFill
         scroll.documentView = table
         scroll.hasVerticalScroller = true
-        scroll.hasHorizontalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.verticalScroller = ThemedScroller()
         scroll.autohidesScrollers = true
-        NotificationCenter.default.addObserver(forName: .tagsChanged, object: nil, queue: .main) { [weak self] note in
-            if let p = note.userInfo?["paths"] as? [String] { self?.tagsArrived(p) }
-        }
-        startTagRecheck()
-        scroll.contentView.postsBoundsChangedNotifications = true
-        NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main) { [weak self] _ in
-            self?.scheduleTagRequest()
-        }
-
-        message.alignment = .center
-        message.textColor = NSColor.secondaryLabelColor
-        message.translatesAutoresizingMaskIntoConstraints = false
-        message.isHidden = true
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(scroll)
-        NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: view.topAnchor), scroll.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor), scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-        ])
-        view.addSubview(message)
-        spinner.style = .spinning
-        spinner.controlSize = .regular
-        spinner.isDisplayedWhenStopped = false
-        spinner.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(spinner)
-        NSLayoutConstraint.activate([
-            spinner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            spinner.bottomAnchor.constraint(equalTo: message.topAnchor, constant: -10),
-            message.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            message.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            message.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, constant: -40),
-        ])
+        scroll.borderType = .noBorder
+        applyVisibleColumns()
+        applyTheme()
     }
 
-    // MARK: Nodes
+    deinit {
+        stopWatching()
+    }
 
-    /// Nodes for `entries` (hidden ones filtered, sets folded into one row when sets are on,
-    /// sorted), reusing existing folder nodes with the same path (keeps their expansion and children).
-    private func nodes(for entries: [FileEntry]) -> [FileNode] {
-        var v = showHidden ? entries : entries.filter { !$0.isHidden }
-        if foldersOnly { v = v.filter { $0.isDirectory && !$0.isPackage } }
-        let rows = FileOperations.useSets ? FileSets.rows(v) : v.map { SetRow(entry: $0, members: [$0]) }
-        var members: [String: [FileEntry]] = [:]
-        for r in rows where r.members.count > 1 { members[r.entry.path] = r.members }
-        let sorted = EntrySort.sort(rows.map { $0.entry }, by: sortKey, ascending: ascending, foldersFirst: foldersFirst)
-        return sorted.map { e -> FileNode in
-            if e.isDirectory, let prev = nodesByPath[e.path] {
-                prev.entry = e
-                return prev
-            }
-            let n = FileNode(entry: e)
-            n.members = members[e.path] ?? []
-            return n
+    func applyTheme() {
+        let tm = ThemeManager.shared
+        // 0.17.4: with Glass behind the lists the table and its scroll view draw no background.
+        let glass = Finish.contentGlass > 0
+        if glass { Finish.glassTables.add(table) } else { Finish.glassTables.remove(table) }
+        table.backgroundColor = glass ? .clear : tm.background
+        table.rowHeight = tm.rowHeight
+        scroll.backgroundColor = tm.background
+        scroll.drawsBackground = !glass
+        scroll.scrollerKnobStyle = tm.theme.dark ? .light : .dark
+        scroll.verticalScroller?.needsDisplay = true
+        cornerFill.fillColor = tm.sidebar
+        updateHeaderArrows()
+        table.headerView?.needsDisplay = true
+        table.reloadData()
+    }
+
+    /// Fit the columns to the current width (Name takes the rest).
+    func fitColumns() {
+        table.sizeToFit()
+    }
+
+    // MARK: Columns
+
+    var visibleColumnIDs: Set<String> {
+        var v = Set(Prefs.visibleColumns)
+        if resultsMode { v.insert("folder") } else { v.remove("folder") }
+        if resultsMode && showMatchColumn { v.insert("match") } else { v.remove("match") }
+        return v
+    }
+
+    private func applyVisibleColumns() {
+        let visible = visibleColumnIDs
+        for c in table.tableColumns where c.identifier.rawValue != "name" {
+            c.isHidden = !visible.contains(c.identifier.rawValue)
         }
-    }
-
-    private func refreshShown(_ n: FileNode) {
-        let ph = n.showPlaceholder ? [placeholder(for: n)] : []
-        guard let all = n.allChildren else { n.shown = ph; return }
-        n.shown = filtered(nodes(for: all)) + ph
-        for c in n.shown where c.isExpandableFolder { refreshShown(c) }
-    }
-
-    private func rebuildIndex() {
-        var index: [String: FileNode] = [:]
-        func walk(_ list: [FileNode]) {
-            for n in list where n.isExpandableFolder {
-                index[n.entry.path] = n
-                walk(n.shown)
+        if let menu = table.headerView?.menu {
+            for mi in menu.items {
+                if let id = mi.representedObject as? String { mi.state = visible.contains(id) ? .on : .off }
             }
         }
-        walk(roots)
-        nodesByPath = index
+        fitColumns()
     }
 
-    private func placeholder(for parent: FileNode) -> FileNode {
-        let e = FileEntry.make(name: "Loading...", dir: parent.entry.path, mode: 0o100000, size: 0,
-                               modified: 0, created: 0, added: 0, flags: 0, device: 0, inode: 0)
-        return FileNode(entry: e, placeholder: true)
+    @objc func toggleColumn(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        setColumn(id, visible: !Prefs.visibleColumns.contains(id))
     }
 
-    /// Expanded folders, parents first.
-    var expandedFolderPaths: [String] {
-        return nodesByPath.filter { table.isItemExpanded($0.value) }.map { $0.key }.sorted { $0.count < $1.count }
+    func setColumn(_ id: String, visible: Bool) {
+        var v = Prefs.visibleColumns.filter { $0 != id }
+        if visible { v.append(id) }
+        Prefs.visibleColumns = v
+        applyVisibleColumns()
+        if id == "added" && visible { reload(showHidden: Prefs.showHidden) }
     }
 
-    private func reexpand(_ paths: [String]) {
-        quietly {
-            for p in paths {
-                if let n = nodesByPath[p], !table.isItemExpanded(n) { table.expandItem(n) }
+    private func updateHeaderArrows() {
+        for c in table.tableColumns {
+            guard let h = c.headerCell as? ThemedHeaderCell else { continue }
+            let key = FileListController.columns.first { $0.id == c.identifier.rawValue }?.sortKey
+            h.sortAscending = (key != nil && key == spec.column) ? spec.ascending : nil
+        }
+        table.headerView?.needsDisplay = true
+    }
+
+    /// Date Added costs one extra lookup per item, so it is only read when shown or sorted on.
+    private var needsAddedDates: Bool {
+        return Prefs.visibleColumns.contains("added") || spec.column == .added
+    }
+
+    // MARK: Sorting
+
+    /// The sort to use right now (read on the main thread, then handed to background work).
+    private var currentSort: SortSpec {
+        return SortSpec(column: spec.column, ascending: spec.ascending, foldersFirst: Prefs.foldersFirst)
+    }
+
+    private func sortedNodes(_ entries: [FileEntry], parent: FileNode?, sort: SortSpec) -> [FileNode] {
+        return Listing.sorted(entries, by: sort, kindOf: KindCache.shared.kind).map { FileNode($0, parent: parent) }
+    }
+
+    func setSort(_ column: SortColumn, ascending: Bool) {
+        table.sortDescriptors = [NSSortDescriptor(key: column.rawValue, ascending: ascending)]
+    }
+
+    /// Re-sort everything loaded (all levels), keeping selection and expansion.
+    func resort() {
+        let keep = selectedPaths()
+        spec.foldersFirst = Prefs.foldersFirst
+        let s = spec
+        func sortLevel(_ nodes: [FileNode]) -> [FileNode] {
+            let entries = Listing.sorted(nodes.map { $0.entry }, by: s, kindOf: KindCache.shared.kind)
+            var byPath: [String: FileNode] = [:]
+            for n in nodes { byPath[n.path] = n }
+            return entries.compactMap { byPath[$0.path] }
+        }
+        func walk(_ n: FileNode) {
+            if let c = n.children {
+                n.children = sortLevel(c)
+                for x in n.children ?? [] { walk(x) }
+            }
+        }
+        retire(roots)
+        roots = sortLevel(roots)
+        for r in roots { walk(r) }
+        table.reloadData()
+        restoreExpansion(roots)
+        select(paths: keep, scroll: true)
+        updateHeaderArrows()
+        if spec.column == .added && !resultsMode { reload(showHidden: Prefs.showHidden) }
+    }
+
+    // MARK: Loading a folder
+
+    /// Load a folder. `select` = names in that folder to select afterwards.
+    func load(_ newPath: String, select: [String] = [], showHidden: Bool) {
+        load(newPath, selectPaths: select.map { Paths.join(newPath, $0) }, showHidden: showHidden)
+    }
+
+    /// 0.17.6: items that should be selected but aren't in the list yet - e.g. the item just renamed
+    /// inside an open subfolder (its folder is read again a moment later), or while a newer reload
+    /// started before the one that selects it had finished. Selected as soon as they show up.
+    private var wantSelected: [String] = []
+    private var wantSelectedUntil = Date.distantPast
+    /// The selection a load in progress will make (a reload started meanwhile keeps it).
+    private var pendingSelect: [String] = []
+
+    func load(_ newPath: String, selectPaths: [String], showHidden: Bool) {
+        if newPath != path { wantSelected = []; pendingSelect = [] }
+        if resultsMode {
+            resultsMode = false
+            applyVisibleColumns()
+        }
+        token += 1
+        let myToken = token
+        let samePath = newPath == path
+        path = newPath
+        loading = true
+        if !samePath {
+            retire(roots)
+            roots = []
+            expandedPaths.removeAll()
+            recursiveRoots.removeAll()
+            recursiveCount = 0
+            folderSizeCache.removeAll()
+            sizeGeneration.value += 1
+            sizeQueue.cancelAllOperations()
+            result = FolderReadResult()
+            stopWatching()
+            falseAlarms.removeAll()
+            watchPaused.removeAll()
+            table.reloadData()
+            table.scrollToTop()   // a new folder starts at its first row, never with old scroll left over
+        }
+        let wantAdded = needsAddedDates
+        let sort = currentSort
+        let started = Date()
+        var firstBatchShown = false
+        var keepSelection = selectPaths.isEmpty && samePath ? selectedPaths() : selectPaths
+        if selectPaths.isEmpty && samePath && !pendingSelect.isEmpty {
+            // A reload (e.g. the folder watcher) started before the load that selects the renamed item
+            // finished: keep that item's selection, not the old name's.
+            keepSelection = pendingSelect
+        }
+        if !selectPaths.isEmpty { pendingSelect = selectPaths }
+        // Network shares: going back into a folder read in the last couple of minutes reuses that
+        // listing when the folder itself is unchanged (one request instead of reading every item).
+        // Never for a reload of the same folder (Refresh, changes): those always read the server.
+        // 0.17.1: also with the Date Added column on (it used to switch the snapshot off).
+        let useCache = !samePath && ListingCache.lifetime > 0 && VolumeRegistry.shared.treatAsNetwork(newPath)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let me = self else { return }
+            let folderInfo: StatInfo? = nil
+            if useCache, let cached = ListingCache.shared.peek(newPath, includeHidden: showHidden) {
+                // Shown at once from memory (no request to the server); then read again in the background.
+                let nodes = me.sortedNodes(cached.entries, parent: nil, sort: sort)
+                Log.shared?.debug("Listing of \(newPath) shown from memory (\(nodes.count) items); checking the server in the background")
+                DispatchQueue.main.async {
+                    guard me.token == myToken else { return }
+                    me.finishLoad(newPath, r: cached, nodes: nodes, ms: 0, samePath: samePath, keepSelection: keepSelection, selectPaths: selectPaths)
+                    me.revalidate(newPath, cached: cached, token: myToken, includeHidden: showHidden, sort: sort, wantAdded: wantAdded)
+                }
+                return
+            }
+            let r = DirectoryReader.read(newPath, includeHidden: showHidden, batchSize: 1000, batch: { batch in
+                if firstBatchShown || samePath { return }
+                firstBatchShown = true
+                let part = me.sortedNodes(batch, parent: nil, sort: sort)
+                DispatchQueue.main.async {
+                    guard me.token == myToken, me.loading else { return }
+                    me.retire(me.roots)
+                    me.roots = part
+                    me.table.reloadData()
+                    if me.pendingScrollY == nil { me.table.scrollToTop() }
+                    me.onLoaded?()
+                }
+            }, isCancelled: { [weak self] in
+                guard let s = self else { return true }
+                return s.currentToken.value != myToken
+            }, addedDate: wantAdded ? { p in DateAdded.get(p) } : nil)
+            let nodes = me.sortedNodes(r.entries, parent: nil, sort: sort)
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
+            if VolumeRegistry.shared.treatAsNetwork(newPath) && ListingCache.lifetime > 0 {
+                var e: Int32 = 0
+                if let fi = folderInfo ?? Sys.statInfo(newPath, &e) {
+                    ListingCache.shared.put(newPath, includeHidden: showHidden, folderInfo: fi, result: r)
+                }
+            }
+            DispatchQueue.main.async {
+                guard me.token == myToken else { return }
+                me.finishLoad(newPath, r: r, nodes: nodes, ms: ms, samePath: samePath, keepSelection: keepSelection, selectPaths: selectPaths)
             }
         }
     }
 
-    // MARK: Content API (main thread)
-
-    /// The folder on screen. Keeps expanded subfolders and the selection, unless `select`
-    /// (names in this folder) is given.
-    func setEntries(_ entries: [FileEntry], select: [String]? = nil) {
-        if editing != nil { deferred.append { [weak self] in self?.setEntries(entries, select: select) }; return }
-        let wasExpanded = expandedFolderPaths
-        let keep: Set<String>
-        if let names = select {
-            keep = Set(entries.filter { names.contains($0.name) }.map { $0.path })
+    private func finishLoad(_ newPath: String, r: FolderReadResult, nodes: [FileNode], ms: Int, samePath: Bool,
+                            keepSelection: [String], selectPaths: [String]) {
+        let me = self
+        let firstVisible = samePath ? me.table.rows(in: me.table.visibleRect).location : 0
+        me.result = r
+        me.retire(me.roots)
+        me.applyCachedSizes(nodes)
+        TagCache.shared.clear()
+        me.roots = nodes
+        me.loading = false
+        me.loadMillis = ms
+        me.table.reloadData()
+        me.restoreExpansion(nodes)
+        if let y = me.pendingScrollY {
+            // Coming back to a folder: the same scroll position as when it was left.
+            me.pendingScrollY = nil
+            me.select(paths: keepSelection, scroll: false)
+            me.scrollTo(y: y)
         } else {
-            keep = Set(selectedEntries().map { $0.path })
+            me.select(paths: keepSelection, scroll: !selectPaths.isEmpty)
         }
-        rootEntries = entries
-        roots = filtered(nodes(for: entries))
-        for n in roots where n.isExpandableFolder { refreshShown(n) }
-        rebuildIndex()
-        quietly { table.reloadData() }
-        reexpand(wasExpanded)
-        var rows = IndexSet()
-        for r in 0..<table.numberOfRows {
-            if let n = table.item(atRow: r) as? FileNode, !n.isPlaceholder, keep.contains(n.entry.path) { rows.insert(r) }
+        me.pendingSelect = []
+        me.rememberMissing(keepSelection)
+        if me.restoredScroll {
+            me.restoredScroll = false
+        } else if samePath && selectPaths.isEmpty && firstVisible > 0 && firstVisible < me.table.numberOfRows {
+            me.table.scrollRowToVisible(firstVisible)
+        } else if !samePath && keepSelection.isEmpty && me.table.numberOfRows > 0 {
+            me.table.scrollToTop()
         }
-        table.selectRowIndexes(rows, byExtendingSelection: false)
-        if let first = rows.first { table.scrollRowToVisible(first) }
-        else if select != nil { table.scrollRowToVisible(0) }
-        onExpandedChange?(Set(expandedFolderPaths))
-        scheduleTagRequest()
-        if let p = pendingEdit, rows.count == 1, let n = table.item(atRow: rows.first!) as? FileNode, n.entry.path == p {
-            pendingEdit = nil
-            DispatchQueue.main.async { [weak self] in self?.beginRename() }
+        me.watch(newPath)
+        me.queueFolderSizes(nodes)
+        me.onLoaded?()
+        Log.shared?.info("Listed \(newPath): \(nodes.count) items in \(ms) ms" +
+            (r.problems.isEmpty ? "" : ", \(r.problems.count) unreadable") +
+            (r.folderError == nil ? "" : ", folder error \(r.folderError!.code) \(r.folderError!.reason)"))
+    }
+
+    /// After showing a remembered listing: read the folder again in the background and update the list
+    /// in place (selection and scroll kept) only if something changed.
+    private func revalidate(_ p: String, cached: FolderReadResult, token myToken: Int, includeHidden: Bool, sort: SortSpec, wantAdded: Bool) {
+        DispatchQueue.main.async { [weak self] in self?.onBackgroundCheck?(true) }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            defer { DispatchQueue.main.async { [weak self] in self?.onBackgroundCheck?(false) } }
+            guard let me = self, me.currentToken.value == myToken else { return }
+            let started = Date()
+            let fresh = DirectoryReader.read(p, includeHidden: includeHidden, addedDate: wantAdded ? { x in DateAdded.get(x) } : nil)
+            var e: Int32 = 0
+            if let fi = Sys.statInfo(p, &e) { ListingCache.shared.put(p, includeHidden: includeHidden, folderInfo: fi, result: fresh) }
+            if ListingCache.sameListing(fresh, cached) {
+                Log.shared?.debug("Background check of \(p): unchanged")
+                return
+            }
+            let nodes = me.sortedNodes(fresh.entries, parent: nil, sort: sort)
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
+            DispatchQueue.main.async {
+                guard me.token == myToken, me.path == p else { return }
+                Log.shared?.info("Background check of \(p): changed on the server, list updated")
+                me.finishLoad(p, r: fresh, nodes: nodes, ms: ms, samePath: true, keepSelection: me.selectedPaths(), selectPaths: [])
+            }
         }
     }
 
-    // MARK: Rename in place
+    /// A network share went away: show nothing (the pane explains why) and stop reading and watching.
+    func showUnavailable() {
+        token += 1
+        loading = false
+        retire(roots)
+        roots = []
+        result = FolderReadResult()
+        stopWatching()
+        sizeQueue.cancelAllOperations()
+        sizeGeneration.value += 1
+        table.reloadData()
+    }
 
-    private var editing: (field: NSTextField, entry: FileEntry)?
-    /// Renaming a set row: only the name is edited; the extension is added back on commit.
-    private var editSetExt: String?
-    private var editShown = ""
-    private var editCancelled = false
-    private var deferred: [() -> Void] = []
+    func reload(showHidden: Bool) {
+        if resultsMode || path.isEmpty { return }
+        load(path, selectPaths: [], showHidden: showHidden)
+    }
 
-    /// Start editing the name of the single selected item; the name without its extension is
-    /// selected, like Finder.
-    @discardableResult
-    func beginRename() -> Bool {
-        let rows = table.selectedRowIndexes
-        guard rows.count == 1, let r = rows.first, let n = table.item(atRow: r) as? FileNode, !n.isPlaceholder,
-            let cell = table.view(atColumn: 0, row: r, makeIfNecessary: true) as? FileCell,
-            let tf = cell.textField else { return false }
-        table.scrollRowToVisible(r)
-        editing = (tf, n.entry)
-        editCancelled = false
-        editSetExt = n.isSet ? FileOperations.split(n.entry.name).ext : nil
-        editShown = n.displayName
-        tf.stringValue = n.isSet ? n.displayName : n.entry.name
-        tf.isEditable = true
-        tf.isSelectable = true
-        tf.drawsBackground = true
-        tf.backgroundColor = NSColor.textBackgroundColor
-        tf.textColor = NSColor.textColor
-        tf.delegate = self
-        table.window?.makeFirstResponder(tf)
-        let stem = n.entry.isDirectory || n.isSet ? tf.stringValue : FileOperations.split(n.entry.name).stem
-        tf.currentEditor()?.selectedRange = NSRange(location: 0, length: (stem as NSString).length)
+    // MARK: Expanding folders in place
+
+    private func isExpandable(_ n: FileNode) -> Bool {
+        if resultsMode { return false }
+        if !n.entry.isFolderLike { return false }
+        if n.entry.ext == "app" || KindCache.shared.isPackage(n.entry) { return false }
         return true
     }
 
-    private func endRename() {
-        guard let ed = editing else { return }
-        let tf = ed.field
-        tf.isEditable = false
-        tf.isSelectable = false
-        tf.drawsBackground = false
-        editing = nil
-        table.window?.makeFirstResponder(table)
-        let work = deferred
-        deferred.removeAll()
-        for w in work { w() }
-    }
-
-    private func contextMenu() -> NSMenu? {
-        let m = NSMenu()
-        let sel = selectedEntries()
-        func add(_ title: String, _ action: String) { m.addItem(NSMenuItem(title: title, action: Selector(action), keyEquivalent: "")) }
-        if !sel.isEmpty {
-            add("Open", "openSelected:")
-            let ow = NSMenuItem(title: "Open With", action: nil, keyEquivalent: "")
-            ow.submenu = FinderActions.openWithMenu(for: sel[0])
-            m.addItem(ow)
-            if sel.count == 1 && sel[0].isDirectory && !sel[0].isPackage { add("Open in New Window", "openInNewWindow:") }
-            if sel.contains(where: { $0.isDirectory && !$0.isPackage }) { add("Add to Sidebar", "addToSidebar:") }
-            add("Show in Finder", "revealInFinder:")
-            add("Get Info", "getInfo:")
-            if !FinderActions.ejectable(sel.map { $0.path }).isEmpty { add("Eject", "ejectVolume:") }
-            m.addItem(NSMenuItem.separator())
-            if sel.count == 1 { add("Rename", "renameSelected:") }
-            m.addItem(NSMenuItem.separator())
-            add("Copy", "copy:")
-        }
-        if NSPasteboard.general.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) {
-            add("Paste", "paste:")
-            add("Move Items Here", "pasteMoving:")
-        }
-        if !sel.isEmpty {
-            add("Duplicate", "duplicate:")
-            m.addItem(NSMenuItem.separator())
-            m.addItem(tagSwatchItem())
-            m.addItem(NSMenuItem.separator())
-            add("Copy Path", "copyPaths:")
-            m.addItem(NSMenuItem.separator())
-        }
-        add("New Folder", "newFolder:")
-        if !sel.isEmpty {
-            m.addItem(NSMenuItem.separator())
-            add("Move to Trash", "moveToTrash:")
-        }
-        return m
-    }
-
-    /// Children of an expanded folder arrived (error text when it could not be read).
-    func setChildren(path: String, entries: [FileEntry], error: String?) {
-        if editing != nil { deferred.append { [weak self] in self?.setChildren(path: path, entries: entries, error: error) }; return }
-        guard let n = nodesByPath[path] else { return }
-        let wasExpanded = expandedFolderPaths
-        n.loading = false
-        n.showPlaceholder = false
-        n.allChildren = entries
-        n.error = error
-        refreshShown(n)
-        rebuildIndex()
-        quietly { table.reloadItem(n, reloadChildren: true) }
-        reexpand(wasExpanded)
-        onExpandedChange?(Set(expandedFolderPaths))
-        scheduleTagRequest()
-    }
-
-    // MARK: Finder tags (rows on screen only, read in the background)
-
-    private var tagRequestPending = false
-
-    /// After a reload or a scroll: ask for the tags of the rows on screen (and a screen ahead).
-    func scheduleTagRequest() {
-        if tagRequestPending { return }
-        tagRequestPending = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            guard let me = self else { return }
-            me.tagRequestPending = false
-            let visible = me.table.rows(in: me.table.visibleRect)
-            guard visible.length > 0 else { return }
-            let end = min(me.table.numberOfRows, visible.location + visible.length * 2)
-            me.visibleTagPaths = me.pathsForTags(visible.location..<end)
-            TagLoader.shared.request(me.visibleTagPaths, owner: me)
-            var folders = Set(me.expandedFolderPaths)
-            folders.insert(me.rootPath)
-            TagWatcher.shared.update(owner: me, folders: folders)
+    private func loadChildren(_ node: FileNode) {
+        if node.loading { return }
+        node.loading = true
+        let p = node.path
+        let hidden = Prefs.showHidden
+        let wantAdded = needsAddedDates
+        let sort = currentSort
+        let myToken = token
+        let network = ListingCache.lifetime > 0 && VolumeRegistry.shared.treatAsNetwork(p)
+        childQueue.addOperation { [weak self] in
+            guard let me = self, me.currentToken.value == myToken else { return }
+            // Network share: show the remembered listing at once, then read again in the background.
+            let remembered = network ? ListingCache.shared.peek(p, includeHidden: hidden) : nil
+            if let cached = remembered {
+                let kids = me.sortedNodes(cached.entries, parent: node, sort: sort)
+                DispatchQueue.main.async {
+                    guard me.token == myToken else { return }
+                    me.applyChildren(node, p, kids: kids, r: cached)
+                    node.loading = true   // still being checked
+                    me.onBackgroundCheck?(true)
+                }
+            }
+            defer { if remembered != nil { DispatchQueue.main.async { me.onBackgroundCheck?(false) } } }
+            let r = DirectoryReader.read(p, includeHidden: hidden, addedDate: wantAdded ? { x in DateAdded.get(x) } : nil)
+            if network {
+                var e: Int32 = 0
+                if let fi = Sys.statInfo(p, &e) { ListingCache.shared.put(p, includeHidden: hidden, folderInfo: fi, result: r) }
+            }
+            if let cached = remembered, ListingCache.sameListing(cached, r) {
+                DispatchQueue.main.async { node.loading = false }
+                return
+            }
+            let kids = me.sortedNodes(r.entries, parent: node, sort: sort)
+            DispatchQueue.main.async {
+                guard me.token == myToken else { return }
+                me.applyChildren(node, p, kids: kids, r: r)
+            }
         }
     }
 
-    /// Paths of these rows and of every file of their sets (a set row shows and changes all).
-    private func pathsForTags(_ rows: Range<Int>) -> [String] {
-        var paths: [String] = []
-        for r in rows {
-            guard let n = table.item(atRow: r) as? FileNode, !n.isPlaceholder else { continue }
-            if n.isSet { paths += n.members.map { $0.path } } else { paths.append(n.entry.path) }
+    private func applyChildren(_ node: FileNode, _ p: String, kids: [FileNode], r: FolderReadResult) {
+        let me = self
+        let keep = me.selectedPaths() + (Date() < me.wantSelectedUntil ? me.wantSelected : [])
+        node.loading = false
+        me.retire(node.children)
+        me.applyCachedSizes(kids)
+        node.children = kids
+        node.error = r.folderError
+        me.table.reloadItem(node, reloadChildren: true)
+        me.onRowsChanged?()
+        if me.expandedPaths.contains(p) { me.expandSafely(node) }
+        me.restoreExpansion(kids)
+        me.continueRecursiveExpansion(kids)
+        let wantedBefore = Date() < me.wantSelectedUntil ? me.wantSelected : []
+        me.select(paths: keep, scroll: false)
+        if let found = wantedBefore.first(where: { me.selectedPaths().contains($0) }), let fn = me.node(forPath: found) {
+            let r = me.table.row(forItem: fn)
+            if r >= 0 { me.table.scrollRowToVisible(r) }
         }
-        return paths
-    }
-
-    private var visibleTagPaths: [String] = []
-    private var tagTimer: Timer?
-
-    /// The window closes: no more tag reads, checks or FSEvents for it.
-    func stopTags() {
-        tagTimer?.invalidate()
-        tagTimer = nil
-        TagWatcher.shared.remove(owner: self)
-        TagLoader.shared.release(owner: self)
-    }
-
-    /// Shares only (local changes all come through FSEvents): every 5 s, while the window is on
-    /// screen, a stat per row on screen; tags re-read only where the change time moved.
-    private func startTagRecheck() {
-        let t = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
-            guard let me = self, NSApp.isActive || NSApp.windows.contains(where: { $0.isVisible }),
-                let w = me.table.window, w.occlusionState.contains(.visible) else { return }
-            let net = me.visibleTagPaths.filter { Volumes.isNetwork($0) }
-            if !net.isEmpty { TagLoader.shared.recheck(net) }
+        me.rememberMissing(keep)
+        me.watch(p)
+        me.queueFolderSizes(kids)
+        if let fe = r.folderError {
+            Log.shared?.warn("Could not open folder \(p): \(fe.reason) (code \(fe.code))")
         }
-        RunLoop.main.add(t, forMode: .common)
-        tagTimer = t
+        me.onLoaded?()
     }
 
-    func tagsArrived(_ paths: [String]) {
-        let set = Set(paths)
-        var rows = IndexSet()
-        for r in 0..<table.numberOfRows {
-            guard let n = table.item(atRow: r) as? FileNode, !n.isPlaceholder else { continue }
-            if set.contains(n.entry.path) || n.members.contains(where: { set.contains($0.path) }) { rows.insert(r) }
-        }
-        guard !rows.isEmpty, editing == nil else { return }
-        let col = table.column(withIdentifier: NSUserInterfaceItemIdentifier("name"))
-        if col >= 0 { quietly { table.reloadData(forRowIndexes: rows, columnIndexes: IndexSet(integer: col)) } }
-    }
-
-    private static var dotCache: [Int: NSImage] = [:]
-
-    static func tagColor(_ c: Int) -> NSColor {
-        switch c {
-        case 1: return NSColor.systemGray
-        case 2: return NSColor.systemGreen
-        case 3: return NSColor.systemPurple
-        case 4: return NSColor.systemBlue
-        case 5: return NSColor.systemYellow
-        case 6: return NSColor.systemRed
-        case 7: return NSColor.systemOrange
-        default: return NSColor.clear
+    /// Re-open folders that were expanded before a reload.
+    private func restoreExpansion(_ nodes: [FileNode]) {
+        if expandedPaths.isEmpty { return }
+        for n in nodes where expandedPaths.contains(n.path) && isExpandable(n) {
+            if n.children == nil {
+                loadChildren(n)
+            } else {
+                expandSafely(n)
+                restoreExpansion(n.children ?? [])
+            }
         }
     }
 
-    /// A small coloured dot (menus, tag menu).
-    static func tagDot(_ c: Int) -> NSImage {
-        if let i = dotCache[c] { return i }
-        let i = NSImage(size: NSSize(width: 12, height: 12))
-        i.lockFocus()
-        tagColor(c).setFill()
-        NSBezierPath(ovalIn: NSRect(x: 1, y: 1, width: 10, height: 10)).fill()
-        i.unlockFocus()
-        dotCache[c] = i
-        return i
+    // CRASH FIX (0.10.3): macOS stops the app ("should not be expanded already") if a folder row is told
+    // to expand while it is already expanding. That happened when Find re-opened folders after a reload
+    // while Option was held (e.g. right after an Option-drag copy): the re-open was taken for an
+    // Option-click "open all subfolders", which expanded the same row again from inside its own expansion.
+    // Now: every expansion Find makes itself goes through expandSafely (never a row that is expanded or
+    // expanding, and Option is ignored), and nothing is expanded from inside another row's expansion.
+    private var internalExpansions = 0
+    private var expandingNow = Set<ObjectIdentifier>()
+    /// Last time files were dragged over this list. While dragging, macOS opens a folder you hover over;
+    /// Option then means "copy", never "open all subfolders".
+    private var lastDropHover = Date.distantPast
+
+    /// Expand a row from code. Does nothing if it is already expanded or being expanded.
+    private func expandSafely(_ n: FileNode) {
+        let id = ObjectIdentifier(n)
+        if expandingNow.contains(id) || table.isItemExpanded(n) { return }
+        expandingNow.insert(id)
+        internalExpansions += 1
+        table.expandItem(n)
+        internalExpansions -= 1
+        expandingNow.remove(id)
     }
 
-    private static let truncating: NSParagraphStyle = {
-        let p = NSMutableParagraphStyle()
-        p.lineBreakMode = .byTruncatingMiddle
-        return p
-    }()
-
-    /// Name followed by its tag colours as dots, like Finder; a set row shows every colour any of
-    /// its files has. Truncates in the middle on one line, like the plain cells.
-    private func nameWithTags(_ n: FileNode, color: NSColor) -> NSAttributedString {
-        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
-        let s = NSMutableAttributedString(string: n.displayName,
-                                          attributes: [.foregroundColor: color, .font: font, .paragraphStyle: FileListController.truncating])
-        let paths = n.isSet ? n.members.map { $0.path } : [n.entry.path]
-        var colors: [Int] = []
-        for p in paths { for t in TagLoader.shared.cached(p) ?? [] where t.color > 0 && !colors.contains(t.color) { colors.append(t.color) } }
-        if colors.isEmpty { return s }
-        s.append(NSAttributedString(string: " ", attributes: [.font: font, .paragraphStyle: FileListController.truncating]))
-        for c in colors {
-            s.append(NSAttributedString(string: "\u{25CF}", attributes: [.foregroundColor: FileListController.tagColor(c),
-                                                                       .font: NSFont.systemFont(ofSize: 10),
-                                                                       .paragraphStyle: FileListController.truncating]))
-        }
-        return s
-    }
-
-    /// A colour was clicked in the menu's tag row.
-    var onTagPick: ((Int) -> Void)?
-
-    /// Finder's row of colour dots in the context menu: a tick when every selected file has the
-    /// colour, a dash when some do. What a click does is decided from the files themselves.
-    func tagSwatchItem() -> NSMenuItem {
-        let targets = tagTargets()
-        let known = targets.map { TagLoader.shared.cached($0) ?? [] }
-        var states: [Int: NSControl.StateValue] = [:]
-        for c in FinderTags.menuOrder {
-            let have = known.filter { $0.contains { $0.color == c } }.count
-            states[c] = have == 0 ? .off : (have == known.count ? .on : .mixed)
-        }
-        let item = NSMenuItem()
-        item.view = TagSwatchView(states: states) { [weak self] c in self?.onTagPick?(c) }
-        return item
-    }
-
-    /// Paths whose tags a menu should show / change: the selection with its sets.
-    func tagTargets() -> [String] {
-        return withSetMembers(selectedEntries())
-    }
-
-    /// Re-list an expanded folder (watcher event, refresh).
-    func relist(path: String) {
-        guard let n = nodesByPath[path], table.isItemExpanded(n) else { return }
-        onNeedChildren?(path)
-    }
-
-    func reapplyFilterAndSort() {
-        setEntries(rootEntries)
-    }
-
-    func showMessage(_ text: String?, spinning: Bool = false) {
-        message.stringValue = text ?? ""
-        message.isHidden = text == nil
-        if spinning { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
-    }
-
-    func selectedEntries() -> [FileEntry] {
-        return table.selectedRowIndexes.compactMap { r -> FileEntry? in
-            guard let n = table.item(atRow: r) as? FileNode, !n.isPlaceholder else { return nil }
-            return n.entry
-        }
-    }
-
-    var selectionCount: Int { return selectedEntries().count }
-
-    // MARK: Preview support
-
-    /// The file the preview should show for a row: a set's JPG/HEIC, else the file.
-    func pictureEntry(_ e: FileEntry) -> FileEntry {
-        for r in 0..<table.numberOfRows {
-            guard let n = table.item(atRow: r) as? FileNode, n.entry.path == e.path else { continue }
-            return n.members.first { ["jpg", "jpeg", "heic", "heif"].contains($0.ext) } ?? e
-        }
-        return e
-    }
-
-    /// Files around the selected row (for prefetching), nearest first.
-    func neighbours(of e: FileEntry, before: Int, after: Int) -> [FileEntry] {
-        var rows: [FileEntry] = []
-        var at = -1
-        for r in 0..<table.numberOfRows {
-            guard let n = table.item(atRow: r) as? FileNode, !n.isPlaceholder, !n.isExpandableFolder else { continue }
-            if n.entry.path == e.path { at = rows.count }
-            rows.append(n.entry)
-        }
-        guard at >= 0 else { return [] }
-        let next = rows[min(rows.count, at + 1)..<min(rows.count, at + 1 + after)]
-        let prev = rows[max(0, at - before)..<at]
-        return Array(next) + Array(prev.reversed())
-    }
-
-    /// Arrow keys in the preview: the next/previous row.
-    func step(_ d: Int) {
-        let n = table.numberOfRows
-        guard n > 0 else { return }
-        var r = table.selectedRow < 0 ? 0 : table.selectedRow + d
-        while r >= 0, r < n, (table.item(atRow: r) as? FileNode)?.isPlaceholder ?? true { r += d }
-        guard r >= 0, r < n else { return }
-        table.selectRowIndexes(IndexSet(integer: r), byExtendingSelection: false)
-        table.scrollRowToVisible(r)
-    }
-
-    /// Rows on screen (expanded folders included) and how many of them are sets.
-    var shownCounts: (rows: Int, sets: Int, total: Int) {
-        var rows = 0, sets = 0, total = 0
-        for r in 0..<table.numberOfRows {
-            guard let n = table.item(atRow: r) as? FileNode, !n.isPlaceholder else { continue }
-            rows += 1
-            total += max(1, n.members.count)
-            if n.isSet { sets += 1 }
-        }
-        return (rows, sets, total)
-    }
-
-    // MARK: Columns (right-click the header; hidden columns are remembered)
-
-    private static var hiddenColumns: Set<String> {
-        get { return Set(UserDefaults.standard.stringArray(forKey: "hiddenColumns") ?? ["kind"]) }   // Kind hidden by default
-        set { UserDefaults.standard.set(Array(newValue).sorted(), forKey: "hiddenColumns") }
-    }
-
-    private func setUpColumnMenu() {
-        let m = NSMenu()
-        let hidden = FileListController.hiddenColumns
-        for c in table.tableColumns where c.identifier.rawValue != "name" {
-            c.isHidden = hidden.contains(c.identifier.rawValue)
-            let item = NSMenuItem(title: c.title, action: #selector(toggleColumn(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = c.identifier.rawValue
-            item.state = c.isHidden ? .off : .on
-            m.addItem(item)
-        }
-        table.headerView?.menu = m
-    }
-
-    @objc private func toggleColumn(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String,
-            let c = table.tableColumns.first(where: { $0.identifier.rawValue == id }) else { return }
-        c.isHidden = !c.isHidden
-        sender.state = c.isHidden ? .off : .on
-        var h = FileListController.hiddenColumns
-        if c.isHidden { h.insert(id) } else { h.remove(id) }
-        FileListController.hiddenColumns = h
-        table.sizeLastColumnToFit()
-    }
-
-    // MARK: Actions
-
-    @objc private func doubleClicked(_ sender: Any?) {
-        guard table.clickedRow >= 0 else { return }
-        if NSEvent.modifierFlags.contains(.command), let n = table.item(atRow: table.clickedRow) as? FileNode,
-            !n.isPlaceholder, n.isExpandableFolder {
-            onOpenInNewWindow?(n.entry)
+    func outlineViewItemWillExpand(_ notification: Notification) {
+        guard let node = notification.userInfo?["NSObject"] as? FileNode else { return }
+        expandedPaths.insert(node.path)
+        let byUser = internalExpansions == 0
+        let duringDrag = Date().timeIntervalSince(lastDropHover) < 1.5
+        // Option-click on a triangle (or Option-Right) opens every subfolder too, like Finder.
+        // Only for an expansion the user made; never for Find re-opening folders after a reload.
+        if byUser && !duringDrag && NSEvent.modifierFlags.contains(.option) && !isUnderRecursive(node.path) {
+            recursiveRoots.insert(node.path)
+            recursiveCount = 0
+            if node.children == nil {
+                loadChildren(node)
+            } else {
+                // This row is expanding right now: open its subfolders after it has finished.
+                let kids = node.children ?? []
+                DispatchQueue.main.async { [weak self] in self?.continueRecursiveExpansion(kids) }
+            }
             return
         }
-        openSelection()
+        if node.children == nil {
+            loadChildren(node)
+        } else if byUser && isUnderRecursive(node.path) {
+            let kids = node.children ?? []
+            DispatchQueue.main.async { [weak self] in self?.continueRecursiveExpansion(kids) }
+        }
     }
 
-    func openSelection() {
-        let sel = selectedEntries()
-        if !sel.isEmpty { onOpen?(sel) }
+    // MARK: Option: expand / collapse all subfolders
+
+    private func isUnderRecursive(_ p: String) -> Bool {
+        for r in recursiveRoots where Paths.isInside(p, root: r) { return true }
+        return false
     }
 
-    /// Paths of `entries` plus the other files of their sets, from the listings in memory (no
-    /// disk access: safe on the main thread). Sets off: just the entries.
-    func withSetMembers(_ entries: [FileEntry]) -> [String] {
-        var out: [String] = []
-        var seen = Set<String>()
-        for e in entries {
-            var members = [e.path]
-            if FileOperations.useSets && !e.isDirectory && FileOperations.groupable.contains(e.ext) {
-                let dir = Paths.parent(e.path)
-                let siblings = dir == rootPath ? rootEntries : (nodesByPath[dir]?.allChildren ?? [])
-                let stem = FileOperations.split(e.name).stem
-                members += siblings.filter { s in
-                    !s.isDirectory && FileOperations.groupable.contains(s.ext) && FileOperations.split(s.name).stem == stem
-                }.map { $0.path }
+    private func beginRecursive(_ node: FileNode) {
+        recursiveRoots.insert(node.path)
+        recursiveCount = 0
+        expandedPaths.insert(node.path)
+        if node.children == nil {
+            loadChildren(node)
+        } else {
+            expandSafely(node)
+            continueRecursiveExpansion(node.children ?? [])
+        }
+    }
+
+    /// Expand the folder children of a folder that is being opened with Option.
+    private func continueRecursiveExpansion(_ kids: [FileNode]) {
+        guard let first = kids.first, let parent = first.parent, isUnderRecursive(parent.path) else { return }
+        for k in kids where isExpandable(k) {
+            if k.entry.kind == .symlink { continue } // never follow links when opening everything
+            if recursiveCount >= FileListController.recursiveLimit {
+                Log.shared?.warn("Open all subfolders stopped at \(FileListController.recursiveLimit) folders")
+                return
             }
-            for m in members where !seen.contains(m) { seen.insert(m); out.append(m) }
+            recursiveCount += 1
+            expandedPaths.insert(k.path)
+            if k.children == nil {
+                loadChildren(k)
+            } else {
+                expandSafely(k)
+            }
+        }
+    }
+
+    /// Option-Right on the selection.
+    func expandSelectedRecursively() {
+        for n in selectedNodes() where isExpandable(n) { beginRecursive(n) }
+    }
+
+    /// Option-Left on the selection: close the folder and everything inside it.
+    func collapseSelectedRecursively() {
+        for n in selectedNodes() where table.isItemExpanded(n) {
+            recursiveRoots = recursiveRoots.filter { !Paths.isInside($0, root: n.path) }
+            table.collapseItem(n, collapseChildren: true)
+        }
+    }
+
+    func outlineViewItemDidExpand(_ notification: Notification) {
+        onRowsChanged?()
+    }
+
+    func outlineViewItemDidCollapse(_ notification: Notification) {
+        defer { onRowsChanged?() }
+        guard let node = notification.userInfo?["NSObject"] as? FileNode else { return }
+        expandedPaths.remove(node.path)
+        recursiveRoots = recursiveRoots.filter { !Paths.isInside($0, root: node.path) }
+        // Forget the contents so the next expand reads the folder fresh; stop watching it and below.
+        for p in Array(watchers.keys) where Paths.isInside(p, root: node.path) {
+            watchers[p]?.cancel()
+            watchers[p] = nil
+        }
+        for p in Array(expandedPaths) where Paths.isInside(p, root: node.path) { expandedPaths.remove(p) }
+        retire(node.children)
+        node.children = nil
+        table.reloadItem(node, reloadChildren: true)
+    }
+
+    // MARK: Watching for changes
+
+    /// A delete/rename event is only a hint: network shares send them for ordinary changes.
+    /// The folder is checked on disk (FolderWatchCheck) before Find ever leaves it.
+    private func watch(_ p: String) {
+        if watchers[p] != nil || watchPaused.contains(p) { return }
+        if watchers.count >= 64 { return }
+        if VolumeRegistry.shared.treatAsNetwork(p) {
+            // On a share, opening the folder is a request to the server: never on the main thread.
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let identity = FolderIdentity.of(p)
+                let fd = open(p, O_EVTONLY)
+                DispatchQueue.main.async {
+                    guard fd >= 0 else { return }
+                    guard let s = self, s.watchers[p] == nil, !s.resultsMode, s.path == p || s.expandedPaths.contains(p) else {
+                        close(fd)   // the pane moved on meanwhile: no watcher for a folder that isn't shown
+                        return
+                    }
+                    s.installWatcher(p, fd: fd, identity: identity)
+                }
+            }
+            return
+        }
+        let identity = FolderIdentity.of(p)
+        let fd = open(p, O_EVTONLY)
+        if fd < 0 { return }
+        installWatcher(p, fd: fd, identity: identity)
+    }
+
+    /// Watchers of folders on shares run on their own queue: closing a share folder's handle is a request
+    /// to the server (it waited for the server on the main thread each time you left a folder - 0.17.3).
+    private static let networkWatchQueue = DispatchQueue(label: "find.watch.network", qos: .utility)
+
+    private func installWatcher(_ p: String, fd: Int32, identity: FolderIdentity?) {
+        let remote = VolumeRegistry.shared.treatAsNetwork(p)
+        let src = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .delete, .rename, .link],
+                                                            queue: remote ? FileListController.networkWatchQueue : DispatchQueue.main)
+        src.setEventHandler { [weak self] in
+            let ev = src.data
+            if remote {
+                DispatchQueue.main.async { self?.watchEvent(p, ev: ev, identity: identity) }
+            } else {
+                self?.watchEvent(p, ev: ev, identity: identity)
+            }
+        }
+        src.setCancelHandler {
+            close(fd)
+        }
+        watchers[p] = src
+        src.resume()
+    }
+
+    private func watchEvent(_ p: String, ev: DispatchSource.FileSystemEvent, identity: FolderIdentity?) {
+        do {
+            let s = self
+            if ev.contains(.delete) || ev.contains(.rename) {
+                s.watchers[p]?.cancel()
+                s.watchers[p] = nil
+                s.verifyAfterEvent(p, identity: identity, event: ev.contains(.delete) ? "delete" : "rename")
+                return
+            }
+            s.scheduleReload(p)
+        }
+    }
+
+    private func verifyAfterEvent(_ p: String, identity: FolderIdentity?, event: String) {
+        let myPath = path
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let verdict = FolderWatchCheck.verify(p, watched: identity)
+            DispatchQueue.main.async {
+                guard let s = self else { return }
+                Log.shared?.info("WATCH \(event) event for \(p): checked on disk, result \(verdict.name)")
+                if s.path != myPath || s.resultsMode { return }
+                if verdict == .gone {
+                    if p == s.path {
+                        s.onFolderGone?(p)
+                    } else {
+                        s.scheduleReload(Paths.parent(p))
+                    }
+                } else {
+                    let now = Date()
+                    let recent = (s.falseAlarms[p] ?? []).filter { now.timeIntervalSince($0) < 10 } + [now]
+                    s.falseAlarms[p] = recent
+                    if recent.count >= 3 {
+                        s.watchPaused.insert(p)
+                        Log.shared?.warn("WATCH paused for \(p): \(recent.count) false delete/rename events in 10 s (typical of network shares). Use Refresh to update this folder.")
+                    }
+                    // Still there (or can't be reached right now): stay and refresh. The reload
+                    // watches the folder again, and shows a notice if it can't be read.
+                    s.scheduleReload(p)
+                }
+            }
+        }
+    }
+
+    private func scheduleReload(_ p: String) {
+        if reloadScheduled.contains(p) { return }
+        reloadScheduled.insert(p)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let s = self else { return }
+            s.reloadScheduled.remove(p)
+            if s.resultsMode { return }
+            // 0.17: not while a name is being typed in place (the new rows would cover the field).
+            if s.holdReloads?() == true { s.scheduleReload(p); return }
+            if p == s.path {
+                s.load(s.path, selectPaths: [], showHidden: Prefs.showHidden)
+            } else if let node = s.node(forPath: p), node.children != nil {
+                s.loadChildren(node)
+            }
+        }
+    }
+
+    func stopWatching() {
+        StallWatch.mark("stopping folder watchers (\(watchers.count)) for \(path)")
+        for (_, w) in watchers { w.cancel() }
+        watchers.removeAll()
+    }
+
+    // MARK: Folder sizes (optional)
+
+    private func applyCachedSizes(_ nodes: [FileNode]) {
+        if folderSizeCache.isEmpty { return }
+        for n in nodes where n.entry.kind == .directory {
+            if let sz = folderSizeCache[n.path] { n.entry.size = sz }
+        }
+    }
+
+    /// Forget calculated sizes (Refresh), so they are counted again.
+    func clearFolderSizes() {
+        folderSizeCache.removeAll()
+        sizeGeneration.value += 1
+        sizeQueue.cancelAllOperations()
+    }
+
+    private func queueFolderSizes(_ nodes: [FileNode]) {
+        guard Prefs.calculateFolderSizes, !resultsMode else { return }
+        // On a network share, counting every folder's contents means many requests to the server:
+        // only when Settings > Network allows it.
+        if !Prefs.netFolderSizes && VolumeRegistry.shared.treatAsNetwork(path) { return }
+        let gen = sizeGeneration.value
+        let flag = sizeGeneration
+        for n in nodes where n.entry.kind == .directory && n.entry.size < 0 {
+            let p = n.path
+            if folderSizeCache[p] != nil { continue }
+            sizeQueue.addOperation { [weak self] in
+                if flag.value != gen { return }
+                let r = FolderSize.compute(p, isCancelled: { flag.value != gen })
+                if r.cancelled { return }
+                DispatchQueue.main.async {
+                    guard let s = self, flag.value == gen else { return }
+                    s.folderSizeCache[p] = r.bytes
+                    if let node = s.node(forPath: p) {
+                        node.entry.size = r.bytes
+                        s.table.reloadItem(node)
+                    }
+                    if s.spec.column == .size { s.scheduleSizeResort() }
+                }
+            }
+        }
+    }
+
+    private func scheduleSizeResort() {
+        if sizeResortScheduled { return }
+        sizeResortScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+            guard let s = self else { return }
+            s.sizeResortScheduled = false
+            s.resort()
+        }
+    }
+
+    /// Called when the folder-size option is switched.
+    func folderSizeOptionChanged() {
+        if Prefs.calculateFolderSizes {
+            queueFolderSizes(roots)
+        } else {
+            clearFolderSizes()
+            for i in 0..<table.numberOfRows {
+                if let n = table.item(atRow: i) as? FileNode, n.entry.kind == .directory { n.entry.size = -1 }
+            }
+            table.reloadData()
+        }
+    }
+
+    // MARK: Search results
+
+    func beginResults() {
+        token += 1
+        stopWatching()
+        resultsMode = true
+        loading = true
+        retire(roots)
+        roots = []
+        result = FolderReadResult()
+        applyVisibleColumns()
+        table.reloadData()
+    }
+
+    func appendResults(_ entries: [FileEntry]) {
+        guard resultsMode else { return }
+        let keep = selectedPaths()
+        let s = currentSort
+        retire(roots)
+        if roots.count + entries.count <= 20_000 {
+            let all = roots.map { $0.entry } + entries
+            roots = Listing.sorted(all, by: s, kindOf: KindCache.shared.kind).map { FileNode($0, parent: nil) }
+        } else {
+            roots.append(contentsOf: entries.map { FileNode($0, parent: nil) })
+        }
+        table.reloadData()
+        select(paths: keep, scroll: false)
+    }
+
+    /// After a rename inside search results: show the new name in place.
+    func updateResult(_ oldPath: String, to newPath: String) {
+        guard resultsMode, let n = node(forPath: oldPath) else { return }
+        var e: Int32 = 0
+        if let fresh = FileEntry.make(path: newPath, err: &e) {
+            n.entry = fresh
+            table.reloadItem(n)
+        }
+    }
+
+    func endResults() {
+        loading = false
+        if roots.count > 20_000 { resort() }
+    }
+
+    // MARK: Selection
+
+    var allLoadedEntries: [FileEntry] {
+        var out: [FileEntry] = []
+        for i in 0..<table.numberOfRows {
+            if let n = table.item(atRow: i) as? FileNode { out.append(n.entry) }
         }
         return out
     }
 
-    // MARK: Drag and drop
+    var rootCount: Int { return roots.count }
 
-    func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
-        guard editing == nil, let n = item as? FileNode, !n.isPlaceholder else { return nil }
-        return NSURL(fileURLWithPath: n.entry.path, isDirectory: n.entry.isDirectory)   // isDirectory: no stat
+    func selectedNodes() -> [FileNode] {
+        return table.selectedRowIndexes.compactMap { table.item(atRow: $0) as? FileNode }
     }
 
-    /// A set row drags as one row; the other files of the set are added to the drag, so Finder
-    /// (and any other app) gets the whole set.
-    func outlineView(_ outlineView: NSOutlineView, draggingSession session: NSDraggingSession, willBeginAt screenPoint: NSPoint, forItems draggedItems: [Any]) {
-        Activity.set("drag: out")
-        let extra = draggedItems.compactMap { $0 as? FileNode }.flatMap { n in n.members.filter { $0.path != n.entry.path } }
-        if extra.isEmpty { return }
-        let ok = session.draggingPasteboard.writeObjects(extra.map { NSURL(fileURLWithPath: $0.path, isDirectory: false) })
-        Log.info("drag: \(extra.count) set member(s) added to the drag: \(ok ? "ok" : "refused")")
+    func selectedEntries() -> [FileEntry] {
+        return selectedNodes().map { $0.entry }
     }
 
-    func outlineView(_ outlineView: NSOutlineView, draggingSession session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
-        Activity.set("idle")
+    func selectedNames() -> [String] {
+        return selectedEntries().map { $0.name }
     }
 
-    private func droppedPaths(_ info: NSDraggingInfo) -> [String] {
-        let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
-        return urls.map { $0.path }
-    }
-
-    /// The folder a drop at (item, index) goes into: a folder row itself, otherwise the folder the
-    /// row is in. Re-targets the outline's highlight to match.
-    private func dropFolder(_ ov: NSOutlineView, _ item: Any?, _ index: Int) -> String {
-        if let n = item as? FileNode, !n.isPlaceholder {
-            if n.isExpandableFolder {
-                if index != NSOutlineViewDropOnItemIndex { ov.setDropItem(n, dropChildIndex: NSOutlineViewDropOnItemIndex) }
-                return n.entry.path
-            }
-            let parent = ov.parent(forItem: n)
-            ov.setDropItem(parent, dropChildIndex: NSOutlineViewDropOnItemIndex)
-            return (parent as? FileNode)?.entry.path ?? rootPath
+    /// Space: Fast Preview, or macOS Quick Look if chosen in Settings.
+    func previewSelection() {
+        if Prefs.spaceOpensQuickLook {
+            FastPreview.shared.close()
+            quickLook.toggle()
+        } else {
+            quickLook.close()
+            FastPreview.shared.toggle(for: self)
         }
-        if item != nil { ov.setDropItem(nil, dropChildIndex: NSOutlineViewDropOnItemIndex) }
-        if item == nil && index != NSOutlineViewDropOnItemIndex { ov.setDropItem(nil, dropChildIndex: NSOutlineViewDropOnItemIndex) }
-        return rootPath
     }
 
-    private func dropKind(_ info: NSDraggingInfo, _ paths: [String], _ dest: String) -> TransferKind? {
-        let mods = NSEvent.modifierFlags
-        let same = paths.allSatisfy { Transfers.sameVolume($0, dest) }
-        var kind = Transfers.dropOperation(sameVolume: same, option: mods.contains(.option), command: mods.contains(.command))
-        let allowed = info.draggingSourceOperationMask
-        if kind == .move && !allowed.contains(.move) && !allowed.contains(.generic) { kind = .copy }
-        if kind == .copy && !allowed.contains(.copy) { return allowed.contains(.move) ? .move : nil }
-        return kind
+    /// Row of the first selected item (for "3 of 120").
+    func selectedRowIndex() -> Int? {
+        let i = table.selectedRowIndexes.first
+        return i
     }
 
-    func outlineView(_ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo, proposedItem item: Any?, proposedChildIndex index: Int) -> NSDragOperation {
-        return Activity.during("drag: hover") { validateDropNow(outlineView, info, item, index) }
+    func selectedPaths() -> [String] {
+        return selectedEntries().map { $0.path }
     }
 
-    private func validateDropNow(_ outlineView: NSOutlineView, _ info: NSDraggingInfo, _ item: Any?, _ index: Int) -> NSDragOperation {
-        let paths = droppedPaths(info)
-        guard !paths.isEmpty, editing == nil else { return [] }
-        let dest = dropFolder(outlineView, item, index)
-        if paths.contains(dest) { return [] }                                   // onto itself
-        guard let kind = dropKind(info, paths, dest) else { return [] }
-        if kind == .move && paths.allSatisfy({ Paths.parent($0) == dest }) { return [] }   // already there
-        return kind == .copy ? .copy : .move
+    func node(forPath p: String) -> FileNode? {
+        for i in 0..<table.numberOfRows {
+            if let n = table.item(atRow: i) as? FileNode, n.path == p { return n }
+        }
+        return nil
     }
 
-    func outlineView(_ outlineView: NSOutlineView, acceptDrop info: NSDraggingInfo, item: Any?, childIndex index: Int) -> Bool {
-        return Activity.during("drag: drop") { acceptDropNow(info, item) }
+    func select(names: [String], scroll: Bool) {
+        select(paths: names.map { Paths.join(path, $0) }, scroll: scroll)
     }
 
-    private func acceptDropNow(_ info: NSDraggingInfo, _ item: Any?) -> Bool {
-        let paths = droppedPaths(info)
-        let dest = (item as? FileNode)?.entry.path ?? rootPath
-        guard !paths.isEmpty, let kind = dropKind(info, paths, dest) else { return false }
-        Log.info("drop: \(paths.count) item(s), \(kind.rawValue) -> \(dest)")
-        onDrop?(paths, dest, kind)
-        return true
+    /// Remember wanted items that aren't shown yet (for a few seconds).
+    private func rememberMissing(_ wanted: [String]) {
+        let shown = Set(selectedPaths())
+        let missing = wanted.filter { !shown.contains($0) }
+        wantSelected = missing
+        wantSelectedUntil = missing.isEmpty ? Date.distantPast : Date().addingTimeInterval(6)
     }
 
-    // MARK: Data source
+    func select(paths: [String], scroll: Bool) {
+        if paths.isEmpty {
+            table.deselectAll(nil)
+            return
+        }
+        let wanted = Set(paths)
+        var idx = IndexSet()
+        for i in 0..<table.numberOfRows {
+            if let n = table.item(atRow: i) as? FileNode, wanted.contains(n.path) { idx.insert(i) }
+        }
+        table.selectRowIndexes(idx, byExtendingSelection: false)
+        if scroll, let first = idx.first { table.scrollRowToVisible(first) }
+    }
+
+    /// Select every loaded item with the same extension as `ext` (Find addition to the context menu).
+    func selectAll(withExtension ext: String) {
+        var idx = IndexSet()
+        for i in 0..<table.numberOfRows {
+            if let n = table.item(atRow: i) as? FileNode, n.entry.kind != .directory, n.entry.ext == ext { idx.insert(i) }
+        }
+        table.selectRowIndexes(idx, byExtendingSelection: false)
+    }
+
+    @objc func doubleClicked(_ sender: Any?) {
+        let row = table.clickedRow
+        guard row >= 0, let n = table.item(atRow: row) as? FileNode else { return }
+        onOpen?(n.entry)
+    }
+
+    // MARK: Outline data source / delegate
 
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
         guard let n = item as? FileNode else { return roots.count }
-        return n.shown.count
+        return n.children?.count ?? 0
     }
 
     func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
         guard let n = item as? FileNode else { return roots[index] }
-        return n.shown[index]
+        return n.children?[index] ?? roots[0]
     }
 
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
-        return (item as? FileNode)?.isExpandableFolder ?? false
+        guard let n = item as? FileNode else { return false }
+        return isExpandable(n)
     }
 
-    // MARK: Expansion
-
-    func outlineViewItemWillExpand(_ notification: Notification) {
-        if quiet > 0 { return }
-        guard let n = notification.userInfo?["NSObject"] as? FileNode, n.isExpandableFolder, !n.loading else { return }
-        n.loading = true
-        let path = n.entry.path
-        // "Loading..." only if the folder is slow: no flicker for quick folders.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            guard let me = self, let node = me.nodesByPath[path], node.loading, me.table.isItemExpanded(node) else { return }
-            node.showPlaceholder = true
-            me.refreshShown(node)
-            me.quietly { me.table.reloadItem(node, reloadChildren: true) }
-        }
-        onNeedChildren?(path)
+    func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
+        return ThemedRowView()
     }
 
-    func outlineViewItemDidExpand(_ notification: Notification) {
-        onExpandedChange?(Set(expandedFolderPaths))
+    private func dateText(_ t: Double, width: CGFloat) -> String {
+        if t <= 0 { return "--" }
+        let d = Date(timeIntervalSince1970: t)
+        if width < 110 { return shortDate.string(from: d) }
+        if width < 170 { return mediumDate.string(from: d) }
+        return longDate.string(from: d)
     }
-
-    func outlineViewItemDidCollapse(_ notification: Notification) {
-        onExpandedChange?(Set(expandedFolderPaths))
-    }
-
-    // MARK: Cells
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
         guard let col = tableColumn, let n = item as? FileNode else { return nil }
-        let id = col.identifier
-        let cell = (outlineView.makeView(withIdentifier: id, owner: self) as? FileCell) ?? FileCell(id: id)
         let e = n.entry
-        if n.isPlaceholder {
-            cell.textField?.stringValue = id.rawValue == "name" ? "Loading..." : ""
-            cell.textField?.textColor = NSColor.secondaryLabelColor
-            cell.imageView?.image = nil
-            cell.spinning = id.rawValue == "name"
-            return cell
-        }
-        cell.spinning = false
+        let id = col.identifier
+        let isName = id.rawValue == "name"
+        let v = (outlineView.makeView(withIdentifier: id, owner: nil) as? ThemedCellView) ?? ThemedCellView.make(identifier: id, withIcon: isName)
+        v.secondary = !isName
+        v.toolTip = nil
         switch id.rawValue {
         case "name":
-            let color = e.isHidden ? NSColor.secondaryLabelColor : NSColor.labelColor
-            if let err = n.error { cell.textField?.stringValue = "\(e.name)  (\(err))"; cell.textField?.textColor = color }
-            else { cell.textField?.attributedStringValue = nameWithTags(n, color: color) }
-            cell.imageView?.image = FileIcons.icon(for: e)
-            if n.isSet {
-                cell.toolTip = n.members.map { $0.name }.joined(separator: "\n")
-            } else if n.isExpandableFolder {
-                // From memory only: a folder already listed (expanded, or visited recently).
-                let count = n.allChildren?.count ?? ListingCache.shared.peek(e.path)?.entries.count
-                cell.toolTip = e.path + (count.map { "\n\($0) item\($0 == 1 ? "" : "s")" } ?? "")
-            } else {
-                cell.toolTip = e.path
-            }
-        case "ext":
-            cell.textField?.stringValue = e.isDirectory && !e.isPackage ? "" : (n.isSet ? FileSets.extLabel(n.members) : e.ext.uppercased())
+            var text = e.name
+            if n.loading { text += "  \u{2026}" }
+            if let fe = n.error { text += "  (can't open: \(fe.reason))" }
+            v.textField?.stringValue = text
+            v.imageView?.image = IconCache.shared.icon(for: e)
+            v.imageView?.alphaValue = e.isHidden ? 0.5 : 1.0
+            v.labelColors = TagCache.shared.colors(e.path)
+        case "match":
+            let d = e.matchDistance
+            v.textField?.stringValue = d < 0 ? "" : (d == 0 ? "exact" : "\(d) typo\(d == 1 ? "" : "s")")
+        case "folder":
+            v.textField?.stringValue = Paths.parent(e.path)
+            v.toolTip = Paths.parent(e.path)
         case "modified":
-            cell.textField?.stringValue = e.modified > 0 ? dateFormatter.string(from: Date(timeIntervalSince1970: e.modified)) : "--"
+            v.textField?.stringValue = dateText(e.modified, width: col.width)
+        case "created":
+            v.textField?.stringValue = dateText(e.created, width: col.width)
+        case "added":
+            v.textField?.stringValue = dateText(e.added, width: col.width)
         case "size":
-            cell.textField?.stringValue = e.isDirectory ? "--" : ByteCountFormatter.string(fromByteCount: e.size, countStyle: .file)
+            if e.kind == .directory && e.size < 0 && Prefs.calculateFolderSizes && !resultsMode {
+                v.textField?.stringValue = "\u{2026}"
+            } else {
+                v.textField?.stringValue = Listing.sizeText(e.size)
+            }
+        case "kind":
+            v.textField?.stringValue = KindCache.shared.kind(e)
         default:
-            cell.textField?.stringValue = FileIcons.kind(for: e)
+            v.textField?.stringValue = ""
         }
-        return cell
-    }
-
-    func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
-        return !((item as? FileNode)?.isPlaceholder ?? true)
+        v.applyTheme()
+        if isName && (e.isHidden || n.error != nil) {
+            v.textField?.textColor = n.error != nil ? ThemeManager.shared.warning : ThemeManager.shared.secondaryText
+        }
+        return v
     }
 
     func outlineView(_ outlineView: NSOutlineView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]) {
-        guard let d = outlineView.sortDescriptors.first, let k = d.key, let key = EntrySort.Key(rawValue: k) else { return }
-        sortKey = key
-        ascending = d.ascending
-        reapplyFilterAndSort()
+        guard let d = outlineView.sortDescriptors.first, let key = d.key, let col = SortColumn(rawValue: key) else { return }
+        spec.column = col
+        spec.ascending = d.ascending
+        Prefs.sortSpec = spec
+        resort()
     }
 
     func outlineViewSelectionDidChange(_ notification: Notification) {
-        onSelectionChange?()
+        // The Fast Preview follows at once (it is cheap and prepares neighbours ahead). Everything else
+        // (status bar, inspector, grid, Quick Look) waits until the selection pauses for a moment, so
+        // holding an arrow key with a fast key repeat moves the list smoothly on every repeat.
+        FastPreview.shared.selectionChanged(from: self)
+        NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(selectionSettled), object: nil)
+        perform(#selector(selectionSettled), with: nil, afterDelay: 0.05)
     }
 
-    // MARK: Text field (rename)
-
-    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        if commandSelector == #selector(NSResponder.cancelOperation(_:)), let ed = editing, ed.field === control {
-            let tf = ed.field
-            editCancelled = true
-            tf.stringValue = editShown
-            tf.abortEditing()
-            endRename()
-            return true
-        }
-        return false
+    @objc private func selectionSettled() {
+        quickLook.selectionChanged()
+        onSelectionChanged?()
     }
 
-    func controlTextDidEndEditing(_ obj: Notification) {
-        guard let ed = editing, (obj.object as? NSTextField) === ed.field else { return }
-        let tf = ed.field
-        let entry = ed.entry
-        var newName = tf.stringValue
-        if let ext = editSetExt, !newName.lowercased().hasSuffix("." + ext.lowercased()) { newName += "." + ext }
-        tf.stringValue = editShown           // the reload after the rename shows the new name
-        endRename()
-        if !editCancelled && newName != entry.name { onRenameCommit?(entry, newName) }
-    }
-
-    /// Type-select, with PhotoLab 1's cycling: pressing the same letter again goes to the next
-    /// name starting with it ("ccc" = third "c..."), instead of looking for "ccc".
-    func outlineView(_ outlineView: NSOutlineView, nextTypeSelectMatchFromItem startItem: Any, toItem endItem: Any, for searchString: String) -> Any? {
-        let count = outlineView.numberOfRows
-        guard count > 0, !searchString.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
-        func name(_ r: Int) -> String? {
-            guard let n = outlineView.item(atRow: r) as? FileNode, !n.isPlaceholder else { return nil }
-            return n.displayName
-        }
-        func starts(_ r: Int, _ s: String) -> Bool {
-            return name(r)?.range(of: s, options: [.caseInsensitive, .diacriticInsensitive, .anchored]) != nil
-        }
-        let chars = Array(searchString)
-        if chars.count > 1, Set(chars).count == 1 {
-            let letter = String(chars[0])
-            let from = outlineView.selectedRow
-            for i in 1...count {
-                let r = ((from < 0 ? -1 : from) + i) % count
-                if starts(r, letter) { return outlineView.item(atRow: r) }
-            }
-            return nil
-        }
-        var r = outlineView.row(forItem: startItem)
-        let end = outlineView.row(forItem: endItem)
-        if r < 0 { r = 0 }
-        for _ in 0..<count {
-            if starts(r, searchString) { return outlineView.item(atRow: r) }
-            r = (r + 1) % count
-            if r == end { break }
-        }
-        // No name starts with it: the nearest one - the last name that sorts before it ("z" in
-        // a, f, j goes to j), or the first name when everything sorts after it.
-        var best: (row: Int, name: String)?
-        var first: (row: Int, name: String)?
-        for i in 0..<count {
-            guard let nm = name(i) else { continue }
-            if nm.localizedStandardCompare(searchString) == .orderedAscending {
-                if best == nil || nm.localizedStandardCompare(best!.name) == .orderedDescending { best = (i, nm) }
-            } else if first == nil || nm.localizedStandardCompare(first!.name) == .orderedAscending {
-                first = (i, nm)
+    func outlineViewColumnDidResize(_ notification: Notification) {
+        var w = Prefs.columnWidths
+        for c in table.tableColumns where c.identifier.rawValue != "name" { w[c.identifier.rawValue] = Double(c.width) }
+        Prefs.columnWidths = w
+        // Dates switch between short and long forms with the column width.
+        if let col = notification.userInfo?["NSTableColumn"] as? NSTableColumn,
+            ["modified", "created", "added"].contains(col.identifier.rawValue) {
+            let ci = table.column(withIdentifier: col.identifier)
+            let rows = table.rows(in: table.visibleRect)
+            if ci >= 0 && rows.length > 0 {
+                table.reloadData(forRowIndexes: IndexSet(integersIn: rows.location..<(rows.location + rows.length)),
+                                 columnIndexes: IndexSet(integer: ci))
             }
         }
-        if let b = best ?? first { return outlineView.item(atRow: b.row) }
-        return nil
     }
 
     func outlineView(_ outlineView: NSOutlineView, typeSelectStringFor tableColumn: NSTableColumn?, item: Any) -> String? {
-        guard tableColumn?.identifier.rawValue == "name", let n = item as? FileNode, !n.isPlaceholder else { return nil }
-        return n.displayName
-    }
-}
-
-/// Holds the scroll view and, above it, the overlay message + spinner.
-final class OverlayContainer: NSView {}
-
-/// A label that never takes clicks (overlay over the list).
-final class PassThroughLabel: NSTextField {
-    override func hitTest(_ point: NSPoint) -> NSView? { return nil }
-}
-
-/// Table cell with icon, text and an optional small spinner (for the "Loading..." row).
-final class FileCell: NSTableCellView {
-    private let spinner = NSProgressIndicator()
-
-    var spinning: Bool = false {
-        didSet {
-            if spinning == oldValue { return }
-            if spinning { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
-        }
+        if let c = tableColumn, c.identifier.rawValue != "name" { return nil }
+        return (item as? FileNode)?.entry.name
     }
 
-    init(id: NSUserInterfaceItemIdentifier) {
-        super.init(frame: .zero)
-        identifier = id
-        let tf = NSTextField(labelWithString: "")
-        tf.lineBreakMode = .byTruncatingMiddle
-        tf.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(tf)
-        textField = tf
-        if id.rawValue == "name" {
-            let iv = NSImageView()
-            iv.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(iv)
-            imageView = iv
-            spinner.style = .spinning
-            spinner.controlSize = .small
-            spinner.isDisplayedWhenStopped = false
-            spinner.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(spinner)
-            NSLayoutConstraint.activate([
-                iv.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
-                iv.centerYAnchor.constraint(equalTo: centerYAnchor),
-                iv.widthAnchor.constraint(equalToConstant: 16), iv.heightAnchor.constraint(equalToConstant: 16),
-                spinner.centerXAnchor.constraint(equalTo: iv.centerXAnchor),
-                spinner.centerYAnchor.constraint(equalTo: iv.centerYAnchor),
-                spinner.widthAnchor.constraint(equalToConstant: 14), spinner.heightAnchor.constraint(equalToConstant: 14),
-                tf.leadingAnchor.constraint(equalTo: iv.trailingAnchor, constant: 5),
-            ])
-        } else {
-            tf.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2).isActive = true
-            if id.rawValue == "size" { tf.alignment = .right }
-            tf.textColor = NSColor.secondaryLabelColor
-        }
-        NSLayoutConstraint.activate([
-            tf.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
-            tf.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
+    /// Dragging files (to folders in Find, to other panes, the sidebar, or other apps).
+    func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
+        guard let n = item as? FileNode else { return nil }
+        return NSURL(fileURLWithPath: n.path)
     }
 
-    required init?(coder: NSCoder) { fatalError("not used") }
-}
+    // MARK: Dropping files
 
-/// The row of seven colour dots in a context menu (Finder style). Hover shows what a click does:
-/// a cross removes (every selected file has it), a plus adds.
-final class TagSwatchView: NSView {
-    private let states: [Int: NSControl.StateValue]
-    private let pick: (Int) -> Void
-    private var hover: Int?
-    private let size: CGFloat = 14, gap: CGFloat = 7, left: CGFloat = 20
-
-    init(states: [Int: NSControl.StateValue], pick: @escaping (Int) -> Void) {
-        self.states = states
-        self.pick = pick
-        super.init(frame: NSRect(x: 0, y: 0, width: 20 + 7 * 21 + 14, height: 24))
-        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-                                       owner: self, userInfo: nil))
-    }
-
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    private func rect(_ i: Int) -> NSRect {
-        return NSRect(x: left + CGFloat(i) * (size + gap), y: (bounds.height - size) / 2, width: size, height: size)
-    }
-
-    private func index(at p: NSPoint) -> Int? {
-        for i in 0..<FinderTags.menuOrder.count where rect(i).insetBy(dx: -3, dy: -4).contains(p) { return i }
-        return nil
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        for (i, c) in FinderTags.menuOrder.enumerated() {
-            let r = rect(i)
-            FileListController.tagColor(c).setFill()
-            NSBezierPath(ovalIn: r).fill()
-            let state = states[c] ?? .off
-            NSColor.white.setStroke()
-            let path = NSBezierPath()
-            path.lineWidth = 1.6
-            let mid = NSPoint(x: r.midX, y: r.midY)
-            if hover == i {
-                NSColor.labelColor.withAlphaComponent(0.6).setStroke()
-                let ring = NSBezierPath(ovalIn: r.insetBy(dx: -2, dy: -2)); ring.lineWidth = 1; ring.stroke()
-                NSColor.white.setStroke()
-                if state == .on {                                    // remove
-                    path.move(to: NSPoint(x: mid.x - 3, y: mid.y - 3)); path.line(to: NSPoint(x: mid.x + 3, y: mid.y + 3))
-                    path.move(to: NSPoint(x: mid.x - 3, y: mid.y + 3)); path.line(to: NSPoint(x: mid.x + 3, y: mid.y - 3))
-                } else {                                             // add
-                    path.move(to: NSPoint(x: mid.x - 3.5, y: mid.y)); path.line(to: NSPoint(x: mid.x + 3.5, y: mid.y))
-                    path.move(to: NSPoint(x: mid.x, y: mid.y - 3.5)); path.line(to: NSPoint(x: mid.x, y: mid.y + 3.5))
-                }
-            } else if state == .on {                                 // tick
-                path.move(to: NSPoint(x: mid.x - 3.5, y: mid.y)); path.line(to: NSPoint(x: mid.x - 1, y: mid.y - 2.5))
-                path.line(to: NSPoint(x: mid.x + 3.5, y: mid.y + 3))
-            } else if state == .mixed {                              // dash
-                path.move(to: NSPoint(x: mid.x - 3.5, y: mid.y)); path.line(to: NSPoint(x: mid.x + 3.5, y: mid.y))
+    /// Where a drop at this spot goes: onto a folder row = into it; between the items of an open folder =
+    /// into that folder; anywhere else = into the folder this list shows.
+    private func dropDestination(item: Any?, childIndex: Int) -> (dest: String, onItem: FileNode?)? {
+        if let n = item as? FileNode {
+            guard FileDrag.isDropFolder(n.entry) else {
+                // On a file: into the folder that file is in (its parent row, or the list's folder).
+                if let p = n.parent { return (p.path, p) }
+                return resultsMode ? nil : (path, nil)
             }
-            path.stroke()
+            return (n.path, n)
         }
+        if resultsMode || path.isEmpty { return nil }
+        return (path, nil)
     }
 
-    override func mouseMoved(with event: NSEvent) {
-        let h = index(at: convert(event.locationInWindow, from: nil))
-        if h != hover { hover = h; needsDisplay = true }
+    func outlineView(_ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo, proposedItem item: Any?,
+                     proposedChildIndex index: Int) -> NSDragOperation {
+        lastDropHover = Date()
+        guard let target = dropDestination(item: item, childIndex: index) else { return [] }
+        let op = FileDrag.operation(info, sources: FileDrag.paths(info), dest: target.dest)
+        if op.isEmpty { return [] }
+        // Highlight the whole folder row, or the whole list for the list's own folder.
+        outlineView.setDropItem(target.onItem, dropChildIndex: NSOutlineViewDropOnItemIndex)
+        return op
     }
 
-    override func mouseExited(with event: NSEvent) { hover = nil; needsDisplay = true }
+    func outlineView(_ outlineView: NSOutlineView, acceptDrop info: NSDraggingInfo, item: Any?, childIndex index: Int) -> Bool {
+        guard let target = dropDestination(item: item, childIndex: index) else { return false }
+        let sources = FileDrag.paths(info)
+        let op = FileDrag.operation(info, sources: sources, dest: target.dest)
+        if op.isEmpty { return false }
+        onDrop?(sources, target.dest, op == .move)
+        return true
+    }
+}
 
-    override func mouseUp(with event: NSEvent) {
-        guard let i = index(at: convert(event.locationInWindow, from: nil)) else { return }
-        enclosingMenuItem?.menu?.cancelTracking()
-        let c = FinderTags.menuOrder[i]
-        DispatchQueue.main.async { [pick] in pick(c) }
+/// An Int that can be read from a background thread while the main thread changes it.
+final class AtomicInt {
+    private let lock = NSLock()
+    private var v = 0
+    var value: Int {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return v
+        }
+        set {
+            lock.lock()
+            v = newValue
+            lock.unlock()
+        }
     }
 }
