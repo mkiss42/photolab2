@@ -63,7 +63,7 @@ final class QuickProgress: NSObject {
             panel.orderFront(nil)
         }
         let t = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in self?.updateUI() }
-        RunLoop.main.add(t, forMode: .commonModes)
+        RunLoop.main.add(t, forMode: .common)
         timer = t
     }
 

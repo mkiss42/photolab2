@@ -31,7 +31,7 @@ enum ThemeStyler {
 
     private static func isSystemColor(_ c: NSColor?) -> Bool {
         guard let c = c else { return true }
-        return c.type == .catalog && textColorNames.contains(c.colorNameComponent.rawValue)
+        return c.type == .catalog && textColorNames.contains(c.colorNameComponent)
     }
 
     private static func role(_ v: NSView, _ c: NSColor?) -> String {
@@ -261,7 +261,7 @@ final class SectionList: FillView {
                 tm.accent.setFill()
                 NSBezierPath(roundedRect: NSRect(x: r.minX, y: r.minY + 5, width: 3, height: r.height - 10), xRadius: 1.5, yRadius: 1.5).fill()
             }
-            let attrs: [NSAttributedStringKey: Any] = [.foregroundColor: i == selected ? tm.text : tm.secondaryText,
+            let attrs: [AttrKey: Any] = [.foregroundColor: i == selected ? tm.text : tm.secondaryText,
                                                        .font: i == selected ? NSFont.boldSystemFont(ofSize: 13) : NSFont.systemFont(ofSize: 13)]
             let a = NSAttributedString(string: t, attributes: attrs)
             let size = a.size()
