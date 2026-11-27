@@ -73,7 +73,7 @@ class FillView: NSView {
 }
 
 /// Borderless text button drawn in theme colors.
-final class ThemedButton: NSButton {
+class ThemedButton: NSButton {   // 1.0.0-alpha.5: not final (PathCrumbButton)
     var isAccent = false
 
     override var isEnabled: Bool {

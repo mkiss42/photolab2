@@ -119,8 +119,14 @@ final class PathBarView: FillView, NSTextFieldDelegate {
             }
             // Full names; the button shortens a name only when the bar really runs out of room.
             let title = crumb.name
-            let b = makeButton(title, self, #selector(crumbClicked(_:)), tip: crumb.path)
+            let b = PathCrumbButton(title: title, target: self, action: #selector(crumbClicked(_:)))
+            b.isBordered = false
+            b.setButtonType(.momentaryChange)
+            b.toolTip = crumb.path
+            b.applyTheme(title)
             b.identifier = itemID(crumb.path)
+            // 1.0.0-alpha.5: local folders can be dragged out (not FTP crumbs).
+            b.dragPath = customCrumbs == nil && crumb.path.hasPrefix("/") ? crumb.path : nil
             let isLast = i == shown.count - 1
             b.attributedTitle = attributed(title, font: isLast ? tm.boldFont : tm.font, color: isLast ? tm.text : tm.secondaryText)
             // Above the search field's wish to be wide (250), below its minimum width (required).
@@ -182,6 +188,49 @@ final class PathBarView: FillView, NSTextFieldDelegate {
         endEditing()
     }
     #endif
+}
+
+/// 1.0.0-alpha.5: a folder in the path bar can be dragged out, as in Finder's path bar: onto an
+/// application in the Dock (opens the folder with it), into Finder, Photoshop, a dialog... A click
+/// still goes to the folder. Inside PhotoLab the drag only copies (never moves the folder you are in).
+/// The drag image is the generic folder icon: nothing reads the folder (it may be on a share).
+final class PathCrumbButton: ThemedButton, NSDraggingSource {
+    /// The folder to drag; nil = not draggable (FTP crumbs).
+    var dragPath: String?
+
+    override func mouseDown(with event: NSEvent) {
+        guard let path = dragPath, let win = window else { super.mouseDown(with: event); return }
+        let start = event.locationInWindow
+        isHighlighted = true
+        defer { isHighlighted = false }
+        while let e = win.nextEvent(matching: [.leftMouseUp, .leftMouseDragged]) {
+            if e.type == .leftMouseUp {
+                // A click: go to the folder, as before (Cmd-click = new window, read from this event).
+                if bounds.contains(convert(e.locationInWindow, from: nil)) { _ = sendAction(action, to: target) }
+                return
+            }
+            let dx = e.locationInWindow.x - start.x, dy = e.locationInWindow.y - start.y
+            if dx * dx + dy * dy >= 16 {
+                beginDrag(path, event: event)
+                return
+            }
+        }
+    }
+
+    private func beginDrag(_ path: String, event: NSEvent) {
+        let item = NSDraggingItem(pasteboardWriter: NSURL(fileURLWithPath: path))
+        let icon = NSWorkspace.shared.icon(forFileType: "public.folder")
+        let p = convert(event.locationInWindow, from: nil)
+        item.setDraggingFrame(NSRect(x: p.x - 16, y: p.y - 16, width: 32, height: 32), contents: icon)
+        App.log.info("DRAG 1 folder from the path bar")
+        let session = beginDraggingSession(with: [item], event: event, source: self)
+        session.animatesToStartingPositionsOnCancelOrFail = true
+        FileDrag.addFilenames(session.draggingPasteboard, [path])
+    }
+
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        return context == .withinApplication ? .copy : [.copy, .link, .generic]
+    }
 }
 
 protocol TabBarDelegate: class {

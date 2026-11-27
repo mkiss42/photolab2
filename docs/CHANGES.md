@@ -1,5 +1,29 @@
 # Changes
 
+## 1.0.0-alpha.5 — DNG and NEF keep their own metadata; drag folders out of the path bar
+
+- A DNG and a NEF (or any other RAW) with the same name no longer share stars, colour classes or
+  metadata. Both used to pair with the same sidecar "DSC_1.xmp", so rating one showed on the other.
+  Now "DSC_1.xmp" belongs to the NEF (and its JPEG twin); the DNG keeps its metadata inside the DNG,
+  or in its own "DSC_1.DNG.xmp" only when Settings write nothing inside RAW files. Works both ways,
+  in reading (stars, inspector, XMP badge), writing, and copy/move (the NEF's sidecar no longer
+  travels with the DNG). A DNG without a same-named RAW beside it is unchanged.
+  Note: a DNG rated before alpha.5 showed the shared sidecar's values; from now on it shows its own.
+- Folders in the path bar can be dragged out, as in Finder: onto an application in the Dock to
+  open the folder with it, into Finder, or into an app's Open dialog. A click still goes to that
+  folder (Cmd-click: new window). Dragged inside PhotoLab, the folder is only copied, never moved.
+- Self-test T-PHOTO-47 (safety: DNG and NEF never share a sidecar).
+
+Test checklist (5 minutes; 10.13 iMac and 12.6 Mac):
+[ ] 1  Help > Run Safety Self-Check and the Photo Self-Test: all passed.
+[ ] 2  Folder with DSC_1.NEF, DSC_1.DNG (same picture) and DSC_1.xmp: rate the NEF 3 stars -> the DNG
+       keeps its own stars. Rate the DNG 5 -> the NEF still shows 3. Check both in Photo Mechanic.
+[ ] 3  Colour class and a caption on the DNG: nothing changes on the NEF (inspector).
+[ ] 4  Copy only the DNG to the desktop: DSC_1.xmp does not go along. Copy the NEF: it does.
+[ ] 5  Drag a folder from the path bar onto Photoshop (or Preview) in the Dock: it opens there.
+       Drag one onto the Finder icon / a Finder window: copied there as usual.
+[ ] 6  Click a path bar folder: goes there; Cmd-click: new window.
+
 ## 1.0.0-alpha.4 — a range of RAWs opens in one Camera Raw session
 
 - Opening several files now sends them to their application in ONE request per application.
