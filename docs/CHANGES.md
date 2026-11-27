@@ -1,5 +1,27 @@
 # Changes
 
+## 0.9.1 — fewer reads per file, Quick previews
+
+- One shared reader per file for everything PhotoLab reads from it (thumbnail, stars/colour,
+  preview size check, screen-size and full-size preview): each part of a file crosses the
+  network once. A JPG zoomed to 100% is no longer read twice. Files are closed after 3 s idle
+  (an open file on a share can block other Macs from renaming/deleting it) and before PhotoLab
+  renames, moves or trashes them.
+- First read 256 KB (headers, maker notes and image directories of most RAWs in one round
+  trip); an embedded JPEG is read in one request instead of "check, then read".
+- Settings > Quick previews: the fewest reads - the cheapest embedded thumbnail (often inside
+  the first read), the cheapest mid-size embedded preview even if smaller than the window
+  (files without one keep the thumbnail), full size and the size check only when you zoom in.
+- Short Report: READS line - files read, reads and KB per file, all features together
+  (compare: Photo Mechanic ~8-16 reads per image).
+
+Test checklist (4 minutes):
+[ ] 1  Contact sheet of NEF/JPG/DNG on the share, let it load, step through a few previews:
+       READS line (reads/file) - and the THUMBS lines.
+[ ] 2  Settings > Quick previews on, new folder, same again: READS lower; previews softer.
+[ ] 3  Rename / trash a file right after previewing it: works (no "in use").
+
+
 ## 0.9.0 — stars and colour classes shown (reading)
 
 - The contact sheet shows each file's colour class (a coloured dot) and stars (an x for a

@@ -158,6 +158,7 @@ enum Stats {
                 out.append("THUMBS reader passed: " + thumbMisses.sorted { $0.value > $1.value }.prefix(5).map { "\($0.key) x\($0.value)" }.joined(separator: ", "))
             }
         }
+        out.append(FileReads.reportLine)
         out.append(sheetDraws == 0 ? "SHEET no draws" :
             String(format: "SHEET %ld tile update(s), %ld over 16 ms, slowest %.0f ms", sheetDraws, sheetSlow, sheetSlowest))
         if transfers.isEmpty {

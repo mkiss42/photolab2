@@ -56,11 +56,16 @@ enum XMPReader {
     /// embedded XMP. Background thread.
     static func read(entry: FileEntry, members: [FileEntry]) -> ImageLabels {
         if let side = members.first(where: { $0.ext == "xmp" }) {
-            if let d = FileManager.default.contents(atPath: side.path), let s = String(data: d, encoding: .utf8) {
+            // One read (sidecars are small), through the shared reader.
+            if let r = FileReads.reader(side.path, size: side.size, modified: side.modified),
+                let d = r.read(0, Int(min(r.size, 16 << 20))), let s = String(data: d, encoding: .utf8) {
                 var l = parse(s); l.source = "sidecar"; return l
             }
         }
-        guard let r = BlockReader(entry.path), let s = embeddedXMP(r) else { return ImageLabels(rating: 0, colorClass: 0, source: "none") }
+        // Embedded: usually inside the first read the thumbnail already made (shared reader).
+        guard let r = FileReads.reader(entry.path, size: entry.size, modified: entry.modified), let s = embeddedXMP(r) else {
+            return ImageLabels(rating: 0, colorClass: 0, source: "none")
+        }
         var l = parse(s)
         l.source = "embedded"
         return l

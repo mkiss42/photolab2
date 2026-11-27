@@ -90,6 +90,7 @@ enum FileOperations {
     /// Rename many items exactly as given (undo of a rename uses this with the pairs reversed).
     static func applyRenames(_ pairs: [(String, String)], what: String) -> Result<[(String, String)], OpFailure> {
         if pairs.isEmpty { return .success([]) }
+        FileReads.forget(pairs.map { $0.0 })            // PhotoLab lets go of the files first
         // Every target must be free (or be the same item under another case) before anything moves.
         for (from, to) in pairs {
             var a = stat(), b = stat()
@@ -155,6 +156,7 @@ enum FileOperations {
         for p in paths {
             for m in setMembers(of: p, sets: sets) where !all.contains(m) { all.append(m) }
         }
+        FileReads.forget(all)                           // PhotoLab lets go of the files first
         var done: [Trashed] = []
         var failures: [String] = []
         var noTrash: [String] = []
@@ -177,6 +179,7 @@ enum FileOperations {
     /// Delete for good. Only after the user confirmed, for items on shares without a Trash
     /// (lab decision 2026-11-25, Finder's behaviour). Folders go with their contents.
     static func deletePermanently(_ paths: [String]) -> [String] {
+        FileReads.forget(paths)
         var failures: [String] = []
         for p in paths {
             do {
@@ -333,6 +336,7 @@ enum FileOperations {
     /// Run one job on the calling background queue: state, progress and results go into `job`.
     static func runTransfer(_ job: TransferJob) {
         let t0 = Date()
+        if job.kind == .move { FileReads.forget(job.items.map { $0.source }) }
         job.update { $0.started = t0; $0.state = .scanning }
         if job.isCancelled { finish(job, t0); return }
         Log.info("\(job.kind.rawValue) \(job.id) start: \(job.items.count) item(s) -> \(job.destination)")

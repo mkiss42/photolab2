@@ -24,10 +24,15 @@ struct ThumbRequest {
     let key: String          // path|size|mtime
     let source: String       // the file the picture is made from
     let ext: String
+    let size: Int64
+    let modified: Double
 
     init(source: String, size: Int64, modified: Double) {
         self.source = source
-        self.key = "\(source)|\(size)|\(Int64(modified * 1000))|\(Thumbnails.maxPixels)"
+        self.size = size
+        self.modified = modified
+        // Quick previews make different (cheaper) thumbnails: kept apart in the cache.
+        self.key = "\(source)|\(size)|\(Int64(modified * 1000))|\(Thumbnails.maxPixels)" + (FileReads.quick ? "|q" : "")
         self.ext = FileOperations.split(Paths.name(source)).ext.lowercased()
     }
 }
@@ -178,7 +183,7 @@ final class Thumbnails {
             return i
         }
         let t0 = Date()
-        guard let made = Thumbnails.make(r.source, ext: r.ext) else { return nil }
+        guard let made = Thumbnails.make(r.source, ext: r.ext, size: r.size, modified: r.modified) else { return nil }
         Stats.noteThumb(method: r.ext + "/" + made.method, ms: Date().timeIntervalSince(t0) * 1000, bytes: made.bytes, reads: made.reads)
         if let d = Thumbnails.encode(made.image) { AppFiles.storeThumbnail(d, at: file) }
         return made.image
@@ -205,54 +210,46 @@ final class Thumbnails {
         }
     }
 
-    /// The picture and how it was got (for the Short Report).
-    static func make(_ path: String, ext: String) -> (image: CGImage, method: String, bytes: Int64, reads: Int)? {
+    /// The picture and how it was got (for the Short Report). Reads go through the file's
+    /// shared reader; reads/bytes are what this call added.
+    static func make(_ path: String, ext: String, size: Int64? = nil, modified: Double? = nil) -> (image: CGImage, method: String, bytes: Int64, reads: Int)? {
         let url = URL(fileURLWithPath: path)
         let route = self.route(ext)
-        func imageIO(_ always: Bool, _ r: BlockReader?) -> CGImage? {
+        guard let r = FileReads.reader(path, size: size, modified: modified) else { return nil }
+        let r0 = r.reads, b0 = r.bytes
+        func done(_ img: CGImage, _ m: String) -> (image: CGImage, method: String, bytes: Int64, reads: Int) { return (img, m, r.bytes - b0, r.reads - r0) }
+        let quick = FileReads.quick
+        func imageIO(_ always: Bool) -> CGImage? {
             var opts: [CFString: Any] = [kCGImageSourceCreateThumbnailWithTransform: true,
                                          kCGImageSourceThumbnailMaxPixelSize: maxPixels,
                                          kCGImageSourceShouldCacheImmediately: true]
             opts[always ? kCGImageSourceCreateThumbnailFromImageAlways : kCGImageSourceCreateThumbnailFromImageIfAbsent] = true
-            let src = r?.imageSource() ?? CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary)
-            guard let s = src, CGImageSourceGetCount(s) > 0 else { return nil }
+            guard let s = r.imageSource(), CGImageSourceGetCount(s) > 0 else { return nil }
             return CGImageSourceCreateThumbnailAtIndex(s, 0, opts as CFDictionary)
         }
         switch route {
-        case .raw, .jpeg:
-            if let r = BlockReader(path) {
-                let e = EmbeddedPreview.thumbnail(r, ext: ext, maxPixels: maxPixels)
-                if let img = e.image { return (img, route == .raw ? "embedded" : "jpeg-preview", r.bytes, r.reads) }
-                Stats.noteThumbMiss(ext: ext, reason: e.miss)
-            }
-            if route == .jpeg, let r = BlockReader(path), let t = imageIO(true, r) { return (t, "decode", r.bytes, r.reads) }
-            if route == .raw, let r = BlockReader(path), let t = imageIO(false, r), max(t.width, t.height) >= maxPixels / 2 {
-                return (t, "imageio-thumb", r.bytes, r.reads)
-            }
+        case .raw, .jpeg, .layered:
+            // Quick previews: the cheapest embedded picture that is still a thumbnail (often the
+            // EXIF one, inside the first read).
+            let e = EmbeddedPreview.thumbnail(r, ext: ext, maxPixels: maxPixels, minSide: quick ? 120 : maxPixels)
+            if let img = e.image { return done(img, route == .jpeg ? "jpeg-preview" : "embedded") }
+            Stats.noteThumbMiss(ext: ext, reason: e.miss)
+            if route == .jpeg, let t = imageIO(true) { return done(t, "decode") }
+            if route == .raw, let t = imageIO(false), max(t.width, t.height) >= maxPixels / 2 { return done(t, "imageio-thumb") }
         case .heic:
-            if let r = BlockReader(path), let t = imageIO(false, r) {
-                if max(t.width, t.height) >= maxPixels * 3 / 4 { return (t, "imageio-thumb", r.bytes, r.reads) }
-                if let r2 = BlockReader(path), let d = imageIO(true, r2) { return (d, "decode", r.bytes + r2.bytes, r.reads + r2.reads) }
-            }
-        case .layered:
-            // Photoshop's own thumbnail (or a TIFF's embedded preview), read directly - ImageIO
-            // read the whole file for it (216 MB per PSD in the 0.7.3 report).
-            if let r = BlockReader(path) {
-                let e = EmbeddedPreview.thumbnail(r, ext: ext, maxPixels: maxPixels)
-                if let img = e.image { return (img, "embedded", r.bytes, r.reads) }
-                Stats.noteThumbMiss(ext: ext, reason: e.miss)
+            if let t = imageIO(false) {
+                if quick || max(t.width, t.height) >= maxPixels * 3 / 4 { return done(t, "imageio-thumb") }
+                if let d = imageIO(true) { return done(d, "decode") }
             }
         case .plain:
-            if let r = BlockReader(path), let t = imageIO(true, r) { return (t, "decode", r.bytes, r.reads) }
+            if let t = imageIO(true) { return done(t, "decode") }
         case .other:
-            // PDF: page 1 drawn by CoreGraphics, reading only what that page needs (Quick Look
-            // took 18 s on average for big PDFs on the share).
-            if ext == "pdf", let r = BlockReader(path), let t = pdfPage(r) { return (t, "pdf-page", r.bytes, r.reads) }
+            // PDF: page 1 drawn by CoreGraphics, reading only what that page needs.
+            if ext == "pdf", let t = pdfPage(r) { return done(t, "pdf-page") }
         }
-        let t0 = Date()
-        if let q = quickLook(url) { _ = t0; return (q, "quicklook", 0, 0) }
-        // Quick Look had nothing: one ImageIO try from the file, then the type icon (drawn by the view).
-        if route == .other || route == .raw, let t = imageIO(false, nil) { return (t, "imageio-thumb", 0, 0) }
+        if let q = quickLook(url) { return (q, "quicklook", 0, 0) }
+        // Quick Look had nothing: one ImageIO try, then the type icon (drawn by the view).
+        if route == .other || route == .raw, let t = imageIO(false) { return done(t, "imageio-thumb") }
         return nil
     }
 

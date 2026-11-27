@@ -32,7 +32,9 @@ final class Previews {
         memory.totalCostLimit = 900 << 20              // a few full-size pictures at most
     }
 
-    static func cacheKey(_ e: FileEntry, _ px: Int) -> String { return "\(e.path)|\(e.size)|\(Int64(e.modified * 1000))|\(px)" }
+    static func cacheKey(_ e: FileEntry, _ px: Int) -> String {
+        return "\(e.path)|\(e.size)|\(Int64(e.modified * 1000))|\(px)" + (FileReads.quick && px != full ? "|q" : "")
+    }
 
     func cached(_ e: FileEntry, px: Int) -> (image: CGImage, method: String, ms: Double)? {
         guard let b = memory.object(forKey: Previews.cacheKey(e, px) as NSString) else { return nil }
@@ -59,7 +61,7 @@ final class Previews {
                 me.lock.lock(); let still = me.wanted.contains(key); me.lock.unlock()
                 if still {
                     let t0 = Date()
-                    if let made = Previews.make(e.path, ext: e.ext, px: px) {
+                    if let made = Previews.make(e, px: px) {
                         let ms = Date().timeIntervalSince(t0) * 1000
                         me.memory.setObject(Box(made.image, made.method, ms), forKey: key as NSString,
                                             cost: made.image.bytesPerRow * made.image.height)
@@ -85,15 +87,15 @@ final class Previews {
         lock.lock(); let have = sizes[key] != nil; lock.unlock()
         if have { return }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let s = Previews.fullSize(e.path, ext: e.ext) else { return }
+            guard let s = Previews.fullSize(e) else { return }
             self?.lock.lock(); self?.sizes[key] = s; self?.lock.unlock()
             DispatchQueue.main.async { NotificationCenter.default.post(name: .previewReady, object: nil, userInfo: ["path": e.path]) }
         }
     }
 
-    static func fullSize(_ path: String, ext: String) -> CGSize? {
-        guard let r = BlockReader(path) else { return nil }
-        if Thumbnails.route(ext) == .raw, let s = EmbeddedPreview.largestSize(r) { return CGSize(width: s.width, height: s.height) }
+    static func fullSize(_ e: FileEntry) -> CGSize? {
+        guard let r = FileReads.reader(e.path, size: e.size, modified: e.modified) else { return nil }
+        if Thumbnails.route(e.ext) == .raw, let s = EmbeddedPreview.largestSize(r) { return CGSize(width: s.width, height: s.height) }
         guard let src = r.imageSource(), CGImageSourceGetCount(src) > 0,
             let p = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
             let w = p[kCGImagePropertyPixelWidth] as? Int, let h = p[kCGImagePropertyPixelHeight] as? Int else { return nil }
@@ -101,20 +103,29 @@ final class Previews {
         return o >= 5 ? CGSize(width: h, height: w) : CGSize(width: w, height: h)
     }
 
-    static func make(_ path: String, ext: String, px: Int) -> (image: CGImage, method: String, bytes: Int64, reads: Int)? {
-        let route = Thumbnails.route(ext)
-        if route == .raw || route == .jpeg, let r = BlockReader(path) {
-            let e = EmbeddedPreview.thumbnail(r, ext: ext, maxPixels: px)
+    /// Screen size or full size (px == full). Quick previews, screen size: the cheapest embedded
+    /// preview of at least ~1000 px and at most 1.5 MB, else none (the thumbnail stays until
+    /// you zoom in).
+    static func make(_ e: FileEntry, px: Int) -> (image: CGImage, method: String, bytes: Int64, reads: Int)? {
+        let route = Thumbnails.route(e.ext)
+        guard route != .other, let r = FileReads.reader(e.path, size: e.size, modified: e.modified) else { return nil }
+        let r0 = r.reads, b0 = r.bytes
+        func done(_ img: CGImage, _ m: String) -> (image: CGImage, method: String, bytes: Int64, reads: Int) { return (img, m, r.bytes - b0, r.reads - r0) }
+        let quick = FileReads.quick && px != full
+        if route == .raw || route == .jpeg {
+            let em = quick ? EmbeddedPreview.thumbnail(r, ext: e.ext, maxPixels: px, minSide: 1000, cheapLimit: 1_500_000)
+                           : EmbeddedPreview.thumbnail(r, ext: e.ext, maxPixels: px)
             // Screen tier: good enough when it covers most of the screen. Full tier of a RAW: the
             // largest embedded JPEG is the full picture we show (no RAW decode).
-            if let img = e.image, max(img.width, img.height) >= px * 3 / 4 || (px >= full && route == .raw) {
-                return (img, "embedded", r.bytes, r.reads)
+            if let img = em.image, quick || max(img.width, img.height) >= px * 3 / 4 || (px >= full && route == .raw) {
+                return done(img, quick ? "quick" : "embedded")
             }
         }
-        guard route != .other, let r = BlockReader(path), let src = r.imageSource(), CGImageSourceGetCount(src) > 0 else { return nil }
+        if quick { return nil }
+        guard let src = r.imageSource(), CGImageSourceGetCount(src) > 0 else { return nil }
         let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: px,
                                      kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceShouldCacheImmediately: true]
         guard let img = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
-        return (img, "decode", r.bytes, r.reads)
+        return done(img, "decode")
     }
 }

@@ -16,17 +16,27 @@ import Darwin
 import ImageIO
 import CoreGraphics
 
-/// Reads a file in 64 KB blocks (128 KB for the first), cached for the life of the reader;
-/// reads of 256 KB or more go straight to the file. Counts round trips and bytes.
+/// Reads a file in 64 KB blocks (256 KB for the first: enough for the headers, maker notes and
+/// image directories of most RAWs in one round trip), cached for the life of the reader; reads
+/// of 256 KB or more go straight to the file and are kept as spans (a JPEG decoded for the
+/// screen is not read again for 100%). Thread-safe; shared through FileReads. Counts round
+/// trips and bytes.
 final class BlockReader {
     let size: Int64
-    private let fd: Int32
+    let path: String
+    private var fd: Int32
+    private var lastUse = Date()
     private var blocks: [Int64: Data] = [:]
+    private var spans: [(offset: Int64, data: Data)] = []
     private let block: Int64 = 64 << 10
+    private let lock = NSLock()
     private(set) var reads = 0
     private(set) var bytes: Int64 = 0
+    /// Bytes held (for FileReads' memory cap).
+    private(set) var held: Int64 = 0
 
     init?(_ path: String) {
+        self.path = path
         fd = open(path, O_RDONLY)
         if fd < 0 { return nil }
         var st = stat()
@@ -34,10 +44,28 @@ final class BlockReader {
         size = Int64(st.st_size)
     }
 
-    deinit { close(fd) }
+    deinit { if fd >= 0 { close(fd) } }
+
+    /// Close the file when idle (an open file on a share can keep other Macs from renaming or
+    /// deleting it). What was read stays; the file is reopened if more is needed.
+    func closeIfIdle(_ seconds: TimeInterval) {
+        lock.lock(); defer { lock.unlock() }
+        if fd >= 0 && Date().timeIntervalSince(lastUse) > seconds { close(fd); fd = -1 }
+    }
+
+    private func ensureOpen() -> Bool {
+        if fd >= 0 { return true }
+        fd = open(path, O_RDONLY)
+        if fd < 0 { return false }
+        var st = stat()
+        if fstat(fd, &st) != 0 || Int64(st.st_size) != size { close(fd); fd = -1; return false }    // changed meanwhile
+        return true
+    }
 
     private func pread(_ offset: Int64, _ count: Int) -> Data? {
         guard count > 0, offset >= 0, offset < size else { return Data() }
+        lastUse = Date()
+        guard ensureOpen() else { return nil }
         let n = Int(min(Int64(count), size - offset))
         var d = Data(count: n)
         let got = d.withUnsafeMutableBytes { p -> Int in
@@ -53,17 +81,32 @@ final class BlockReader {
         if got < 0 { return nil }
         reads += 1
         bytes += Int64(got)
+        FileReads.note(path, bytes: Int64(got))
         if got < n { d.count = got }
         return d
     }
 
     /// `count` bytes at `offset` (fewer at the end of the file), nil on a read error.
     func read(_ offset: Int64, _ count: Int) -> Data? {
-        if count >= 256 << 10 { return pread(offset, count) }
-        guard offset >= 0, offset < size else { return Data() }
+        lock.lock(); defer { lock.unlock() }
+        guard offset >= 0, offset < size, count > 0 else { return Data() }
         let end = min(size, offset + Int64(count))
+        // Inside a span already read?
+        for s in spans where offset >= s.offset && end <= s.offset + Int64(s.data.count) {
+            let a = Int(offset - s.offset)
+            return s.data.subdata(in: a..<(a + Int(end - offset)))
+        }
+        if count >= 256 << 10 {
+            guard let d = pread(offset, count) else { return nil }
+            if d.count <= 64 << 20 {
+                spans.append((offset, d))
+                held += Int64(d.count)
+                while spans.count > 3 { held -= Int64(spans.removeFirst().data.count) }
+            }
+            return d
+        }
         var first = offset / block, last = (end - 1) / block
-        if first == 0 && last == 0 { last = 1 }                    // first read: 128 KB
+        if first == 0 && last < 3 { last = 3 }                     // first read: 256 KB
         var missing: [Int64] = []
         for b in first...last where blocks[b] == nil { missing.append(b) }
         if let lo = missing.first, let hi = missing.last {
@@ -72,7 +115,9 @@ final class BlockReader {
             while b <= hi {
                 let s = Int((b - lo) * block)
                 if s >= d.count { break }
-                blocks[b] = d.subdata(in: s..<min(d.count, s + Int(block)))
+                let piece = d.subdata(in: s..<min(d.count, s + Int(block)))
+                if blocks[b] == nil { held += Int64(piece.count) }
+                blocks[b] = piece
                 b += 1
             }
         }
@@ -127,7 +172,8 @@ enum EmbeddedPreview {
 
     /// Thumbnail (long side <= maxPixels) from the best embedded JPEG, or nil with the reason
     /// (for the Short Report: which files need which method).
-    static func thumbnail(_ r: BlockReader, ext: String, maxPixels: Int) -> (image: CGImage?, miss: String) {
+    static func thumbnail(_ r: BlockReader, ext: String, maxPixels: Int, minSide: Int? = nil, cheapLimit: Int = .max) -> (image: CGImage?, miss: String) {
+        let minSide = minSide ?? maxPixels
         guard let head = r.read(0, 64), head.count >= 16 else { return (nil, "short-file") }
         var cands: [Candidate] = []
         var orientation = 1
@@ -154,18 +200,18 @@ enum EmbeddedPreview {
         } else {
             return (nil, "unknown-format")
         }
-        var jpeg = pick(r, cands, minSide: maxPixels)
-        if jpeg == nil || (jpegLongSide(jpeg!) ?? 0) < maxPixels / 2, ext != "jpg", ext != "jpeg", !layered {
+        var jpeg = pick(r, cands, minSide: minSide, cheapLimit: cheapLimit)
+        if jpeg == nil || (jpegLongSide(jpeg!) ?? 0) < minSide / 2, ext != "jpg", ext != "jpeg", !layered {
             // PwCarve's idea, as the last resort: JPEGs in the first 2 MB, found by their markers.
             let carved = carve(r, window: 2 << 20)
-            if let c = pick(r, carved, minSide: maxPixels) { jpeg = c }
+            if let c = pick(r, carved, minSide: minSide, cheapLimit: cheapLimit) { jpeg = c }
         }
         guard let data = jpeg else { return (nil, cands.isEmpty ? "no-candidates" : "no-usable-jpeg") }
         guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return (nil, "bad-jpeg") }
         let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: maxPixels,
                                      kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceShouldCacheImmediately: true]
         guard let img = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return (nil, "decode-failed") }
-        if ext == "jpg" || ext == "jpeg", max(img.width, img.height) < maxPixels / 2 { return (nil, "preview-too-small") }
+        if ext == "jpg" || ext == "jpeg", max(img.width, img.height) < min(maxPixels / 2, minSide) { return (nil, "preview-too-small") }
         // Embedded previews rarely carry their own orientation; the container's applies then.
         let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
         let own = (props?[kCGImagePropertyOrientation] as? Int) ?? 1
@@ -291,17 +337,24 @@ enum EmbeddedPreview {
 
     // MARK: Choosing and reading the JPEG
 
-    private static func pick(_ r: BlockReader, _ cands: [Candidate], minSide: Int) -> Data? {
-        let ok = cands.filter { $0.length > 512 && $0.offset > 0 && $0.offset + Int64($0.length) <= r.size }
-        var best: (Candidate, Int)?
+    /// The smallest candidate whose long side is at least `minSide` (else the biggest). Each
+    /// candidate up to 8 MB is read whole in one request - checking its size first and then
+    /// reading it would be two round trips. `cheapLimit`: never take one bigger than that (Quick
+    /// previews: the cheapest usable one, not the full-size JPEG).
+    private static func pick(_ r: BlockReader, _ cands: [Candidate], minSide: Int, cheapLimit: Int = .max) -> Data? {
+        let ok = cands.filter { $0.length > 512 && $0.offset > 0 && $0.offset + Int64($0.length) <= r.size && $0.length <= cheapLimit }
+        var best: (Data, Int)?
         for c in ok.sorted(by: { $0.length < $1.length }) {
-            guard let start = r.read(c.offset, min(c.length, 64 << 10)), start.count > 4, start[0] == 0xFF, start[1] == 0xD8 else { continue }
+            let whole = c.length <= 8 << 20
+            guard let start = r.read(c.offset, whole ? c.length : 64 << 10), start.count > 4, start[0] == 0xFF, start[1] == 0xD8 else { continue }
             let side = jpegLongSide(start) ?? 0
-            if side >= minSide { best = (c, side); break }
-            if best == nil || side > best!.1 { best = (c, side) }
+            if side >= minSide || best == nil || side > best!.1 {
+                guard let d = whole ? start : r.read(c.offset, c.length) else { continue }
+                best = (d, side)
+                if side >= minSide { break }
+            }
         }
-        guard let (c, _) = best else { return nil }
-        return r.read(c.offset, c.length)
+        return best?.0
     }
 
     /// Long side from the JPEG's SOF marker (in the first bytes), nil if not found.

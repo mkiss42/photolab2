@@ -6,6 +6,7 @@ import AppKit
 final class SettingsWindow: NSWindowController {
     private static var shared: SettingsWindow?
     private let pathBarBottom = NSButton(checkboxWithTitle: "Path bar below the list (instead of above)", target: nil, action: nil)
+    private let quickPreviews = NSButton(checkboxWithTitle: "Quick previews: fewest reads - the cheapest embedded thumbnails and previews, even if smaller than the window; full size only when zoomed in", target: nil, action: nil)
     private let dropsInSheet = NSButton(checkboxWithTitle: "Folders and files dropped on the app icon open in the contact sheet (instead of the list)", target: nil, action: nil)
     private let fileSets = NSButton(checkboxWithTitle: "Treat raw + jpg + xmp with the same name as one set (one row; rename, copy and Trash all of them)", target: nil, action: nil)
 
@@ -32,9 +33,11 @@ final class SettingsWindow: NSWindowController {
         fileSets.action = #selector(changed(_:))
         dropsInSheet.target = self
         dropsInSheet.action = #selector(changed(_:))
+        quickPreviews.target = self
+        quickPreviews.action = #selector(changed(_:))
         let filesTitle = NSTextField(labelWithString: "Files")
         filesTitle.font = NSFont.boldSystemFont(ofSize: 13)
-        let stack = NSStackView(views: [title, pathBarBottom, dropsInSheet, filesTitle, fileSets])
+        let stack = NSStackView(views: [title, pathBarBottom, dropsInSheet, quickPreviews, filesTitle, fileSets])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -49,9 +52,16 @@ final class SettingsWindow: NSWindowController {
         pathBarBottom.state = BrowserWindowController.pathBarAtBottom ? .on : .off
         fileSets.state = FileOperations.useSets ? .on : .off
         dropsInSheet.state = UserDefaults.standard.bool(forKey: "dropsOpenInSheet") ? .on : .off
+        quickPreviews.state = FileReads.quick ? .on : .off
     }
 
     @objc private func changed(_ sender: Any?) {
+        if (sender as? NSButton) === quickPreviews {
+            UserDefaults.standard.set(quickPreviews.state == .on, forKey: "quickPreviews")
+            Log.info("setting: quick previews \(FileReads.quick ? "on" : "off")")
+            for c in BrowserWindowController.open { c.reapply() }       // tiles ask again (new cache keys)
+            return
+        }
         if (sender as? NSButton) === dropsInSheet {
             UserDefaults.standard.set(dropsInSheet.state == .on, forKey: "dropsOpenInSheet")
             return

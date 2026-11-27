@@ -89,7 +89,8 @@ final class PreviewWindow: NSWindowController, NSWindowDelegate {
                 // Neighbours are prefetched - but not PSD/TIFF composites (hundreds of MB each).
                 let pre = neighbours.filter { let r = Thumbnails.route($0.ext); return r != .other && r != .layered }
                 Previews.shared.request([e] + pre, px: screenPixels)
-                Previews.shared.probeSize(e)
+                // The final size (for Z): at once normally; with Quick previews only on zoom.
+                if !FileReads.quick { Previews.shared.probeSize(e) }
                 if canvas.wantsFull { loadFull() }
                 refresh()
             }
@@ -102,6 +103,7 @@ final class PreviewWindow: NSWindowController, NSWindowDelegate {
 
     private func loadFull() {
         guard let e = entry, Thumbnails.route(e.ext) != .other else { return }
+        Previews.shared.probeSize(e)
         Previews.shared.request([e], px: Previews.full)
     }
 
