@@ -1,5 +1,34 @@
 # Changes
 
+## 1.0.0-alpha.8 — sets as one row; stars and Decode Full RAW in the preview
+
+- List view: a RAW, its JPEG/HEIC and its XMP/ACR sidecar with the same name are ONE row (as in
+  PhotoLab 1): the RAW is shown (else the JPEG), the size is all files together, and a new Ext
+  column says "NEF+JPG+XMP". The Ext column is on by default (Kind stays off; your column choice
+  starts fresh once because of this).
+  - Copy, move, trash, Cmd-C / Cmd-V and drag act on the whole set. Dragging to other apps sends
+    all files in the older "file names" form; some apps may take only the first.
+  - Renaming the row renames all files (DSC_1.NEF/.JPG/.xmp -> Job_1.NEF/.JPG/.xmp, one Undo).
+    Changing the extension renames only that one file, as before.
+  - Stars, colour classes and metadata given to a set row go to its RAW and its JPEG (and the
+    RAW's sidecar, as usual). DNGs keep their own rules (alpha.6).
+  - Status bar: "7 items (1 set, 9 total)".
+  - The thumbnail views are unchanged (they show files; Photography mode's "RAW + JPEG as one"
+    setting still applies there).
+- Space preview: the picture's stars and colour class are in the caption (Photography mode) and
+  update when you rate. Zoomed into a RAW, the caption says how big the embedded preview is; press
+  D to develop the RAW itself at full size (slow - reads the whole file).
+
+Test checklist (5 minutes):
+[ ] 1  List view on a folder with DSC_1.NEF + DSC_1.JPG + DSC_1.xmp: one row "DSC_1.NEF", Ext
+       "NEF+JPG+XMP", size = all three; status bar "... (1 set, 3 total)".
+[ ] 2  Rename that row to Job_1.NEF: all three are renamed; Cmd-Z puts all three back.
+[ ] 3  Copy the row to the desktop (Cmd-C, Cmd-V, and by dragging onto a folder in PhotoLab): all
+       three arrive. Trash the row: all three go.
+[ ] 4  Switch to Photography mode and back: thumbnails as before; the list shows sets again.
+[ ] 5  Photography mode, Space on a RAW, press 3: the caption shows three stars. Z, then D: the
+       caption says "RAW developed by macOS".
+
 ## 1.0.0-alpha.7 — smooth contact sheet again, far fewer bytes read from RAWs, fewer stalls
 
 - Photography mode and thumbnail view: each cell on screen is now a graphics layer (as in

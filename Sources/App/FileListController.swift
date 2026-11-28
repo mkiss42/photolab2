@@ -83,6 +83,9 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     /// Every file at the top level (a set row's members each), as the thumbnail grid and tools want them.
     var rootEntries: [FileEntry] { return roots.flatMap { $0.entries } }
 
+    /// PhotoLab: the pane's known stars / colour classes (photography mode), for the preview's caption.
+    var factsProvider: ((String) -> PhotoFacts?)?
+
     /// PhotoLab: show sets (RAW + JPEG + sidecar) as one row - the pane turns it on in the list view.
     var groupSets = false
 

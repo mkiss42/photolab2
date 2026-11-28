@@ -348,6 +348,7 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
         grid.onFocus = { [weak self] in self?.tookFocus() }
         list.onLoaded = { [weak self] in self?.listLoaded() }
         list.onRowsChanged = { [weak self] in self?.updateStatus() }
+        list.factsProvider = { [weak self] p in self?.photoFacts[p] }
         list.onBackgroundCheck = { [weak self] on in self?.backgroundCheck(on) }
         list.holdReloads = { [weak self] in self?.inlineEditor != nil }
         list.onSelectionChanged = { [weak self] in

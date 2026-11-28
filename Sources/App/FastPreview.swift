@@ -11,6 +11,7 @@ import AppKit
 import Quartz
 import AVKit
 import AVFoundation
+import ImageIO
 
 /// A panel that never becomes key: keystrokes stay with the file list.
 final class PreviewPanel: NSPanel {
@@ -388,7 +389,31 @@ final class FastPreview: NSObject, NSWindowDelegate {
     private var cachedSource: [String: String] = [:]
 
     private func captionText(_ e: FileEntry, _ size: String, _ source: String, _ pos: String) -> String {
-        return [e.name, size, source, pos].filter { !$0.isEmpty }.joined(separator: "  \u{00B7}  ")
+        return [e.name, factsText(e.path), size, source, pos].filter { !$0.isEmpty }.joined(separator: "  \u{00B7}  ")
+    }
+
+    /// PhotoLab: stars and colour class in the caption (photography mode knows them).
+    private func factsText(_ path: String) -> String {
+        guard let f = owner?.factsProvider?(path) else { return "" }
+        var parts: [String] = []
+        if let r = f.rating, r != 0 { parts.append(r < 0 ? "Rejected" : String(repeating: "\u{2605}", count: min(5, r))) }
+        if let cc = f.colorClass, cc >= 1, cc <= 8 { parts.append("\u{25A0} " + Prefs.colorClassNames[cc - 1]) }
+        return parts.joined(separator: " ")
+    }
+
+    /// Stars / colour changed while the preview is open.
+    func refreshCaption() {
+        guard isVisible, let e = currentEntry, !captionBase.isEmpty else { return }
+        let old = captionBase
+        let parts = old.components(separatedBy: "  \u{00B7}  ")
+        guard let name = parts.first, name == e.name else { return }
+        var rest = Array(parts.dropFirst())
+        // Drop the old facts part (stars / colour) if it was there.
+        if let f = rest.first, f.hasPrefix("\u{2605}") || f.hasPrefix("\u{25A0}") || f.hasPrefix("Rejected") { rest.removeFirst() }
+        let ft = factsText(e.path)
+        captionBase = ([name] + (ft.isEmpty ? [] : [ft]) + rest).joined(separator: "  \u{00B7}  ")
+        caption.stringValue = captionBase
+        updateZoomCaption()
     }
 
     private func load(_ e: FileEntry, px: Int, gen: Int, priority: Operation.QueuePriority,
@@ -547,7 +572,37 @@ final class FastPreview: NSObject, NSWindowDelegate {
         let ch = event.charactersIgnoringModifiers?.lowercased() ?? ""
         if flags.isEmpty && ch == "z" { canvas.toggleZoom(); return true }
         if flags == .command && ch == "0" { canvas.fit(); return true }
+        if flags.isEmpty && ch == "d", let e = currentEntry, PhotoFormats.isRaw(e.name) { decodeFullRAW(e); return true }
         return false
+    }
+
+    /// PhotoLab (Decode Full Image): D develops the RAW itself at full size (slow: reads the whole file).
+    /// Without it the preview shows the camera's largest embedded JPEG, which some cameras keep small.
+    private func decodeFullRAW(_ e: FileEntry) {
+        let gen = generation
+        let base = captionBase
+        caption.stringValue = base + "  \u{00B7}  developing the RAW at full size\u{2026}"
+        App.log.info("Decode full RAW requested (reads the whole file)")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let url = NSURL(fileURLWithPath: e.path)
+            var img: CGImage? = nil
+            if let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) {
+                let o: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
+                                          kCGImageSourceThumbnailMaxPixelSize: FastPreview.fullPixels, kCGImageSourceShouldCacheImmediately: true]
+                img = CGImageSourceCreateThumbnailAtIndex(src, 0, o as CFDictionary)
+                IOLog.smallRead(e.path, bytes: e.size)
+            }
+            DispatchQueue.main.async {
+                guard let s = self, s.generation == gen else { return }
+                guard let cg = img else { s.caption.stringValue = base + "  \u{00B7}  macOS could not develop this RAW"; return }
+                s.detailLoaded = e.path
+                s.canvas.setFinalSize(CGSize(width: cg.width, height: cg.height))
+                s.canvas.setImage(cg, isFull: true)
+                s.captionBase = base + "  \u{00B7}  RAW developed by macOS \(cg.width)\u{00D7}\(cg.height)"
+                s.caption.stringValue = s.captionBase
+                s.updateZoomCaption()
+            }
+        }
     }
 
     /// Cmd = / Cmd - (the menu's thumbnail size keys): zoom the preview instead while it shows a picture.
@@ -573,6 +628,11 @@ final class FastPreview: NSObject, NSWindowDelegate {
         load(e, px: FastPreview.fullPixels, gen: gen, priority: .veryHigh) { [weak self] img, _ in
             guard let s = self, s.generation == gen, let img = img else { return }
             s.showImage(img, note: nil, isFull: true)
+            if PhotoFormats.isRaw(e.name), !s.captionBase.contains("press D") {
+                s.captionBase += "  \u{00B7}  embedded \(Int(img.size.width))\u{00D7}\(Int(img.size.height)), press D for the full RAW"
+                s.caption.stringValue = s.captionBase
+                s.updateZoomCaption()
+            }
         }
     }
     static let fullPixels = 16384

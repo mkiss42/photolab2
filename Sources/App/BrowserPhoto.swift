@@ -429,6 +429,7 @@ extension BrowserPane {
         }
         grid.facts = photoFacts
         grid.needsDisplay = true
+        FastPreview.shared.refreshCaption()
         applyMetadata(pics.map { $0.path }, c, title: n == 0 ? "Remove rating" : "Rate " + String(repeating: "\u{2605}", count: n), background: true)
     }
 
@@ -449,6 +450,7 @@ extension BrowserPane {
         }
         grid.facts = photoFacts
         grid.needsDisplay = true
+        FastPreview.shared.refreshCaption()
         applyMetadata(pics.map { $0.path }, c, title: n == 0 ? "Remove colour class" : "Colour class \(n) \(Prefs.colorClassNames[n - 1])", background: true)
     }
 
