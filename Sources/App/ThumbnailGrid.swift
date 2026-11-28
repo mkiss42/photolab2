@@ -466,6 +466,7 @@ final class ThumbnailGrid: NSView {
     }
 
     private var tiles: [Int: Tile] = [:]
+    private var lastOnScreen: [String] = []
     private var spare: [Tile] = []
     private var overlay: Overlay?
     private var tilesScheduled = false
@@ -550,6 +551,12 @@ final class ThumbnailGrid: NSView {
                 let ra = a / c, rb = b / c
                 let ia = ra >= visFirst && ra <= visLast, ib = rb >= visFirst && rb <= visLast
                 return ia != ib ? ia : a < b
+            }
+            // The details (stars, colours, camera) are read in the same order (PhotoFactsStore).
+            if photoMode {
+                let vf = min(entries.count, visFirst * c), vt = min(entries.count, (visLast + 1) * c)
+                let shown = vf < vt ? entries[vf..<vt].map { $0.path } : []
+                if shown != lastOnScreen { lastOnScreen = shown; PhotoFactsStore.shared.setOnScreen(shown) }
             }
             for i in order {
                 keep.insert(i)

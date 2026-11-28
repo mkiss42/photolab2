@@ -109,6 +109,8 @@ final class FTPBrowser: NSObject, NSTableViewDataSource, NSTableViewDelegate {
 
     let scroll = NSScrollView()
     let table = FTPTableView()
+    /// PhotoLab: the console under the listing (FTP traffic, read-only).
+    var console: FTPConsole?
     /// Told whenever the folder, the busy state or the status line changes.
     var onChange: (() -> Void)?
     /// The folder of another pane in the same window (Copy to Other Pane).
@@ -933,6 +935,11 @@ extension BrowserPane {
         }
         b.onChange = { [weak self] in self?.ftpChanged() }
         ftpBrowser = b
+        // PhotoLab (PhotoLab 1's FTP window): the read-only console under the listing.
+        let console = FTPConsole()
+        b.console = console
+        b.client.traffic = { [weak console] line in DispatchQueue.main.async { console?.append(line) } }
+        console.append("* PhotoLab FTP: \(Ascii.clean(name))")
         list.scroll.isHidden = true
         gridScroll.isHidden = true
         photoOutline.isHidden = true
@@ -940,10 +947,16 @@ extension BrowserPane {
         photoBarHeight.constant = 0
         viewButtons.isEnabled = false
         mainPane.addSubview(b.scroll, positioned: .below, relativeTo: paneOverlay)
+        mainPane.addSubview(console.scroll, positioned: .below, relativeTo: paneOverlay)
         b.scroll.translatesAutoresizingMaskIntoConstraints = false
+        console.scroll.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
+            console.scroll.leadingAnchor.constraint(equalTo: list.scroll.leadingAnchor),
+            console.scroll.trailingAnchor.constraint(equalTo: list.scroll.trailingAnchor),
+            console.scroll.bottomAnchor.constraint(equalTo: list.scroll.bottomAnchor),
+            console.scroll.heightAnchor.constraint(equalToConstant: 130),
             b.scroll.topAnchor.constraint(equalTo: list.scroll.topAnchor),
-            b.scroll.bottomAnchor.constraint(equalTo: list.scroll.bottomAnchor),
+            b.scroll.bottomAnchor.constraint(equalTo: console.scroll.topAnchor),
             b.scroll.leadingAnchor.constraint(equalTo: list.scroll.leadingAnchor),
             b.scroll.trailingAnchor.constraint(equalTo: list.scroll.trailingAnchor),
         ])
@@ -958,6 +971,8 @@ extension BrowserPane {
     func leaveFTP(reload: Bool) {
         guard let b = ftpBrowser else { return }
         b.stopRequested = true
+        b.client.traffic = nil
+        b.console?.scroll.removeFromSuperview()
         b.scroll.removeFromSuperview()
         ftpBrowser = nil
         viewButtons.isEnabled = true
@@ -1167,5 +1182,58 @@ enum FTPFavorite {
             guard let a = s.parsed, a.scheme == "ftp" else { return false }
             return a.host.lowercased() == c.server.host.lowercased() && (s.user == c.server.user || (s.user.isEmpty && c.server.user.isEmpty))
         }
+    }
+}
+
+
+/// PhotoLab (PhotoLab 1's FtpConsole): a read-only, scrolling log of the FTP traffic - small monospace
+/// text, at most 2000 lines (the oldest go), follows the end unless you scrolled up. Selectable, so
+/// lines can be copied.
+final class FTPConsole: NSObject {
+    let scroll = NSScrollView()
+    private let text = NSTextView()
+    private var lines = 0
+    static let maxLines = 2000
+
+    override init() {
+        super.init()
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .noBorder
+        scroll.drawsBackground = true
+        scroll.documentView = text
+        text.isEditable = false
+        text.isSelectable = true
+        text.isRichText = false
+        text.font = NSFont(name: "Menlo", size: 10) ?? NSFont.userFixedPitchFont(ofSize: 10)
+        text.textContainerInset = NSSize(width: 6, height: 4)
+        text.autoresizingMask = [.width]
+        text.isVerticallyResizable = true
+        text.textContainer?.widthTracksTextView = true
+        applyTheme()
+    }
+
+    func applyTheme() {
+        let tm = ThemeManager.shared
+        scroll.backgroundColor = tm.sidebar
+        text.backgroundColor = tm.sidebar
+        text.textColor = tm.secondaryText
+    }
+
+    func append(_ line: String) {
+        guard let storage = text.textStorage else { return }
+        let clip = scroll.contentView
+        let atEnd = clip.bounds.maxY >= (text.frame.height - 20)
+        let tm = ThemeManager.shared
+        let color: NSColor = line.hasPrefix("<") ? tm.text : (line.hasPrefix(">") ? tm.accent : tm.secondaryText)
+        let a = NSAttributedString(string: Ascii.clean(line) + "\n",
+                                   attributes: [.font: text.font ?? NSFont.systemFont(ofSize: 10), .foregroundColor: color])
+        storage.append(a)
+        lines += 1
+        if lines > FTPConsole.maxLines {
+            let s = storage.string as NSString
+            let r = s.range(of: "\n")
+            if r.location != NSNotFound { storage.deleteCharacters(in: NSRange(location: 0, length: r.location + 1)); lines -= 1 }
+        }
+        if atEnd { text.scrollToEndOfDocument(nil) }
     }
 }

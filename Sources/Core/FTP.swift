@@ -314,6 +314,18 @@ final class FTPClient {
     var connectTimeout = 15
     /// Seconds without any data before a transfer is given up.
     var stallSeconds = 60
+    /// PhotoLab (PhotoLab 1's FTP console): every line of FTP traffic - commands sent ("> "), the
+    /// server's replies ("< ") and connection notes ("* ") - as it happens. The password never appears.
+    var traffic: ((String) -> Void)?
+
+    /// One line of curl's -v output for the console, or nil if it is not traffic.
+    static func trafficLine(_ raw: String) -> String? {
+        let l = raw.trimmingCharacters(in: CharacterSet(charactersIn: "\r\n"))
+        guard l.hasPrefix("> ") || l.hasPrefix("< ") || l.hasPrefix("* ") else { return nil }
+        if l.hasPrefix("> PASS") { return "> PASS ****" }
+        if l.uppercased().hasPrefix("> PASS") { return "> PASS ****" }
+        return l
+    }
 
     init(server: FTPServer) {
         self.server = server
@@ -447,7 +459,8 @@ final class FTPClient {
         p.environment = ["PATH": "/usr/bin:/bin", "HOME": NSHomeDirectory(), "LC_ALL": "C"]
         // --globoff: [ ] { } in a file or folder name are just characters (curl would otherwise treat
         // them as a pattern for several files - .app bundles have such names).
-        p.arguments = ["-K", "-", "--globoff"] + (onProgress == nil ? ["-s", "-S"] : ["-#", "-S"]) + ["--connect-timeout", "\(connectTimeout)",
+        let verbose = traffic != nil
+        p.arguments = ["-K", "-", "--globoff"] + (verbose ? ["-v"] : []) + (onProgress == nil ? ["-s", "-S"] : ["-#", "-S"]) + ["--connect-timeout", "\(connectTimeout)",
                        "--speed-limit", "1", "--speed-time", "\(stallSeconds)"] + args
         let inPipe = Pipe(), outPipe = Pipe(), errPipe = Pipe()
         p.standardInput = inPipe
@@ -480,16 +493,27 @@ final class FTPClient {
         readers.enter()
         DispatchQueue.global().async { FTPClient.drain(outFD, into: out); readers.leave() }
         readers.enter()
+        let tap = traffic
         DispatchQueue.global().async {
+            // PhotoLab console: the traffic lines as they come (also with the progress bar on).
+            var pendingLine = ""
+            let feed: (Data) -> Void = { d in
+                guard let t = tap else { return }
+                pendingLine += String(data: d, encoding: .utf8) ?? ""
+                var parts = pendingLine.components(separatedBy: "\n")
+                pendingLine = parts.removeLast()
+                for p in parts { if let l = FTPClient.trafficLine(p) { t(l) } }
+            }
             if let report = onProgress {
                 // The progress bar rewrites one line with carriage returns: report its last percentage.
                 var tail = ""
                 FTPClient.drain(errFD, into: err, onChunk: { d in
+                    feed(d)
                     tail = String((tail + (String(data: d, encoding: .utf8) ?? "")).suffix(200))
                     if let f = FTPClient.lastPercent(tail) { report(f) }
                 })
             } else {
-                FTPClient.drain(errFD, into: err)
+                FTPClient.drain(errFD, into: err, onChunk: tap == nil ? nil : feed)
             }
             readers.leave()
         }
@@ -508,8 +532,8 @@ final class FTPClient {
             return Run(status: 28, out: out.value, err: "gave up after \(Int(timeout)) seconds")
         }
         var errText = String(data: err.value, encoding: .utf8) ?? ""
-        if onProgress != nil {
-            // Only curl's own messages, not the progress bar.
+        if onProgress != nil || verbose {
+            // Only curl's own messages, not the progress bar (or the console's traffic lines).
             errText = errText.components(separatedBy: CharacterSet(charactersIn: "\r\n")).filter { $0.contains("curl:") }.joined(separator: "\n")
         }
         // The end of curl can be reported a moment before the process counts as finished; asking for

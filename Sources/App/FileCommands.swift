@@ -32,6 +32,7 @@ extension BrowserPane {
     }
 
     private func performUndo(_ record: UndoRecord, name: String) {
+        if case .metadata(let items) = record { PhotoFactsStore.shared.forget(items.map { $0.image }) }
         do {
             let redo = try App.ops.undo(record)
             if let r = redo {

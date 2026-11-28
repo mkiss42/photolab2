@@ -587,6 +587,7 @@ extension BrowserPane {
             // 0.18.14: the steps after a write are marked, so a beachball names the right one.
             StallWatch.mark("after writing metadata: Undo for \(r.done.count) files")
             if registerUndo, let u = r.undo { s.registerUndo(u) }
+            PhotoFactsStore.shared.forget(r.done.flatMap { [$0.from, $0.to] } + r.failed.map { $0.path })
             var st = "\(title): \(r.done.count) written and checked"
             if !r.skipped.isEmpty { st += ", \(r.skipped.count) skipped" }
             if r.cancelled { st += " (stopped)" }

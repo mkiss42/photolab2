@@ -1,5 +1,25 @@
 # Changes
 
+## 1.0.0-alpha.15 — DNG stars stick; details read on-screen first; first files show sooner; FTP console
+
+- DNG stars and colour classes now stick. After a write, PhotoLab compared the file's size and date
+  from the listing it already had (unchanged) with what it remembered, so it put the old values back;
+  for NEFs the sidecar's date changed and hid this. Written files are now always read again.
+- Photography mode: the details (stars, colours, camera) of the pictures on screen are read first,
+  also while you scroll - like the thumbnails.
+- Opening a folder on a slow share: the first 100 items appear as soon as they are read, instead of
+  after the first 1000 (or the whole folder). Listing itself was already the fast bulk listing.
+- FTP: under every FTP pane, a read-only console shows the traffic as in PhotoLab 1 (commands,
+  server replies, connection notes; the password is never shown). Select to copy.
+
+Test checklist (5 minutes):
+[ ] 1  DJI DNG: give it 3 stars and colour 2; wait for the ring to go: the values stay. Reopen the
+       folder: still there. Check in Photo Mechanic.
+[ ] 2  Big folder on the share in Photography mode: scroll to the middle at once - the stars there
+       fill in first.
+[ ] 3  A big folder on the slow share: the first items show quickly (the rest follows).
+[ ] 4  Open an FTP server: the console under the list shows "> USER ...", "< 230 ...", "> PASS ****".
+
 ## 1.0.0-alpha.14 — no hang when rating; pending writes shown; details fill in as they come
 
 - Rating / colouring on a slow share no longer hangs. The hang came from PhotoLab listing the

@@ -94,7 +94,7 @@ enum DirectoryReader {
                 result.entries.append(entry)
                 if let b = batch {
                     pending.append(entry)
-                    if pending.count >= batchSize {
+                    if pending.count >= (result.entries.count <= 100 ? min(100, batchSize) : batchSize) {   // PhotoLab: first 100 early
                         b(pending)
                         pending.removeAll(keepingCapacity: true)
                     }
@@ -161,7 +161,7 @@ enum DirectoryReader {
             result.entries.append(entry)
             if let b = batch {
                 pending.append(entry)
-                if pending.count >= batchSize {
+                if pending.count >= (result.entries.count <= 100 ? min(100, batchSize) : batchSize) {   // PhotoLab: first 100 early
                     b(pending)
                     pending.removeAll(keepingCapacity: true)
                 }

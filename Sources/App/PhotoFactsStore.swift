@@ -39,7 +39,23 @@ final class PhotoFactsStore {
                 batch = [:]
                 DispatchQueue.main.async { if flag.value == token { onBatch(b, d, total) } }
             }
-            for e in photos {
+            // PhotoLab: what is on screen first (the grid tells us as you scroll), then the rest in order.
+            var byPath: [String: FileEntry] = [:]
+            for e in photos { byPath[e.path] = e }
+            var taken = Set<String>()
+            var cursor = 0
+            func next() -> FileEntry? {
+                for p in s.onScreen() where !taken.contains(p) {
+                    if let e = byPath[p] { taken.insert(p); return e }
+                }
+                while cursor < photos.count {
+                    let e = photos[cursor]
+                    cursor += 1
+                    if taken.insert(e.path).inserted { return e }
+                }
+                return nil
+            }
+            while let e = next() {
                 if flag.value != token { return }
                 let sc = Sidecars.find(for: e.path)
                 var scStamp = -1.0
@@ -110,6 +126,25 @@ final class PhotoFactsStore {
     var memoryCount: Int {
         lock.lock(); defer { lock.unlock() }
         return memo.count
+    }
+
+    // PhotoLab: the pictures on screen now (top first), set by the thumbnail grid as it scrolls.
+    private var screen: [String] = []
+    func setOnScreen(_ paths: [String]) {
+        lock.lock(); screen = paths; lock.unlock()
+    }
+    fileprivate func onScreen() -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return screen
+    }
+
+    /// PhotoLab: written by PhotoLab - read again next time. (The listing in memory still has the old
+    /// size and date, so the remembered values would otherwise come back: a DNG, which has no sidecar
+    /// whose date would change, kept showing its old stars.)
+    func forget(_ paths: [String]) {
+        lock.lock()
+        for p in paths { memo.removeValue(forKey: p) }
+        lock.unlock()
     }
 
     private func remember(_ path: String, _ stamp: Stamp, _ f: PhotoFacts) {

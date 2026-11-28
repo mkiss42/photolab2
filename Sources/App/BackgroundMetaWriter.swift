@@ -50,7 +50,9 @@ final class BackgroundMetaWriter {
                 App.log.info(String(format: "\(title) (in the background): \(r.done.count) file(s) written and checked in %.1f s", Date().timeIntervalSince(started)))
                 for n in r.notes { App.log.info("Note: " + n) }
                 for j in jobs { j.pane?.metadataWriting(-j.items.count) }
-                MetaPending.shared.remove(jobs.flatMap { $0.items.map { $0.image } })
+                let written = jobs.flatMap { $0.items.map { $0.image } }
+                PhotoFactsStore.shared.forget(written + r.done.flatMap { [$0.from, $0.to] })
+                MetaPending.shared.remove(written)
                 // Undo and the report on the pane the last change came from; the others just read again.
                 var seen = Set<ObjectIdentifier>()
                 for (k, p) in panes.reversed().enumerated() where !seen.contains(ObjectIdentifier(p)) {

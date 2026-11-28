@@ -209,6 +209,11 @@ final class SafetySelfCheck {
             }
         }
 
+        // 66 PhotoLab: the FTP console never shows a password.
+        check("T-SAFE-66", "FTP console: the password line is masked, traffic lines kept, other output dropped",
+              FTPClient.trafficLine("> PASS s3cret\r") == "> PASS ****" && FTPClient.trafficLine("< 230 Logged in") == "< 230 Logged in"
+                && FTPClient.trafficLine("######## 40.0%") == nil && FTPClient.trafficLine("> pass x") == "> PASS ****")
+
         // 60-65 PhotoLab S1/S2: volumes without a Trash (simulated here).
         ops.simulateNoTrash = true
         _ = files.makeDir(p("nt"))
