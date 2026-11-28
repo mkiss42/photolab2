@@ -187,8 +187,9 @@ final class PhotoSelfTest {
         let tOffXMP = tOff.allSatisfyCompat { MetaPlan.places(for: $0).xmp }
         let tNefWrite = MetaPlan.targets([p("twin.NEF")]).map { $0.file }
         MetaPlan.writeEmbeddedXMP = keepXMP; MetaPlan.writeEmbeddedIPTC = keepIPTC; MetaPlan.writeSidecar = keepSide
+        let dngFiles = [p("twin.DNG"), p("solo.DNG")]
         let insideOnly: ([MetaTarget]) -> Bool = { t in
-            t.map { $0.file } == [p("twin.DNG"), p("solo.DNG")] && t.allSatisfyCompat { $0.kind == .embeddedRaw } }
+            t.map { $0.file } == dngFiles && t.allSatisfyCompat { $0.kind == .embeddedRaw } }
         check("T-PHOTO-47", "a DNG never has an XMP sidecar: read, written and copied inside itself only",
               tNef == p("twin.xmp") && tDng == nil && tSolo == nil
                 && tAssoc["twin.NEF"] == "twin.xmp" && tAssoc["twin.JPG"] == "twin.xmp" && tAssoc["twin.DNG"] == nil && tAssoc["solo.DNG"] == nil
