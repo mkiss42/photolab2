@@ -60,7 +60,7 @@ final class CopyQueueManager {
         pauseFlag.value = 0
         queue.update(job.id) { $0.status = .running }
         save()
-        let assertion = Power.keepAwake("Find copy queue: \(job.title)")
+        let assertion = Power.keepAwake("PhotoLab copy queue: \(job.title)")
         App.log.info("Copy queue: started \(Ascii.clean(job.title))")
         // 0.17: shown in the Copies window with progress; Stop there pauses the queued copy.
         let task = CopyTask(title: "Copy queue: \(job.title) to \u{201C}\(Paths.lastComponent(job.destination))\u{201D}")
@@ -409,7 +409,7 @@ final class CopyQueueWindowController: NSWindowController, NSTableViewDataSource
             }
         case "report":
             let lines = CopyQueueRunner.report(j, dateText: CopyQueueManager.dateText)
-            App.lastReport = "FIND COPY QUEUE REPORT\n" + lines.joined(separator: "\n") + "\n"
+            App.lastReport = "PHOTOLAB COPY QUEUE REPORT\n" + lines.joined(separator: "\n") + "\n"
             let a = ThemedAlert()
             a.messageText = j.title
             a.informativeText = lines.prefix(25).joined(separator: "\n")
@@ -436,7 +436,7 @@ enum CopyQueueUI {
     static func askTime(initial: Double?, wake: Bool) -> (Double, Bool)? {
         let a = ThemedAlert()
         a.messageText = "When should this copy start?"
-        a.informativeText = "Find has to be running then. Waking the Mac asks for an administrator password (macOS asks)."
+        a.informativeText = "PhotoLab has to be running then. Waking the Mac asks for an administrator password (macOS asks)."
         let picker = NSDatePicker(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
         picker.datePickerElements = NSDatePicker.ElementFlags(rawValue: 0x00EC)   // date, hours and minutes (raw: same on every SDK)
         picker.dateValue = Date(timeIntervalSince1970: initial ?? (Date().timeIntervalSince1970 + 3600))
@@ -470,7 +470,7 @@ extension BrowserPane {
         let picker = QueueDestinationPicker(host?.panes.first(where: { $0 !== self && !$0.isFTP })?.currentPath)
         let a = ThemedAlert()
         a.messageText = "Add to the copy queue: \(items.count == 1 ? Paths.lastComponent(items[0]) : "\(items.count) items")"
-        a.informativeText = "Copied with Find's checked copy; nothing at the destination is ever overwritten. The queue and its progress are in Window > Copies."
+        a.informativeText = "Copied with PhotoLab's checked copy; nothing at the destination is ever overwritten. The queue and its progress are in Window > Copies."
         let clash = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 300, height: 24), pullsDown: false)
         clash.addItems(withTitles: ["Name already there: skip it", "Name already there: keep both (numbered name)"])
         let when = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 300, height: 24), pullsDown: false)

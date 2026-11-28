@@ -1,6 +1,6 @@
 // PreviewCache.swift
 // Saved previews for files that are slow to decode (Photoshop PSD/PSB, very large TIFF): after the
-// first full read, a screen-sized JPEG is kept in ~/Library/Caches/Find/Previews so the next look is
+// first full read, a screen-sized JPEG is kept in ~/Library/Caches/PhotoLab/Previews so the next look is
 // instant. Keyed by path + size + modified date, so a changed file is read again. Capped (default 1 GB;
 // least recently used previews go first) and clearable in Settings. Only ever touches Find's own folder.
 

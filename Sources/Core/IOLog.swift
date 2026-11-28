@@ -1,5 +1,5 @@
 // IOLog.swift
-// 0.18: two extra logs in Logs/Find, to see how hard Find works the network and the disks:
+// 0.18: two extra logs in Logs/PhotoLab, to see how hard Find works the network and the disks:
 //   network-io-<date>.log  Find's own traffic with network volumes (shares) and FTP servers
 //   disk-io-<date>.log     Find's own reading and writing on this Mac's disks
 // Plain ASCII, numbered lines (N00001 / D00001), a line per operation (copy, FTP command, folder read
@@ -54,12 +54,12 @@ final class IOLog {
         if logs.count > 9 {
             for old in logs.prefix(logs.count - 9) { files.removeOwned(Paths.join(files.logsDir, old)) }
         }
-        line("START Find \(appVersion) " + (network
-            ? "network I/O log: Find's own traffic with shared volumes and FTP servers (in = from the network, out = to it)"
-            : "disk I/O log: Find's own reading and writing on this Mac's disks (read / written)"))
+        line("START PhotoLab \(appVersion) " + (network
+            ? "network I/O log: PhotoLab's own traffic with shared volumes and FTP servers (in = from the network, out = to it)"
+            : "disk I/O log: PhotoLab's own reading and writing on this Mac's disks (read / written)"))
         line(network
             ? "INFO one line per copy, FTP command, folder read on a share and metadata write; MINUTE = totals of that minute; small-reads = thumbnails, previews, details, checksums (no line each)"
-            : "INFO one line per copy and metadata write; MINUTE = totals of that minute; small-reads = thumbnails, previews, details, checksums (no line each), and 'process' = all disk I/O of Find counted by macOS")
+            : "INFO one line per copy and metadata write; MINUTE = totals of that minute; small-reads = thumbnails, previews, details, checksums (no line each), and 'process' = all disk I/O of PhotoLab counted by macOS")
         if !network, let p = IOLog.processDiskBytes?() { processStart = p; lastProcess = p }
         if timerSeconds > 0 {
             let t = DispatchSource.makeTimerSource(queue: queue)

@@ -184,7 +184,7 @@ extension BrowserPane {
     }
 
     func showSearchReport(_ s: SearchSummary) {
-        let r = Report(title: "Find Search Report")
+        let r = Report(title: "PhotoLab Search Report")
         r.addSummary("RESULT \(s.outcome.rawValue)")
         r.addSummary(s.statusLine)
         for f in s.failed.prefix(20) { r.addSummary("NOT SEARCHED: \(f.path) - \(f.reason)") }

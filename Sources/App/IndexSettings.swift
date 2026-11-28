@@ -50,7 +50,7 @@ final class IndexSettingsController: NSObject {
         cancelButton.isHidden = true
         progressLabel.textColor = NSColor.secondaryLabelColor
         totalLabel.textColor = NSColor.secondaryLabelColor
-        let note = NSTextField(wrappingLabelWithString: "Index only folders you search often and that live on this Mac's drives. An index stores names, sizes and dates only, never file contents. Find checks every indexed folder for changes at search time and re-reads changed folders, so results always match the disk. Searches with size or date conditions, network locations, and searches with Use index unticked always read folders directly.")
+        let note = NSTextField(wrappingLabelWithString: "Index only folders you search often and that live on this Mac's drives. An index stores names, sizes and dates only, never file contents. PhotoLab checks every indexed folder for changes at search time and re-reads changed folders, so results always match the disk. Searches with size or date conditions, network locations, and searches with Use index unticked always read folders directly.")
         note.textColor = NSColor.secondaryLabelColor
         let buttons = NSStackView(views: [add, deleteAll, cancelButton])
         buttons.orientation = .horizontal
@@ -124,7 +124,7 @@ final class IndexSettingsController: NSObject {
             block.spacing = 4
             rows.addArrangedSubview(block)
         }
-        totalLabel.stringValue = "Index files use \(Listing.sizeText(App.indexes.totalBytesOnDisk)) in ~/Library/Application Support/Find/Indexes"
+        totalLabel.stringValue = "Index files use \(Listing.sizeText(App.indexes.totalBytesOnDisk)) in ~/Library/Application Support/PhotoLab/Indexes"
         for b in buildButtons { b.isEnabled = building == nil }
     }
 

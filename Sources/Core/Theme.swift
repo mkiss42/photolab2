@@ -103,7 +103,7 @@ struct Theme: Codable, Equatable {
     }
 }
 
-/// Saved themes: one JSON file per theme in ~/Library/Application Support/Find/Themes.
+/// Saved themes: one JSON file per theme in ~/Library/Application Support/PhotoLab/Themes.
 final class ThemeStore {
     let files: AppFiles
 

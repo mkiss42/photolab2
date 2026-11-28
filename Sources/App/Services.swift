@@ -5,7 +5,7 @@ import AppKit
 import CoreServices
 
 enum App {
-    static let version = "1.0.0-alpha.8"
+    static let version = "1.0.0-alpha.9"
     static var files: AppFiles!
     static var log: Log!
     static var ops: FileOperations!
@@ -35,7 +35,7 @@ enum App {
         platform.log = { s in Log.shared?.info(s) }
         ops = FileOperations(platform: platform)
         ops.logger = { s in Log.shared?.info(s) }
-        // 0.18: the network and disk I/O logs (Logs/Find/network-io-*.log, disk-io-*.log).
+        // 0.18: the network and disk I/O logs (Logs/PhotoLab/network-io-*.log, disk-io-*.log).
         IOLog.isNetworkPath = { p in VolumeRegistry.shared.treatAsNetwork(p) }
         // 0.18.5: how metadata is written (Settings > Photography).
         MetaPlan.writeSidecar = Prefs.metaSidecar
@@ -92,7 +92,7 @@ enum App {
         ShareListings.start()
         StallWatch.start()
         files.clearTemp()
-        log.info("Find \(version) started. macOS \(ProcessInfo.processInfo.operatingSystemVersionString). Logs: \(files.logsDir)")
+        log.info("PhotoLab \(version) started. macOS \(ProcessInfo.processInfo.operatingSystemVersionString). Logs: \(files.logsDir)")
     }
 
     static var systemInfo: String {
@@ -451,7 +451,7 @@ final class TagWatcher {
 }
 
 
-/// 0.17.1: the network-folder snapshots are kept between launches (Application Support/Find/
+/// 0.17.1: the network-folder snapshots are kept between launches (Application Support/PhotoLab/
 /// share-listings.json), so a folder on a slow share shows at once even the first time after starting
 /// Find; it is still checked in the background every time.
 enum ShareListings {

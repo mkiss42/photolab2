@@ -38,8 +38,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
     private let hiddenCheck = NSButton(checkboxWithTitle: "Show hidden files", target: nil, action: nil)
     private let foldersCheck = NSButton(checkboxWithTitle: "Keep folders on top when sorting by name or kind", target: nil, action: nil)
     private let sizesCheck = NSButton(checkboxWithTitle: "Calculate folder sizes (counted in the background after the list appears)", target: nil, action: nil)
-    private let qlCheck = NSButton(checkboxWithTitle: "Space bar opens macOS Quick Look instead of Find's Fast Preview", target: nil, action: nil)
-    private let reopenCheck = NSButton(checkboxWithTitle: "Reopen windows where and how they were when Find was quit", target: nil, action: nil)
+    private let qlCheck = NSButton(checkboxWithTitle: "Space bar opens macOS Quick Look instead of PhotoLab's Fast Preview", target: nil, action: nil)
+    private let reopenCheck = NSButton(checkboxWithTitle: "Reopen windows where and how they were when PhotoLab was quit", target: nil, action: nil)
     private let tabs = NSTabView(frame: NSRect(x: 0, y: 0, width: 760, height: 620))
     private let sidebarRows = NSStackView()
     private let recentPopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -58,7 +58,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
     init() {
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 640),
                          styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
-        w.title = "Find Settings"
+        w.title = "PhotoLab Settings"
         // 0.17.3: resizable, and every section scrolls when it doesn't fit (nothing is cut off).
         w.minSize = NSSize(width: 720, height: 420)
         w.isReleasedWhenClosed = false
@@ -280,7 +280,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
     private let embIPTCCheck = NSButton(checkboxWithTitle: "3  Embedded IPTC (inside the picture file)", target: nil, action: nil)
     private var modeRadios: [NSButton] = []
     private var etModeRadios: [NSButton] = []
-    private let twinCheck = NSButton(checkboxWithTitle: "Show RAW + JPEG pairs as one: only the RAW, with a small \u{201C}NEF+JPG\u{201D} badge", target: nil, action: nil)
+    private let setsCheck = NSButton(checkboxWithTitle: "List view: a RAW, its JPEG and its .xmp sidecar are one row (Ext column \u{201C}NEF+JPG+XMP\u{201D})", target: nil, action: nil)
+    private let twinCheck = NSButton(checkboxWithTitle: "Photography Mode: a RAW and its JPEG are one picture (the RAW, with a \u{201C}NEF+JPG\u{201D} badge)", target: nil, action: nil)
     private let twinMetaCheck = NSButton(checkboxWithTitle: "The hidden JPEG gets the same stars, colour classes and metadata", target: nil, action: nil)
     private let thumbMemPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let thumbAheadPopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -293,10 +294,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
     private let etCountPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let etIdlePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private static let idleChoices = [1, 2, 5, 10, 15, 30, 60]
-    private let inPlaceFastCheck = NSButton(checkboxWithTitle: "Faster check: Find reads back the bytes it wrote (instead of ExifTool reading every value back)", target: nil, action: nil)
-    private let nativeReadCheck = NSButton(checkboxWithTitle: "Read the old values with Find's own reader (sidecars, JPEG, NEF/NRW/DNG/ARW/PEF/TIFF)", target: nil, action: nil)
-    private let nativeSidecarCheck = NSButton(checkboxWithTitle: "Write .xmp sidecars with Find's own writer", target: nil, action: nil)
-    private let nativeDoubleCheck = NSButton(checkboxWithTitle: "Also have ExifTool read back every sidecar Find wrote itself", target: nil, action: nil)
+    private let inPlaceFastCheck = NSButton(checkboxWithTitle: "Faster check: PhotoLab reads back the bytes it wrote (instead of ExifTool reading every value back)", target: nil, action: nil)
+    private let nativeReadCheck = NSButton(checkboxWithTitle: "Read the old values with PhotoLab's own reader (sidecars, JPEG, NEF/NRW/DNG/ARW/PEF/TIFF)", target: nil, action: nil)
+    private let nativeSidecarCheck = NSButton(checkboxWithTitle: "Write .xmp sidecars with PhotoLab's own writer", target: nil, action: nil)
+    private let nativeDoubleCheck = NSButton(checkboxWithTitle: "Also have ExifTool read back every sidecar PhotoLab wrote itself", target: nil, action: nil)
     private var flushRadios: [NSButton] = []
     private let inPlaceCheck = NSButton(checkboxWithTitle: "Faster: change only the metadata part of the file, in place, when possible", target: nil, action: nil)
     private let stepCheck = NSButton(checkboxWithTitle: "Arrow keys step through thumbnails in whole rows, without animation", target: nil, action: nil)
@@ -304,7 +305,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
 
     private func buildPhotography() -> NSView {
         let v = NSView(frame: NSRect(x: 0, y: 0, width: 700, height: 2500))
-        let intro = NSTextField(wrappingLabelWithString: "Colour classes are written into Photo Mechanic's own field (in the picture, or in the .xmp sidecar for RAW files), so Photo Mechanic shows them. Set the names and colours to match Photo Mechanic > Preferences > General; only the number is written, so names and colours here are just how Find shows them.\n\nKeys in Photography mode (thumbnails selected), as set in Settings > Keys: Cmd-1 to Cmd-8 set a colour class, Cmd-0 removes it; Ctrl-1 to Ctrl-5 (or 1 to 5) set stars, Ctrl-0 (or 0) removes them. With Cmd for colour classes, Cmd-1/2/3 don't switch views in Photography mode: use the view buttons.")
+        let intro = NSTextField(wrappingLabelWithString: "Colour classes are written into Photo Mechanic's own field (in the picture, or in the .xmp sidecar for RAW files), so Photo Mechanic shows them. Set the names and colours to match Photo Mechanic > Preferences > General; only the number is written, so names and colours here are just how PhotoLab shows them.\n\nKeys in Photography mode (thumbnails selected), as set in Settings > Keys: Cmd-1 to Cmd-8 set a colour class, Cmd-0 removes it; Ctrl-1 to Ctrl-5 (or 1 to 5) set stars, Ctrl-0 (or 0) removes them. With Cmd for colour classes, Cmd-1/2/3 don't switch views in Photography mode: use the view buttons.")
         intro.textColor = NSColor.secondaryLabelColor
         var rows: [NSView] = [intro]
         let names = Prefs.colorClassNames, colors = Prefs.colorClassColors
@@ -355,7 +356,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
             pad.widthAnchor.constraint(equalToConstant: 20).isActive = true
             return row([pad, l])
         }
-        // 0.18.10: RAW + JPEG pairs.
+        // 0.18.10: RAW + JPEG pairs. PhotoLab: one heading for both kinds of sets (list rows, photo pictures).
+        let setHead = NSTextField(labelWithString: "Sets: files with the same name (DSC_1.NEF, DSC_1.JPG, DSC_1.xmp)")
+        setHead.font = NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)
+        rows.append(setHead)
+        setsCheck.state = FileSets.enabled ? .on : .off
+        setsCheck.target = self
+        setsCheck.action = #selector(setsChanged(_:))
+        rows.append(setsCheck)
+        rows.append(note("Copy, move, drag, Trash and rename act on the whole set; stars and metadata go to its RAW and JPEG. A DNG is never in a set with another RAW."))
         twinCheck.state = Prefs.hideJPEGTwins ? .on : .off
         twinCheck.target = self
         twinCheck.action = #selector(twinChanged(_:))
@@ -364,7 +373,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         twinMetaCheck.action = #selector(twinChanged(_:))
         rows.append(twinCheck)
         rows.append(twinMetaCheck)
-        rows.append(note("Photography Mode only (plain thumbnails show every file). A JPEG with a RAW of the same name in the same folder is hidden; the RAW shows the badge. Copying, moving, dragging, Move to Trash and Delete go to both. Folders with JPEGs only show them as always."))
+        rows.append(note("Photography Mode (plain thumbnails show every file): a JPEG with a RAW of the same name in the same folder is hidden; the RAW shows the badge. Copying, moving, dragging, Move to Trash and Delete go to both. Folders with JPEGs only show them as always. The two boxes are separate: each view has its own."))
 
         // 0.18.10: thumbnails - memory, preparing ahead, decoding.
         let thHead = NSTextField(labelWithString: "Thumbnails and scrolling (thumbnail view and Photography Mode)")
@@ -411,7 +420,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
             (.workingCopy, "Safest, slowest: separate working copy + picture fingerprint",
              "Each file is first copied, the copy is changed, and its picture data is compared with the original's. About 4 reads + 2 writes of every file. No safer than the next one; for comparison or a share that misbehaves."),
             (.fingerprint, "Safe (recommended): picture fingerprint, no extra copy",
-             "ExifTool writes the new version straight beside the original; Find checks every value AND that the picture data is identical before it takes the original's place. About 3 reads + 1 write of every file."),
+             "ExifTool writes the new version straight beside the original; PhotoLab checks every value AND that the picture data is identical before it takes the original's place. About 3 reads + 1 write of every file."),
             (.fingerprintLocal, "Fingerprint on this Mac's disks; fast on network shares",
              "Full check on your own disks; on shares the fastest way below. About 1 read + 1 write on shares."),
             (.fast, "Fastest: no picture fingerprint",
@@ -421,12 +430,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         inPlaceCheck.target = self
         inPlaceCheck.action = #selector(inPlaceChanged(_:))
         rows.append(inPlaceCheck)
-        rows.append(note("FASTEST (off by default). NEF, NRW, DNG, ARW, PEF and TIFF: only the new XMP / IPTC block (a few KB) and the small directory entry pointing to it are written - the rest of the file, the picture included, is never written. JPEG: only when the new values fit into the space the old ones take (often after a first normal write); otherwise the normal way below. Before each change Find notes the bytes it will overwrite; it reads every value back, and puts the old bytes back if anything isn't as asked or Find stops half way (at the next start). The file isn't copied first; Undo puts the old values back."))
+        rows.append(note("FASTEST (off by default). NEF, NRW, DNG, ARW, PEF and TIFF: only the new XMP / IPTC block (a few KB) and the small directory entry pointing to it are written - the rest of the file, the picture included, is never written. JPEG: only when the new values fit into the space the old ones take (often after a first normal write); otherwise the normal way below. Before each change PhotoLab notes the bytes it will overwrite; it reads every value back, and puts the old bytes back if anything isn't as asked or PhotoLab stops half way (at the next start). The file isn't copied first; Undo puts the old values back."))
         inPlaceFastCheck.state = Prefs.inPlaceExifToolCheck ? .off : .on
         inPlaceFastCheck.target = self
         inPlaceFastCheck.action = #selector(inPlaceFastChanged(_:))
         rows.append(inPlaceFastCheck)
-        rows.append(note("Off (default, SAFEST): after each in-place change ExifTool reads every value back - an independent check. On (FASTEST): Find reads back exactly the bytes it wrote, checks that the file's structure is sound, and (0.18.11) reads every value back with its own reader; only the second program's opinion is skipped."))
+        rows.append(note("Off (default, SAFEST): after each in-place change ExifTool reads every value back - an independent check. On (FASTEST): PhotoLab reads back exactly the bytes it wrote, checks that the file's structure is sound, and (0.18.11) reads every value back with its own reader; only the second program's opinion is skipped."))
         rows.append(NSTextField(labelWithString: "Files that are rewritten (2 and 3 above, when not changed in place), how carefully:"))
         for (m, title, desc) in modes {
             let b = NSButton(radioButtonWithTitle: title, target: self, action: #selector(modeChanged(_:)))
@@ -439,14 +448,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         rows.append(note("In every mode the original stays as it was until the new version has been written and checked; Undo puts the old values back.", indent: false))
 
         // 0.18.11: Find's own reader and writer (no ExifTool in the common case).
-        let nHead = NSTextField(labelWithString: "Speed: Find's own reader and writer")
+        let nHead = NSTextField(labelWithString: "Speed: PhotoLab's own reader and writer")
         nHead.font = NSFont.boldSystemFont(ofSize: 13)
         rows.append(nHead)
-        rows.append(note("Asking ExifTool costs time per file, even when it is kept running. Find can do the common jobs itself. Each box is its own choice; anything Find's reader or writer isn't sure of (an unusual file, a property written in two ways) goes to ExifTool automatically.", indent: false))
+        rows.append(note("Asking ExifTool costs time per file, even when it is kept running. PhotoLab can do the common jobs itself. Each box is its own choice; anything PhotoLab's reader or writer isn't sure of (an unusual file, a property written in two ways) goes to ExifTool automatically.", indent: false))
         let nativeBoxes: [(NSButton, Bool, String)] = [
-            (nativeReadCheck, Prefs.metaNativeRead, "On (default, FASTER): before a change Find reads the current values itself (needed for Undo, and so a RAW and its sidecar get the same full set). Off (SLOWER): ExifTool reads every file first. Equally safe: these values are only read."),
-            (nativeSidecarCheck, Prefs.metaNativeSidecar, "On (default, FASTER): Find writes the sidecar's new version itself, beside the old one: only the fields you changed are changed, everything else in it (Camera Raw / Capture One settings, Photo Mechanic's own fields) is kept exactly. Find then reads it back byte for byte and value for value before it takes the old one's place. Off: ExifTool writes every sidecar (slower, an independent program's work)."),
-            (nativeDoubleCheck, Prefs.metaNativeDoubleCheck, "Off (default, FASTER): Find's own reading-back is the check. On (SAFEST, slower): ExifTool also reads back every sidecar Find wrote, as a second opinion, before it takes the old one's place."),
+            (nativeReadCheck, Prefs.metaNativeRead, "On (default, FASTER): before a change PhotoLab reads the current values itself (needed for Undo, and so a RAW and its sidecar get the same full set). Off (SLOWER): ExifTool reads every file first. Equally safe: these values are only read."),
+            (nativeSidecarCheck, Prefs.metaNativeSidecar, "On (default, FASTER): PhotoLab writes the sidecar's new version itself, beside the old one: only the fields you changed are changed, everything else in it (Camera Raw / Capture One settings, Photo Mechanic's own fields) is kept exactly. PhotoLab then reads it back byte for byte and value for value before it takes the old one's place. Off: ExifTool writes every sidecar (slower, an independent program's work)."),
+            (nativeDoubleCheck, Prefs.metaNativeDoubleCheck, "Off (default, FASTER): PhotoLab's own reading-back is the check. On (SAFEST, slower): ExifTool also reads back every sidecar PhotoLab wrote, as a second opinion, before it takes the old one's place."),
         ]
         for (box, on, desc) in nativeBoxes {
             box.state = on ? .on : .off
@@ -460,9 +469,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         fHead.font = NSFont.boldSystemFont(ofSize: 12)
         rows.append(fHead)
         let flushes: [(FlushMode, String, String)] = [
-            (.full, "Thorough flush (default, SAFEST)", "Find waits until the drive confirms each change is on the disk itself, past its own cache: safe even against a power cut a moment later. The slowest: on a local SSD about 15 ms per RAW."),
-            (.normal, "Normal flush (FASTER)", "Find waits until each change is handed to the drive. A power cut in the second after a change could still lose it, or leave that file's new metadata half-written."),
-            (.none, "No flush (FASTEST, as ExifTool and most apps do)", "Find goes straight on; macOS writes the changes within seconds. Safe if Find or another app stops or crashes. A power cut or macOS crash in those seconds can leave the metadata of the files changed last half-written - in the worst case such a RAW won't open until repaired (Find puts the old bytes back at its next start if its note reached the disk). The picture data itself is never written by a metadata change."),
+            (.full, "Thorough flush (default, SAFEST)", "PhotoLab waits until the drive confirms each change is on the disk itself, past its own cache: safe even against a power cut a moment later. The slowest: on a local SSD about 15 ms per RAW."),
+            (.normal, "Normal flush (FASTER)", "PhotoLab waits until each change is handed to the drive. A power cut in the second after a change could still lose it, or leave that file's new metadata half-written."),
+            (.none, "No flush (FASTEST, as ExifTool and most apps do)", "PhotoLab goes straight on; macOS writes the changes within seconds. Safe if PhotoLab or another app stops or crashes. A power cut or macOS crash in those seconds can leave the metadata of the files changed last half-written - in the worst case such a RAW won't open until repaired (PhotoLab puts the old bytes back at its next start if its note reached the disk). The picture data itself is never written by a metadata change."),
         ]
         for (m, title, desc) in flushes {
             let b = NSButton(radioButtonWithTitle: title, target: self, action: #selector(flushChanged(_:)))
@@ -478,9 +487,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         let etHead = NSTextField(labelWithString: "ExifTool Behavior")
         etHead.font = NSFont.boldSystemFont(ofSize: 13)
         rows.append(etHead)
-        rows.append(note("Find keeps ExifTool running and sends it one job after another, so it doesn't start anew (about a second on this iMac) for each job. When should it run?", indent: false))
+        rows.append(note("PhotoLab keeps ExifTool running and sends it one job after another, so it doesn't start anew (about a second on this iMac) for each job. When should it run?", indent: false))
         let etModes: [(Int, String, String)] = [
-            (0, "Ready at all times: started with Find, kept until Find quits",
+            (0, "Ready at all times: started with PhotoLab, kept until PhotoLab quits",
              "The first rating or caption of the day is as quick as the rest. Uses a little memory (about 20-30 MB per ExifTool) all day."),
             (1, "With Photography Mode (recommended): started when a pane enters Photography Mode",
              "Kept while any pane is in Photography Mode (for as long as that pane is open); stopped when the last one leaves it or closes."),
@@ -500,7 +509,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         etCountPopup.target = self
         etCountPopup.action = #selector(etCountChanged(_:))
         rows.append(row([NSTextField(labelWithString: "ExifTools working side by side:"), etCountPopup,
-                         NSTextField(labelWithString: "(4 = fastest on this iMac's 4 cores; applies after Find restarts)")]))
+                         NSTextField(labelWithString: "(4 = fastest on this iMac's 4 cores; applies after PhotoLab restarts)")]))
         etIdlePopup.addItems(withTitles: SettingsWindowController.idleChoices.map { "\($0) min" })
         etIdlePopup.selectItem(at: SettingsWindowController.idleChoices.index(of: Prefs.exifToolIdleMinutes) ?? 2)
         etIdlePopup.target = self
@@ -545,7 +554,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
 
     @objc private func etCountChanged(_ sender: NSPopUpButton) {
         Prefs.exifToolCount = sender.indexOfSelectedItem + 1
-        App.log.info("ExifTool: \(Prefs.exifToolCount) side by side from the next start of Find")
+        App.log.info("ExifTool: \(Prefs.exifToolCount) side by side from the next start of PhotoLab")
     }
 
     @objc private func etIdleChanged(_ sender: NSPopUpButton) {
@@ -559,7 +568,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         if sender === nativeReadCheck { Prefs.metaNativeRead = on }
         if sender === nativeSidecarCheck { Prefs.metaNativeSidecar = on }
         if sender === nativeDoubleCheck { Prefs.metaNativeDoubleCheck = on }
-        App.log.info("Metadata: Find's own reader \(Prefs.metaNativeRead ? "ON" : "OFF"), own sidecar writer \(Prefs.metaNativeSidecar ? "ON" : "OFF"), ExifTool double check \(Prefs.metaNativeDoubleCheck ? "ON" : "OFF")")
+        App.log.info("Metadata: PhotoLab's own reader \(Prefs.metaNativeRead ? "ON" : "OFF"), own sidecar writer \(Prefs.metaNativeSidecar ? "ON" : "OFF"), ExifTool double check \(Prefs.metaNativeDoubleCheck ? "ON" : "OFF")")
     }
 
     @objc private func flushChanged(_ sender: NSButton) {
@@ -571,7 +580,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
 
     @objc private func inPlaceFastChanged(_ sender: NSButton) {
         Prefs.inPlaceExifToolCheck = sender.state == .off
-        App.log.info("Metadata in place: check by \(Prefs.inPlaceExifToolCheck ? "ExifTool" : "Find (bytes)")")
+        App.log.info("Metadata in place: check by \(Prefs.inPlaceExifToolCheck ? "ExifTool" : "PhotoLab (bytes)")")
     }
 
     @objc private func inPlaceChanged(_ sender: NSButton) {
@@ -584,6 +593,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         Prefs.metaWriteMode = m
         for b in modeRadios { b.state = b.tag == m.rawValue ? .on : .off }
         App.log.info("Metadata: write mode \(m.rawValue)")
+    }
+
+    @objc private func setsChanged(_ sender: NSButton) {
+        FileSets.enabled = setsCheck.state == .on
+        App.log.info("List view: sets as one row \(FileSets.enabled ? "ON" : "OFF")")
+        for w in (NSApp.delegate as? AppDelegate)?.windowControllers ?? [] {
+            for p in w.panes { p.applySetsSetting() }
+        }
     }
 
     @objc private func twinChanged(_ sender: NSButton) {
@@ -643,7 +660,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         qlCheck.action = #selector(qlChanged(_:))
         reopenCheck.target = self
         reopenCheck.action = #selector(reopenChanged(_:))
-        let note = NSTextField(wrappingLabelWithString: "Saved previews, caches and clean-up: see Storage & Maintenance.\n\nReopened windows go back to their position, display and desktop, with their panes, tabs, view modes, sidebar and Info panel. If a display is gone they move to the main one. macOS has no official way for an app to choose a window's desktop; if this macOS refuses, the window opens on the current desktop.\n\nNew windows open in screen quarters: top-left, then top-right, bottom-left, bottom-right. If a window has been moved or resized, the next one opens top-left. With all four taken, a new window reuses the oldest window's quarter.\n\nRemoving an item moves it to the Trash. Only where there is no Trash (most shared volumes), or with File > Delete Immediately, does Find delete permanently - and only after you confirm, as in Finder. Nothing is ever overwritten.")
+        let note = NSTextField(wrappingLabelWithString: "Saved previews, caches and clean-up: see Storage & Maintenance.\n\nReopened windows go back to their position, display and desktop, with their panes, tabs, view modes, sidebar and Info panel. If a display is gone they move to the main one. macOS has no official way for an app to choose a window's desktop; if this macOS refuses, the window opens on the current desktop.\n\nNew windows open in screen quarters: top-left, then top-right, bottom-left, bottom-right. If a window has been moved or resized, the next one opens top-left. With all four taken, a new window reuses the oldest window's quarter.\n\nRemoving an item moves it to the Trash. Only where there is no Trash (most shared volumes), or with File > Delete Immediately, does PhotoLab delete permanently - and only after you confirm, as in Finder. Nothing is ever overwritten.")
         note.textColor = NSColor.secondaryLabelColor
         let stack = NSStackView(views: [
             row([NSTextField(labelWithString: "New windows open at:"), startPopup]),
@@ -890,7 +907,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         darkCheck.target = self
         darkCheck.action = #selector(darkChanged(_:))
 
-        let hint = NSTextField(wrappingLabelWithString: "Changes apply to all Find windows immediately and are remembered. Save As keeps a named copy you can switch back to.")
+        let hint = NSTextField(wrappingLabelWithString: "Changes apply to all PhotoLab windows immediately and are remembered. Save As keeps a named copy you can switch back to.")
         hint.textColor = NSColor.secondaryLabelColor
 
         // 0.16: the finish - Depth, Glow, Glass, Dim. All at 0 = the flat look of earlier versions.
@@ -917,7 +934,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         let flat = NSButton(title: "All to 0 (flat)", target: self, action: #selector(finishFlat(_:)))
         let standard = NSButton(title: "Standard", target: self, action: #selector(finishStandard(_:)))
         let speed = NSButton(title: "Test Drawing Speed", target: self, action: #selector(testDrawingSpeed(_:)))
-        speed.toolTip = "Scrolls the front Find window's list or thumbnails by itself for a moment and times the drawing"
+        speed.toolTip = "Scrolls the front PhotoLab window's list or thumbnails by itself for a moment and times the drawing"
         finishRows.append(row([flat, standard, speed]))
         // 0.17.1: macOS's own setting turns every see-through effect into plain grey.
         if Finish.systemReducesTransparency {
@@ -1010,8 +1027,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
     @objc private func testDrawingSpeed(_ sender: Any?) {
         guard let c = NSApp.orderedWindows.compactMap({ $0.windowController as? BrowserWindowController }).first else {
             let a = ThemedAlert()
-            a.messageText = "Open a Find window first"
-            a.informativeText = "The test scrolls a Find window's list or thumbnails (best: a big folder in Photography mode)."
+            a.messageText = "Open a PhotoLab window first"
+            a.informativeText = "The test scrolls a PhotoLab window's list or thumbnails (best: a big folder in Photography mode)."
             a.addButton(withTitle: "OK")
             a.runModal()
             return
@@ -1132,7 +1149,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         let name = working.name
         let a = ThemedAlert()
         a.messageText = "Delete the theme \"\(name)\"?"
-        a.informativeText = "Only the saved theme is removed. Find switches back to Graphite."
+        a.informativeText = "Only the saved theme is removed. PhotoLab switches back to Graphite."
         a.addButton(withTitle: "Delete")
         a.addButton(withTitle: "Cancel")
         if a.runModal() != .alertFirstButtonReturn { return }

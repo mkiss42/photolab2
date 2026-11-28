@@ -90,8 +90,8 @@ final class StorageSettingsController: NSObject {
     private let busyLabel = NSTextField(labelWithString: "")
     private let detail = NSTextView(frame: NSRect(x: 0, y: 0, width: 690, height: 150))
     private let autoCheck = NSButton(checkboxWithTitle: "Clean up automatically", target: nil, action: nil)
-    private let startCheck = NSButton(checkboxWithTitle: "When Find starts", target: nil, action: nil)
-    private let quitCheck = NSButton(checkboxWithTitle: "When Find quits", target: nil, action: nil)
+    private let startCheck = NSButton(checkboxWithTitle: "When PhotoLab starts", target: nil, action: nil)
+    private let quitCheck = NSButton(checkboxWithTitle: "When PhotoLab quits", target: nil, action: nil)
     private let everyPopup = ValuePopup([("Not on a schedule", 0), ("Every 6 hours", 6), ("Every 12 hours", 12), ("Every day", 24), ("Every week", 168)])
     private let tempPopup = ValuePopup([("1 hour", 1), ("6 hours", 6), ("1 day", 24), ("1 week", 168)])
     private let logPopup = ValuePopup([("7 days", 7), ("30 days", 30), ("90 days", 90), ("1 year", 365)])
@@ -102,7 +102,7 @@ final class StorageSettingsController: NSObject {
 
     override init() {
         super.init()
-        let intro = secondary("Find keeps the files below for itself, in its own folders. Clean-up only ever removes these: never your files, RAW files, XMP sidecars, other apps' files, system files, settings, themes, saved searches or the list of indexed folders. It never runs while Find is copying, moving, renaming, searching or building an index.")
+        let intro = secondary("PhotoLab keeps the files below for itself, in its own folders. Clean-up only ever removes these: never your files, RAW files, XMP sidecars, other apps' files, system files, settings, themes, saved searches or the list of indexed folders. It never runs while PhotoLab is copying, moving, renaming, searching or building an index.")
         detail.isEditable = false
         detail.isSelectable = true
         detail.font = NSFont.userFixedPitchFont(ofSize: 11)
@@ -136,7 +136,7 @@ final class StorageSettingsController: NSObject {
             busyLabel,
             detailScroll,
             hstack([autoCheck, startCheck, quitCheck, everyPopup]),
-            hstack([NSTextField(labelWithString: "Remove Find's temporary files after"), tempPopup,
+            hstack([NSTextField(labelWithString: "Remove PhotoLab's temporary files after"), tempPopup,
                     NSTextField(labelWithString: "Keep logs for"), logPopup]),
             hstack([NSTextField(labelWithString: "Saved previews of Photoshop and large TIFF files: up to"), previewPopup]),
             hstack([cleanNow, clearAll, rebuild, copy]),
@@ -159,7 +159,7 @@ final class StorageSettingsController: NSObject {
         previewPopup.value = p.previewLimitMB
         for c in [startCheck, quitCheck] { c.isEnabled = p.automatic }
         everyPopup.isEnabled = p.automatic
-        busyLabel.stringValue = "Find is busy now with: \(Activity.shared.describe)"
+        busyLabel.stringValue = "PhotoLab is busy now with: \(Activity.shared.describe)"
         let st = App.maintenance.state
         lastLabel.stringValue = "Last clean-up: " + (st.lastRun > 0 ? "\(Ascii.timestamp(Date(timeIntervalSince1970: st.lastRun))) (\(st.lastTrigger)). \(st.lastSummary)" : "never")
             + "\nPolicy: " + p.describe
@@ -217,7 +217,7 @@ final class StorageSettingsController: NSObject {
     @objc private func clearDisposable(_ sender: Any?) {
         let a = ThemedAlert()
         a.messageText = "Clear all disposable caches?"
-        a.informativeText = "Removes Find's saved previews, temporary files and test folders, and empties its memory caches. They are made again when needed (the first look at a large Photoshop file is slower again).\n\nKept: settings, themes, window places, search indexes, logs. Your own files are never touched."
+        a.informativeText = "Removes PhotoLab's saved previews, temporary files and test folders, and empties its memory caches. They are made again when needed (the first look at a large Photoshop file is slower again).\n\nKept: settings, themes, window places, search indexes, logs. Your own files are never touched."
         a.addButton(withTitle: "Clear Caches")
         a.addButton(withTitle: "Cancel")
         if a.runModal() != .alertFirstButtonReturn { return }
@@ -263,20 +263,20 @@ final class NetworkSettingsController: NSObject {
         serverRows.alignment = .leading
         serverRows.spacing = 4
         let addButton = NSButton(title: "Add Server", target: self, action: #selector(addServer(_:)))
-        let addNote = secondary("Tick \u{201C}Connect when Find starts\u{201D} for the ones to connect at start. Shares already connected (by Find, Finder or anything else) are left as they are.")
+        let addNote = secondary("Tick \u{201C}Connect when PhotoLab starts\u{201D} for the ones to connect at start. Shares already connected (by PhotoLab, Finder or anything else) are left as they are.")
         addNote.widthAnchor.constraint(equalToConstant: 560).isActive = true
         let serversBox = vstack([
             NSTextField(labelWithString: "Saved servers (shown in the sidebar, connected or not):"),
             serverRows,
             hstack([addButton, addNote]),
             hstack([NSButton(title: "Repair Keychain Access", target: self, action: #selector(repairKeychain(_:))),
-                    secondary("Stops macOS asking \u{201C}NetAuthSysAgent wants to use your confidential information\u{201D} for passwords Find saved (once is enough).")]),
+                    secondary("Stops macOS asking \u{201C}NetAuthSysAgent wants to use your confidential information\u{201D} for passwords PhotoLab saved (once is enough).")]),
         ], spacing: 6)
         serverObserver = NotificationCenter.default.addObserver(forName: .findVolumesChanged, object: nil, queue: .main) { [weak self] _ in
             // Later, not inside the click that changed the list (its button is about to be replaced).
             DispatchQueue.main.async { self?.refreshServers() }
         }
-        let intro = secondary("Find never waits for a server on the window's own thread, so a share that stops answering cannot freeze Find. It does not poll servers: it reacts when macOS reports a share mounted or gone, and when you open a folder.")
+        let intro = secondary("PhotoLab never waits for a server on the window's own thread, so a share that stops answering cannot freeze PhotoLab. It does not poll servers: it reacts when macOS reports a share mounted or gone, and when you open a folder.")
         listingPopup.target = self
         listingPopup.action = #selector(changed(_:))
         readersPopup.target = self
@@ -290,7 +290,7 @@ final class NetworkSettingsController: NSObject {
             serversBox,
             intro,
             hstack([NSTextField(labelWithString: "Remember folders on shares for"), listingPopup]),
-            secondary("Every folder on a share you go into is remembered (also after quitting Find). Going back to it doesn't wait for the server: the remembered list shows at once, the folder is read again in the background (spinner bottom right) and the list updates by itself if anything changed. Refresh (Cmd-R) always waits for the server."),
+            secondary("Every folder on a share you go into is remembered (also after quitting PhotoLab). Going back to it doesn't wait for the server: the remembered list shows at once, the folder is read again in the background (spinner bottom right) and the list updates by itself if anything changed. Refresh (Cmd-R) always waits for the server."),
             sizesCheck,
             hstack([NSTextField(labelWithString: "Searching a share without an index: read"), readersPopup, NSTextField(labelWithString: "at a time")]),
             secondary("Fewer is gentler on the server and the network; more is faster on a fast server."),
@@ -315,7 +315,7 @@ final class NetworkSettingsController: NSObject {
         }
         let vols = VolumeRegistry.shared.volumes
         for (i, s) in list.enumerated() {
-            let check = NSButton(checkboxWithTitle: "Connect when Find starts", target: self, action: #selector(autoChanged(_:)))
+            let check = NSButton(checkboxWithTitle: "Connect when PhotoLab starts", target: self, action: #selector(autoChanged(_:)))
             check.state = s.autoConnect ? .on : .off
             check.tag = i
             let connected = ServerList.mountedPath(s, volumes: vols) != nil
@@ -412,7 +412,7 @@ final class AdvancedSettingsController: NSObject {
             monitor,
             hstack([copy, logs]),
             resultLabel,
-            secondary("When Find is idle it uses no processor time: no polling, no timers except a 10-minute check whether the scheduled clean-up is due. Folder watching uses macOS file events and stops when a folder is left; everything stops when Find quits."),
+            secondary("When PhotoLab is idle it uses no processor time: no polling, no timers except a 10-minute check whether the scheduled clean-up is due. Folder watching uses macOS file events and stops when a folder is left; everything stops when PhotoLab quits."),
         ], spacing: 12)
         pinTop(stack, in: view, width: 696)
         for v in [monitor, resultLabel] { v.widthAnchor.constraint(equalToConstant: 696).isActive = true }
@@ -440,7 +440,7 @@ final class AdvancedSettingsController: NSObject {
 
     private func lines() -> [String] {
         var l: [String] = []
-        l.append("Find \(App.version), \(App.systemInfo)")
+        l.append("PhotoLab \(App.version), \(App.systemInfo)")
         l.append("Memory in use by Find: \(Listing.sizeText(Int64(ProcessStats.residentBytes())))")
         l.append(String(format: "Processor time used since start: %.1f s", ProcessStats.cpuSeconds()))
         l.append("Busy now: \(Activity.shared.describe)")

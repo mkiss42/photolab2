@@ -224,7 +224,7 @@ final class ExifToolServer {
     func shutdown() {
         lock.lock()
         idleTimer?.cancel()
-        stopLocked("Find quits")
+        stopLocked("PhotoLab quits")
         lock.unlock()
     }
 }

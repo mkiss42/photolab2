@@ -13,11 +13,11 @@ import Foundation
 final class AppFiles {
     static var shared: AppFiles!
 
-    /// ~/Library/Application Support/Find
+    /// ~/Library/Application Support/PhotoLab
     let supportDir: String
-    /// ~/Library/Caches/Find
+    /// ~/Library/Caches/PhotoLab
     let cachesDir: String
-    /// ~/Library/Logs/Find
+    /// ~/Library/Logs/PhotoLab
     let logsDir: String
 
     private var realRoots: [String] = []
@@ -103,7 +103,7 @@ final class AppFiles {
     @discardableResult
     func removeOwned(_ path: String) -> Bool {
         guard isOwned(path) else {
-            Log.shared?.warn("E-GUARD-1 refused to remove a path outside Find's folders: \(path)")
+            Log.shared?.warn("E-GUARD-1 refused to remove a path outside PhotoLab's folders: \(path)")
             return false
         }
         do {

@@ -354,7 +354,7 @@ final class InspectorController: NSObject {
         imageView.image = image
         exifButton.isEnabled = ExifTool.path != nil && shownEntry.map { $0.kind == .file } == true
         exifButton.toolTip = ExifTool.path == nil
-            ? "ExifTool is not available (it is normally bundled inside Find.app)."
+            ? "ExifTool is not available (it is normally bundled inside PhotoLab.app)."
             : "List every tag ExifTool can read (read-only)"
         let out = NSMutableAttributedString(string: "")
         let para = NSMutableParagraphStyle()

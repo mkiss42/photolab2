@@ -111,17 +111,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var numbered: [String] = []
         for (i, l) in lines.enumerated() { numbered.append(String(format: "X%03d ", i + 1) + Ascii.clean(l)) }
         numbered.append("Total: \(lines.count) lines")
-        let text = "FIND CRASH REPORT (from the previous run)\n" + numbered.joined(separator: "\n") + "\n"
+        let text = "PHOTOLAB CRASH REPORT (from the previous run)\n" + numbered.joined(separator: "\n") + "\n"
         let saved = Paths.join(App.files.logsDir, "crash-\(Ascii.fileStamp()).txt")
         App.files.writeText(text, to: saved)
-        App.log.warn("Find stopped unexpectedly last time; report saved as \(saved)")
+        App.log.warn("PhotoLab stopped unexpectedly last time; report saved as \(saved)")
         for l in numbered.prefix(12) { App.log.warn("CRASH \(l)") }
         App.lastReport = text
         DispatchQueue.main.async {
             let a = ThemedAlert()
-            a.messageText = "Find stopped unexpectedly last time"
+            a.messageText = "PhotoLab stopped unexpectedly last time"
             let doing = lines.first(where: { $0.hasPrefix("Doing:") }) ?? ""
-            a.informativeText = "A report of what happened was saved in Logs/Find (\(Paths.lastComponent(saved)))."
+            a.informativeText = "A report of what happened was saved in Logs/PhotoLab (\(Paths.lastComponent(saved)))."
                 + (doing.count > 7 ? "\n\n" + doing : "")
                 + "\n\nCopy Report puts it on the clipboard (numbered plain lines, for AutoType) - please send it to me."
             a.addButton(withTitle: "Copy Report")
@@ -141,11 +141,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if lines.isEmpty { return }
         DispatchQueue.main.async {
             let a = ThemedAlert()
-            a.messageText = "Find finished an interrupted operation"
+            a.messageText = "PhotoLab finished an interrupted operation"
             let back = lines.filter { $0.contains("renamed back") }.count
             let trashed = lines.filter { $0.contains("to the Trash") }.count
             let failed = lines.filter { $0.contains("E-RECOVER") }.count
-            var info = "Find was stopped (crash, Force Quit or power cut) in the middle of a copy or rename. Nothing was deleted."
+            var info = "PhotoLab was stopped (crash, Force Quit or power cut) in the middle of a copy or rename. Nothing was deleted."
             if back > 0 { info += "\n\n\(back) item\(back == 1 ? " was" : "s were") given back \(back == 1 ? "its" : "their") name." }
             if trashed > 0 { info += "\n\(trashed) unfinished cop\(trashed == 1 ? "y was" : "ies were") moved to the Trash." }
             if failed > 0 { info += "\n\(failed) could not be handled and will be tried again next time (see the log)." }
@@ -237,7 +237,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if CopyQueueManager.shared.isRunning {
             let a = ThemedAlert()
             a.messageText = "A queued copy is running"
-            a.informativeText = "Quit anyway? The item being copied stops safely (nothing half-copied is kept) and the copy carries on from there the next time Find runs."
+            a.informativeText = "Quit anyway? The item being copied stops safely (nothing half-copied is kept) and the copy carries on from there the next time PhotoLab runs."
             a.addButton(withTitle: "Keep Running")
             a.addButton(withTitle: "Quit")
             if a.runModal() != .alertSecondButtonReturn { return .terminateCancel }
@@ -258,7 +258,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = App.maintenance.cleanUp(policy, trigger: "at quit")
         }
         App.files.clearTemp()
-        App.log.info("Find quit")
+        App.log.info("PhotoLab quit")
         ExifToolPool.shared.shutdown()
         IOLog.network?.close()
         IOLog.disk?.close()
@@ -487,7 +487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func runSelfCheck(_ sender: Any?) {
         let a = ThemedAlert()
         a.messageText = "Run the Safety Self-Check?"
-        a.informativeText = "Find will create, rename, move, copy and trash test files inside its own folder (~/Library/Caches/Find), check every safety rule on this Mac, then remove the test files. Your own files are not touched. Anything moved to the Trash during the check is taken back out."
+        a.informativeText = "PhotoLab will create, rename, move, copy and trash test files inside its own folder (~/Library/Caches/PhotoLab), check every safety rule on this Mac, then remove the test files. Your own files are not touched. Anything moved to the Trash during the check is taken back out."
         a.addButton(withTitle: "Run Check")
         a.addButton(withTitle: "Cancel")
         if a.runModal() != .alertFirstButtonReturn { return }
@@ -543,7 +543,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func networkReport(_ sender: Any?) {
         Volumes.refresh { [weak self] in
             let lines = NetworkReport.lines(VolumeRegistry.shared.volumes, saved: Prefs.savedServers)
-            let text = "FIND NETWORK REPORT\nFind \(App.version)\n\(App.systemInfo)\n" + lines.joined(separator: "\n") + "\n"
+            let text = "PHOTOLAB NETWORK REPORT\nPhotoLab \(App.version)\n\(App.systemInfo)\n" + lines.joined(separator: "\n") + "\n"
             App.lastReport = text
             let path = Paths.join(App.files.logsDir, "network-\(Ascii.fileStamp()).txt")
             App.files.writeText(text, to: path)
@@ -561,7 +561,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func runSearchTest(_ sender: Any?) {
         let a = ThemedAlert()
         a.messageText = "Run the Search Self-Test?"
-        a.informativeText = "Find builds a test folder with known contents (odd names, hidden items, links, a package, an unreadable folder) inside ~/Library/Caches/Find, runs 36 searches and checks every result, then removes the test folder. Your own files are not touched."
+        a.informativeText = "PhotoLab builds a test folder with known contents (odd names, hidden items, links, a package, an unreadable folder) inside ~/Library/Caches/PhotoLab, runs 36 searches and checks every result, then removes the test folder. Your own files are not touched."
         a.addButton(withTitle: "Run Test")
         a.addButton(withTitle: "Cancel")
         if a.runModal() != .alertFirstButtonReturn { return }
@@ -583,7 +583,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func runIndexTest(_ sender: Any?) {
         let a = ThemedAlert()
         a.messageText = "Run the Index Self-Test?"
-        a.informativeText = "Find builds a test folder and a test index inside ~/Library/Caches/Find, changes the test files (add, rename, delete, move), and checks that indexed searches always give exactly the same results as direct searches. Your own files and your real indexes are not touched."
+        a.informativeText = "PhotoLab builds a test folder and a test index inside ~/Library/Caches/PhotoLab, changes the test files (add, rename, delete, move), and checks that indexed searches always give exactly the same results as direct searches. Your own files and your real indexes are not touched."
         a.addButton(withTitle: "Run Test")
         a.addButton(withTitle: "Cancel")
         if a.runModal() != .alertFirstButtonReturn { return }
@@ -643,7 +643,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         App.log.info("Photo metadata self-test: passed \(t.passed), failed \(t.failed), skipped \(t.skipped)")
         let r = ThemedAlert()
         r.messageText = t.failed == 0 ? "Photo metadata self-test passed (\(t.passed) checks)" : "Photo metadata self-test: \(t.failed) check(s) FAILED"
-        r.informativeText = "It made a small test JPEG in ~/Library/Caches/Find, read it back, and removed it.\nReport saved to \(path)"
+        r.informativeText = "It made a small test JPEG in ~/Library/Caches/PhotoLab, read it back, and removed it.\nReport saved to \(path)"
         r.alertStyle = t.failed == 0 ? .informational : .critical
         r.addButton(withTitle: "OK")
         r.addButton(withTitle: "Copy Report")
@@ -678,8 +678,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func showAbout(_ sender: Any?) {
         let a = ThemedAlert()
-        a.messageText = "Find \(App.version)"
-        a.informativeText = "A fast, careful file browser.\nRemoval goes to the Trash; Find deletes permanently only after you confirm (shares without a Trash, Delete Immediately).\n\n\(App.systemInfo)"
+        a.messageText = "PhotoLab \(App.version)"
+        a.informativeText = "A fast, careful file browser.\nRemoval goes to the Trash; PhotoLab deletes permanently only after you confirm (shares without a Trash, Delete Immediately).\n\n\(App.systemInfo)"
         a.addButton(withTitle: "OK")
         a.runModal()
     }
@@ -707,7 +707,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // App menu
         let appMenu = NSMenu(title: "PhotoLab")
-        appMenu.addItem(item("About Find", #selector(showAbout(_:)), "", [], target: self))
+        appMenu.addItem(item("About PhotoLab", #selector(showAbout(_:)), "", [], target: self))
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(item("Settings\u{2026}", #selector(openSettings(_:)), ",", [.command], target: self))
         appMenu.addItem(NSMenuItem.separator())
@@ -717,11 +717,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(servicesItem)
         NSApp.servicesMenu = services
         appMenu.addItem(NSMenuItem.separator())
-        appMenu.addItem(item("Hide Find", #selector(NSApplication.hide(_:)), "h"))
+        appMenu.addItem(item("Hide PhotoLab", #selector(NSApplication.hide(_:)), "h"))
         appMenu.addItem(item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]))
         appMenu.addItem(item("Show All", #selector(NSApplication.unhideAllApplications(_:))))
         appMenu.addItem(NSMenuItem.separator())
-        appMenu.addItem(item("Quit Find", #selector(NSApplication.terminate(_:)), "q"))
+        appMenu.addItem(item("Quit PhotoLab", #selector(NSApplication.terminate(_:)), "q"))
         addSubmenu(main, "PhotoLab", appMenu)
 
         // File

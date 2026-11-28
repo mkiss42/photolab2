@@ -106,15 +106,19 @@ extension BrowserPane {
         photoOutline.isHidden = viewMode != "photo"
         photoOutline.needsDisplay = true
         if focus { window?.makeFirstResponder(gridOn ? grid as NSView : list.table as NSView) }
-        // PhotoLab: sets (RAW + JPEG + XMP) are one row in the list view; the thumbnail views show files.
-        let sets = viewMode == "list" && FileSets.enabled
-        if list.groupSets != sets { list.groupSets = sets; list.regroup() }
+        applySetsSetting()
         if viewMode != "photo" {
             PhotoFactsStore.shared.cancel()
             photoFacts = [:]
             photoFactsFolder = ""
         }
         refreshGrid()
+    }
+
+    /// PhotoLab: sets (RAW + JPEG + XMP) are one row in the list view; the thumbnail views show files.
+    func applySetsSetting() {
+        let sets = viewMode == "list" && FileSets.enabled
+        if list.groupSets != sets { list.groupSets = sets; list.regroup(); updateStatus() }
     }
 
     func setViewMode(_ m: String) {
@@ -515,7 +519,7 @@ extension BrowserPane {
     func applyMetadata(items: [(image: String, change: MetaChange)], title: String, progress: ((Int, Int) -> Void)? = nil,
                        registerUndo: Bool = true, done: ((BatchReport) -> Void)? = nil) {
         guard App.ops.metadataTool != nil else {
-            showMessage("ExifTool is not available", "Ratings and metadata are written with the ExifTool inside Find.app, which could not be started (Help > Run Photo Self-Test shows why). Nothing was written.")
+            showMessage("ExifTool is not available", "Ratings and metadata are written with the ExifTool inside PhotoLab.app, which could not be started (Help > Run Photo Self-Test shows why). Nothing was written.")
             keepFactsOnReload = false
             photoFactsFolder = ""
             refreshGrid()

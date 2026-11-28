@@ -1,5 +1,31 @@
 # Changes
 
+## 1.0.0-alpha.9 — Return renames a set in place; PhotoLab everywhere; Space opens folders
+
+- Return (and M) on ONE set row renames it in place. Before, a set row counted as its 2-3 files, so
+  Return opened the batch-rename sheet (the reason it differed between your Mac and Justin's: it
+  only happened on sets). Several selected rows still open the batch rename.
+- The app calls itself PhotoLab everywhere: menus (About / Hide / Quit PhotoLab), Settings, dialogs,
+  reports, logs and the folder names in texts. PhotoLab's own folders are
+  ~/Library/Application Support/PhotoLab, Caches/PhotoLab and Logs/PhotoLab; folders named "Find"
+  there belong to the Find app itself and are not used by PhotoLab (you can trash them if you no
+  longer run Find). Menu items for the find function ("Find...", "Find and Replace...",
+  "Find Duplicates...") keep their names.
+- List view: Space on a folder opens it in a NEW window as a contact sheet (Photography mode),
+  focused. Space on a file: the preview, as before.
+- Settings > Photography: the two "sets" settings are now together under one heading and say which
+  view they are for: "List view: a RAW, its JPEG and its .xmp sidecar are one row" (new, on) and
+  "Photography Mode: a RAW and its JPEG are one picture" (Find's badge setting, unchanged).
+  Turning the list one off shows every file at once.
+
+Test checklist (5 minutes):
+[ ] 1  List view, one set row selected, Return: the name becomes editable in place; type a new
+       name, Return: all files of the set renamed. Two rows + Return: batch rename sheet.
+[ ] 2  App menu: About PhotoLab / Hide PhotoLab / Quit PhotoLab. Settings window title "PhotoLab Settings".
+[ ] 3  List view, select a folder, Space: a new window opens on it as a contact sheet, in front.
+[ ] 4  Settings > Photography: the "Sets" heading with both boxes; untick the list one: rows split
+       into files at once; tick it again: back to sets.
+
 ## 1.0.0-alpha.8 — sets as one row; stars and Decode Full RAW in the preview
 
 - List view: a RAW, its JPEG/HEIC and its XMP/ACR sidecar with the same name are ONE row (as in

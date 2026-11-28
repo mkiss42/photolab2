@@ -605,7 +605,7 @@ final class FTPClient {
     /// Delete one FILE on the server. `isDir` must come from the listing: folders are refused here.
     /// Afterwards the folder is listed again to confirm it is gone.
     func deleteFile(_ file: [String], isDir: Bool) -> FTPFailure? {
-        guard !isDir else { return FTPFailure(code: "FTP-DIR", text: "Folders are never deleted on an FTP server by Find.") }
+        guard !isDir else { return FTPFailure(code: "FTP-DIR", text: "Folders are never deleted on an FTP server by PhotoLab.") }
         guard let name = file.last, file.allSatisfyCompat({ FTPNames.isSafe($0) }) else {
             return FTPFailure(code: "FTP-NAME", text: "The name can't be sent to an FTP server.")
         }

@@ -13,7 +13,7 @@ final class SafetySelfCheck {
     private(set) var failed = 0
     private(set) var skipped = 0
     private var failures: [String] = []
-    private let report = Report(title: "Find Safety Self-Check")
+    private let report = Report(title: "PhotoLab Safety Self-Check")
     private var root = ""
     /// Items sent to the Trash during the check that must be removed from the Trash at the end.
     private var trashLeftovers: [String] = []
@@ -449,7 +449,7 @@ final class SafetySelfCheck {
             check("T-SAFE-56", "clean-up removes old logs but never the log being written (checked in the optimised app)",
                   !Sys.exists(Paths.join(mf.logsDir, "find-old.log")) && Sys.exists(Paths.join(mf.logsDir, "find-now.log")), r.lines.joined(separator: " | "))
             let userOK = Sys.exists(Paths.join(user, "DSC_1.NEF")) && Sys.exists(Paths.join(user, "DSC_1.xmp"))
-            check("T-SAFE-52", "clean-up never touches files outside Find's folders (a link into them is removed, not its target)", userOK)
+            check("T-SAFE-52", "clean-up never touches files outside PhotoLab's folders (a link into them is removed, not its target)", userOK)
             _ = maint.clearDisposable()
             check("T-SAFE-53", "Clear All Disposable Caches keeps the indexed-folder list and user files",
                   Sys.exists(Paths.join(idx.folder, "config.json")) && Sys.exists(Paths.join(user, "DSC_1.NEF")))
@@ -472,7 +472,7 @@ final class SafetySelfCheck {
 
         // 25-26 Cleanup guard refuses paths outside Find's folders
         let outside = Paths.join(Paths.parent(files.cachesDir), "find-guard-test-should-not-exist")
-        check("T-SAFE-25", "cleanup refuses a path outside Find's folders", files.removeOwned(outside) == false && files.isOwned(outside) == false)
+        check("T-SAFE-25", "cleanup refuses a path outside PhotoLab's folders", files.removeOwned(outside) == false && files.isOwned(outside) == false)
         check("T-SAFE-26", "cleanup refuses the user's home folder", files.isOwned(NSHomeDirectory()) == false)
 
         return finish()

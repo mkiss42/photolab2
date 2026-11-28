@@ -347,7 +347,7 @@ final class FindReplaceWindow: NSWindowController, NSWindowDelegate, NSTableView
                     plan.metas.append((it.image, it.change))
                 }
                 var t = "\(plan.metas.count) picture\(plan.metas.count == 1 ? "" : "s")' metadata (of \(pics.count) read)"
-                if unsupported > 0 { t += ", \(unsupported) file\(unsupported == 1 ? "" : "s") Find doesn't write (PSD and others) left out" }
+                if unsupported > 0 { t += ", \(unsupported) file\(unsupported == 1 ? "" : "s") PhotoLab doesn't write (PSD and others) left out" }
                 if App.ops.metadataTool == nil { t = "metadata: ExifTool could not be started (Help > Run Photo Self-Test shows why)" }
                 parts.append(t)
             }

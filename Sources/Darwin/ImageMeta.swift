@@ -387,7 +387,7 @@ enum ExifTool {
     static func runWriteBeside(_ args: [String], files: [String], prefix: String, timeout: Double) -> String? {
         guard prefix.hasPrefix(".find-partial-"), !prefix.contains("/"), !prefix.contains("%"),
             !files.isEmpty, files.allSatisfyCompat({ $0.hasPrefix("/") && !Paths.fileExtension($0).isEmpty }) else {
-            return "refused: not Find's own hidden output names"
+            return "refused: not PhotoLab's own hidden output names"
         }
         let safe = args.filter { !$0.lowercased().hasPrefix("-overwrite") && !$0.lowercased().hasPrefix("-delete_original") && $0 != "-o" && $0 != "-out" }
         if safe.contains(where: { $0.lowercased().contains("overwrite_original") }) { return "refused: overwrite option" }
@@ -397,7 +397,7 @@ enum ExifTool {
 
     static func runWrite(_ args: [String], files: [String], timeout: Double) -> String? {
         guard !files.isEmpty, files.allSatisfyCompat({ $0.hasPrefix("/") && Paths.lastComponent($0).hasPrefix(".find-partial-") }) else {
-            return "refused: ExifTool writes only Find's own working copies"
+            return "refused: ExifTool writes only PhotoLab's own working copies"
         }
         let r = run(["-q"] + args + files, file: files[0], timeout: timeout)
         return r.error

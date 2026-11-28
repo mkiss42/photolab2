@@ -449,7 +449,7 @@ final class FTPBrowser: NSObject, NSTableViewDataSource, NSTableViewDelegate {
                 t.progress.note("Could not list \(where_): \(f.code) \(f.text)")
                 DispatchQueue.main.async {
                     CopiesCenter.shared.finish(t, state: "failed", line: "nothing uploaded (\(f.code))")
-                    self?.message("Nothing was uploaded", "Find could not list \(where_) first (it checks every name before uploading).\n\n\(f.text)\nCode \(f.code).")
+                    self?.message("Nothing was uploaded", "PhotoLab could not list \(where_) first (it checks every name before uploading).\n\n\(f.text)\nCode \(f.code).")
                 }
                 return
             }
@@ -867,7 +867,7 @@ final class FTPBrowser: NSObject, NSTableViewDataSource, NSTableViewDelegate {
 
     static func report(_ title: String, _ lines: [String], server: String) {
         let numbered = lines.enumerated().map { String(format: "F%03d ", $0.offset + 1) + Ascii.clean($0.element) } + ["Total: \(lines.count) lines"]
-        App.lastReport = "FIND FTP REPORT - \(Ascii.clean(server))\n" + numbered.joined(separator: "\n") + "\n"
+        App.lastReport = "PHOTOLAB FTP REPORT - \(Ascii.clean(server))\n" + numbered.joined(separator: "\n") + "\n"
         let a = ThemedAlert()
         a.messageText = title
         a.informativeText = numbered.prefix(20).joined(separator: "\n") + (numbered.count > 20 ? "\n\u{2026} (all of it in the log)" : "")

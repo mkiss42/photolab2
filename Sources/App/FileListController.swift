@@ -1146,6 +1146,18 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     /// Space: Fast Preview, or macOS Quick Look if chosen in Settings.
     func previewSelection() {
+        // PhotoLab (from PhotoLab 2): Space on one folder opens it in a new window, as a contact sheet
+        // (Photography mode), focused.
+        let rows = selectedRowEntries()
+        if rows.count == 1, let f = rows.first, f.kind == .directory, FileDrag.isDropFolder(f), let d = NSApp.delegate as? AppDelegate {
+            FastPreview.shared.close()
+            let c = d.newWindow(path: f.path)
+            c.pane.restoreViewMode("photo")
+            c.window?.makeKeyAndOrderFront(nil)
+            c.window?.makeFirstResponder(c.pane.grid)
+            App.log.info("Space on a folder: opened in a new window as a contact sheet")
+            return
+        }
         if Prefs.spaceOpensQuickLook {
             FastPreview.shared.close()
             quickLook.toggle()

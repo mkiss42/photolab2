@@ -417,7 +417,7 @@ final class SidebarController: NSObject, NSTableViewDataSource, NSTableViewDeleg
             v.imageView?.image = namedImage("NSNetwork") ?? IconCache.shared.icon(forPath: "/Volumes")
             var tip = s.address + (s.user.isEmpty ? "" : "  (account \(s.user))")
             tip += open != nil ? "\nConnected: \(open!)" : "\nNot connected - click to connect"
-            if s.autoConnect { tip += "\nConnects when Find starts" }
+            if s.autoConnect { tip += "\nConnects when PhotoLab starts" }
             if root == nil, let err = ServerStatus.lastError[s.id] { tip += "\nLast try: \(err)" }
             v.toolTip = tip
             v.applyTheme()
@@ -463,7 +463,7 @@ final class SidebarController: NSObject, NSTableViewDataSource, NSTableViewDeleg
         if let r = root { _ = add("Eject \u{201C}\(s.name)\u{201D}", #selector(ejectFromMenu(_:)), r) }
         if let o = open { _ = add("Open in New Tab", #selector(openInNewTab(_:)), o) }
         m.addItem(NSMenuItem.separator())
-        let auto = add("Connect When Find Starts", #selector(toggleAutoConnect(_:)), s.id)
+        let auto = add("Connect When PhotoLab Starts", #selector(toggleAutoConnect(_:)), s.id)
         auto.state = s.autoConnect ? .on : .off
         _ = add("Edit\u{2026}", #selector(editServer(_:)), s.id)
         _ = add("Remove Saved Server\u{2026}", #selector(removeServer(_:)), s.id)

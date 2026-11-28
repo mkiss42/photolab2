@@ -701,7 +701,7 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
         while up != "/" && !Sys.exists(up) { up = Paths.parent(up) }
         Log.shared?.info("Folder moved or deleted while shown: \(p); going to \(up)")
         navigate(to: up)
-        showMessage("The folder \"\(Paths.lastComponent(p))\" was moved or deleted.", "Find went to the nearest folder that still exists: \(up)")
+        showMessage("The folder \"\(Paths.lastComponent(p))\" was moved or deleted.", "PhotoLab went to the nearest folder that still exists: \(up)")
     }
 
     // MARK: Quick Look and inspector
@@ -886,7 +886,7 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
     private func setSpinner(_ on: Bool) {
         let any = on || backgroundWrites > 0
         backgroundSpinner.toolTip = backgroundWrites > 0
-            ? "Writing \(backgroundWrites) picture\(backgroundWrites == 1 ? "" : "s")' ratings / colour classes in the background (you can go on working; Find finishes them before it quits)"
+            ? "Writing \(backgroundWrites) picture\(backgroundWrites == 1 ? "" : "s")' ratings / colour classes in the background (you can go on working; PhotoLab finishes them before it quits)"
             : "Checking this folder on the server in the background (the list shown is the one remembered from last time; it updates by itself if anything changed)"
         if any { backgroundSpinner.startAnimation(nil) } else { backgroundSpinner.stopAnimation(nil) }
     }

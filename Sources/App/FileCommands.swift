@@ -288,12 +288,13 @@ extension BrowserPane {
 
     @objc func renameSelected(_ sender: Any?) {
         if let b = ftpBrowser { b.renameSelected(nil); return }
-        let sel = selection
-        if sel.count > 1 {
-            BatchRenameSheet.show(sel, from: self)
+        // PhotoLab: one set row is one item to rename (in place; all its files follow the new name).
+        let rows = isFTP ? [] : list.selectedRowEntries()
+        if rows.count > 1 {
+            BatchRenameSheet.show(selection, from: self)
             return
         }
-        guard let e = sel.first else {
+        guard let e = rows.first else {
             NSSound.beep()
             return
         }
@@ -457,7 +458,7 @@ extension BrowserPane {
         let refused = paths.compactMap { p in FileOperations.deleteRefusal(p).map { (p, $0) } }
         if !refused.isEmpty {
             showMessage("Not deleted", refused.prefix(6).map { "\u{2022} \(Paths.lastComponent($0.0)): it is \($0.1)" }.joined(separator: "\n")
-                        + "\n\nFind never deletes these. Nothing was deleted.")
+                        + "\n\nPhotoLab never deletes these. Nothing was deleted.")
             return
         }
         let names = paths.map { Paths.lastComponent($0) }

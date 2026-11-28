@@ -445,7 +445,7 @@ final class FileOperations {
                 let t = try toTrash(p)
                 report.done.append((p, t))
                 if t.isEmpty {
-                    report.notes.append("\"\(Paths.lastComponent(p))\" is in the Trash, but macOS did not report where, so this can't be undone from Find. Use Put Back in the Trash.")
+                    report.notes.append("\"\(Paths.lastComponent(p))\" is in the Trash, but macOS did not report where, so this can't be undone from PhotoLab. Use Put Back in the Trash.")
                 } else {
                     records.append((p, t))
                 }
@@ -1326,7 +1326,7 @@ final class FileOperations {
                         continue
                     }
                     let note = noteBegin(["PARTIAL " + temp])
-                    if MetaPlan.nativeSidecar, let rec = timed("sidecars by Find", 1, { writeSidecarNatively(t, w.change, current: [:], temp: temp) }) {
+                    if MetaPlan.nativeSidecar, let rec = timed("sidecars by PhotoLab", 1, { writeSidecarNatively(t, w.change, current: [:], temp: temp) }) {
                         nativeAfter[temp] = rec
                     }
                     jobs.append((t, w.change, temp, note))
@@ -1340,7 +1340,7 @@ final class FileOperations {
                         noteEnd(note)
                         continue
                     }
-                    if let rec = timed("sidecars by Find", 1, { writeSidecarNatively(t, w.change, current: before[t.file] ?? [:], temp: temp) }) {
+                    if let rec = timed("sidecars by PhotoLab", 1, { writeSidecarNatively(t, w.change, current: before[t.file] ?? [:], temp: temp) }) {
                         nativeAfter[temp] = rec
                         jobs.append((t, w.change, temp, note))
                         continue
@@ -1503,7 +1503,7 @@ final class FileOperations {
                         if (try? platform.exclusiveRename(old, j.t.file)) != nil {
                             noteEnd(note2)
                         } else {
-                            report.notes.append("\(name): the original is safe under the hidden name \(old); Find puts it back at its next start.")
+                            report.notes.append("\(name): the original is safe under the hidden name \(old); PhotoLab puts it back at its next start.")
                         }
                         report.failed.append((j.t.image, .system("Rename", EIO, j.t.file)))
                         discardPartial(j.temp)
@@ -1541,11 +1541,11 @@ final class FileOperations {
         }
         if !undoItems.isEmpty { report.undo = .metadata(undoItems) }
         if nativeReads + exifToolReads > 0 {
-            log("METADATA old values read: \(nativeReads) by Find itself, \(exifToolReads) by ExifTool")
+            log("METADATA old values read: \(nativeReads) by PhotoLab itself, \(exifToolReads) by ExifTool")
         }
         // 0.18.13: one line, short enough to retype: total, then each step's seconds and file count.
         let steps = ["RAW pre-read", "old values", "in place: plan", "in place: write", "in place: check", "picture fingerprints before",
-                     "sidecars by Find", "ExifTool writes", "ExifTool read-back", "picture fingerprints after", "JPEG picture check", "check + swap in"]
+                     "sidecars by PhotoLab", "ExifTool writes", "ExifTool read-back", "picture fingerprints after", "JPEG picture check", "check + swap in"]
         let parts = steps.filter { tm[$0] != nil }.map { "\($0) " + String(format: "%.1fs/%d", tm[$0] ?? 0, tmCount[$0] ?? 0) }
         // 0.18.15: with the settings that decide the speed, so a line says what it measured.
         let flushName = ["thorough flush", "normal flush", "no flush"][MetaPlan.flush.rawValue]
@@ -1583,7 +1583,7 @@ final class FileOperations {
         let t0 = Date()
         if let err = writeExclusive(temp, data) {
             if err != EEXIST { discardPartial(temp) }
-            log("METADATA Find could not write the sidecar itself (\(Sys.errorText(err)), code \(err)), ExifTool instead: \(t.file)")
+            log("METADATA PhotoLab could not write the sidecar itself (\(Sys.errorText(err)), code \(err)), ExifTool instead: \(t.file)")
             return nil
         }
         if t.kind == .sidecarExisting { platform.carryAttributes(from: t.file, to: temp) }
@@ -1592,10 +1592,10 @@ final class FileOperations {
             let text = String(data: back, encoding: .utf8), let rec = XMPEditor.read(text),
             MetaPlan.verify(c, readBack: rec, target: t) == nil else {
             discardPartial(temp)
-            log("METADATA the sidecar Find wrote itself did not read back as asked, ExifTool instead: \(t.file)")
+            log("METADATA the sidecar PhotoLab wrote itself did not read back as asked, ExifTool instead: \(t.file)")
             return nil
         }
-        IOLog.onFile("METADATA sidecar written by Find", path: t.file, read: Int64(back.count), written: Int64(data.count),
+        IOLog.onFile("METADATA sidecar written by PhotoLab", path: t.file, read: Int64(back.count), written: Int64(data.count),
                      seconds: Date().timeIntervalSince(t0))
         return rec
     }
@@ -1650,7 +1650,7 @@ final class FileOperations {
         var out: [String] = []
         for lo in journal.leftovers() {
             if journal.belongsToRunningProcess(lo.token) {
-                out.append("RECOVERY skipped note \(lo.token): another Find is running")
+                out.append("RECOVERY skipped note \(lo.token): another PhotoLab is running")
                 continue
             }
             var keep = false
@@ -1675,7 +1675,7 @@ final class FileOperations {
                 let temp = r.temp, dir = Paths.parent(r.temp)
                 guard Paths.lastComponent(temp).hasPrefix(".find-rename-"), Paths.parent(r.original) == dir,
                     FileOperations.nameProblem(Paths.lastComponent(r.original)) == nil else {
-                    out.append("RECOVERY E-RECOVER-1 ignored a note line that does not look like Find's: \(temp)")
+                    out.append("RECOVERY E-RECOVER-1 ignored a note line that does not look like PhotoLab's: \(temp)")
                     continue
                 }
                 var e: Int32 = 0
@@ -1704,7 +1704,7 @@ final class FileOperations {
             }
             for p in lo.partials {
                 guard Paths.lastComponent(p).hasPrefix(".find-partial-") else {
-                    out.append("RECOVERY E-RECOVER-1 ignored a note line that does not look like Find's: \(p)")
+                    out.append("RECOVERY E-RECOVER-1 ignored a note line that does not look like PhotoLab's: \(p)")
                     continue
                 }
                 var e: Int32 = 0

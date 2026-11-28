@@ -8,7 +8,7 @@ import Foundation
 final class SearchSelfTest {
     let files: AppFiles
     let isPackage: (String, String) -> Bool
-    private let report = Report(title: "Find Search Self-Test")
+    private let report = Report(title: "PhotoLab Search Self-Test")
     private(set) var passed = 0
     private(set) var failed = 0
     private(set) var skipped = 0

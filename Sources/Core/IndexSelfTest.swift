@@ -2,14 +2,14 @@
 // Proves an indexed search returns exactly what a direct search returns: right after building, after
 // files are added, renamed, deleted and moved, after folders appear and disappear, with exclusions,
 // after saving and reloading, and that a damaged or out-of-place index is refused.
-// Uses its own scratch folder and its own index folder inside ~/Library/Caches/Find.
+// Uses its own scratch folder and its own index folder inside ~/Library/Caches/PhotoLab.
 
 import Foundation
 
 final class IndexSelfTest {
     let files: AppFiles
     let isPackage: (String, String) -> Bool
-    private let report = Report(title: "Find Index Self-Test")
+    private let report = Report(title: "PhotoLab Index Self-Test")
     private(set) var passed = 0
     private(set) var failed = 0
     private var failures: [String] = []

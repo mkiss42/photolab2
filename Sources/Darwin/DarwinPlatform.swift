@@ -303,7 +303,7 @@ extension DarwinPlatform {
     func removeReplacedOriginal(_ path: String) throws {
         FileReads.forget([path])
         guard Paths.lastComponent(path).hasPrefix(".find-rename-") else {
-            throw FileOpError.refused("E-GUARD-2 refused to remove \(path): not one of Find's temporary names")
+            throw FileOpError.refused("E-GUARD-2 refused to remove \(path): not one of PhotoLab's temporary names")
         }
         var e: Int32 = 0
         guard let info = Sys.lstatInfo(path, &e), info.isRegular else {
@@ -508,7 +508,7 @@ enum Volumes {
                            done: @escaping (String?, String?) -> Void) {
         guard let u = URL(string: urlString), let scheme = u.scheme?.lowercased(),
             ["smb", "afp", "nfs", "cifs", "ftp"].contains(scheme) else {
-            done("Find can't connect to this kind of address (\(urlString)).", nil)
+            done("PhotoLab can't connect to this kind of address (\(urlString)).", nil)
             return
         }
         DispatchQueue.global(qos: .userInitiated).async {
@@ -731,7 +731,7 @@ enum ServerKeychain {
 // MARK: - Crash capture (0.17.1)
 
 /// If Find ever ends unexpectedly, what happened (the reason and where in the program) and what it was
-/// doing is written to Logs/Find/crash-pending.txt at that moment; the next start turns it into a
+/// doing is written to Logs/PhotoLab/crash-pending.txt at that moment; the next start turns it into a
 /// numbered crash report and offers it (Copy Report). Writing uses only plain write() calls, the
 /// only thing that is safe at that moment. The file is emptied at every start.
 enum CrashCapture {
@@ -755,7 +755,7 @@ enum CrashCapture {
         // A program Find talks to (curl) closing its end early must not end Find: the write just fails.
         signal(SIGPIPE, SIG_IGN)
         fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
-        header = Array("FIND STOPPED UNEXPECTEDLY - Find \(version)\n".utf8)
+        header = Array("PHOTOLAB STOPPED UNEXPECTEDLY - PhotoLab \(version)\n".utf8)
         crumbLength = 0
         NSSetUncaughtExceptionHandler { e in
             CrashCapture.put(String(decoding: CrashCapture.header, as: UTF8.self))

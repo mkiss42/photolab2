@@ -419,7 +419,7 @@ enum MetaPlan {
             } else if embeddedXMPOnly.contains(ext) {
                 out.append(MetaTarget(image: img, file: img, kind: .embedded(iptc: false)))
             } else if PhotoFormats.photoshop.contains(ext) {
-                out.append(MetaTarget(image: img, file: img, kind: .unsupported("Photoshop files are not written yet: Find can't verify their picture data after a change")))
+                out.append(MetaTarget(image: img, file: img, kind: .unsupported("Photoshop files are not written yet: PhotoLab can't verify their picture data after a change")))
             } else {
                 out.append(MetaTarget(image: img, file: img, kind: .unsupported("\(ext.uppercased()) files are not written")))
             }

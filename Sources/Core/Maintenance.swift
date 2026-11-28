@@ -202,7 +202,7 @@ final class Maintenance {
                       cleanup: "Orphans removed automatically; Delete and Rebuild Indexes rebuilds them all",
                       bytes: ib, items: ii),
             StoreInfo(id: "temp", name: "Temporary files",
-                      purpose: "Short-lived work files of Find itself",
+                      purpose: "Short-lived work files of PhotoLab itself",
                       location: files.tempDir,
                       retention: "Removed at startup and quit, and when older than the temporary-file age",
                       cleanup: "Automatic; Clear All Disposable Caches",
@@ -214,7 +214,7 @@ final class Maintenance {
                       cleanup: "Automatic; Clear All Disposable Caches",
                       bytes: sb, items: si),
             StoreInfo(id: "logs", name: "Logs and test reports",
-                      purpose: "Find's log and self-check reports (plain text)",
+                      purpose: "PhotoLab's log and self-check reports (plain text)",
                       location: files.logsDir,
                       retention: "Kept for the log-keep days; the current log is never removed",
                       cleanup: "Automatic",
@@ -222,13 +222,13 @@ final class Maintenance {
             StoreInfo(id: "journals", name: "Interrupted-operation notes",
                       purpose: "Notes about copies and renames in progress, so an interrupted one can be undone at the next start",
                       location: files.journalsDir,
-                      retention: "Removed when the operation ends; handled at the next start if Find was interrupted",
+                      retention: "Removed when the operation ends; handled at the next start if PhotoLab was interrupted",
                       cleanup: "Never removed by clean-up (only by the start-up recovery)",
                       bytes: jb, items: ji),
         ]
         for m in memoryCaches {
             out.append(StoreInfo(id: "memory", name: m.name, purpose: "In memory only: " + m.describe(),
-                                 location: "(memory)", retention: "Until Find quits, with a fixed size limit",
+                                 location: "(memory)", retention: "Until PhotoLab quits, with a fixed size limit",
                                  cleanup: "Cleared by Clear All Disposable Caches", bytes: -1, items: -1))
         }
         return out
@@ -350,7 +350,7 @@ final class Maintenance {
     /// Start a run: false (with the reason in `r`) when Find is busy or another clean-up is running.
     private func begin(_ r: inout MaintenanceResult) -> Bool {
         if Activity.shared.userWorkRunning {
-            r.reason = "Find is busy (\(Activity.shared.describe)); it will be done later"
+            r.reason = "PhotoLab is busy (\(Activity.shared.describe)); it will be done later"
             Log.shared?.info("MAINTENANCE postponed (\(r.trigger)): \(Activity.shared.describe)")
             return false
         }
@@ -385,7 +385,7 @@ final class Maintenance {
     private func remove(_ path: String, why: String, r: inout MaintenanceResult) {
         if !inStore(path) {
             r.failures += 1
-            r.lines.append("E-MAINT-1 refused (not in a Find store): \(path)")
+            r.lines.append("E-MAINT-1 refused (not in a PhotoLab store): \(path)")
             return
         }
         let bytes = Maintenance.treeSize(path).0

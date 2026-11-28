@@ -1,7 +1,7 @@
 // PhotoSelfTest.swift
 // Checks the inspector's metadata reading on this Mac with a test JPEG whose camera values are known,
 // and proves reading never changes a file. Works only inside its own scratch folder in
-// ~/Library/Caches/Find (written through AppFiles), which it removes afterwards.
+// ~/Library/Caches/PhotoLab (written through AppFiles), which it removes afterwards.
 // Exit code for build.sh: 0 all passed, 2 a "file unchanged" check failed (stops the build),
 // 1 other failures (reported as a warning; the app is still packaged).
 
@@ -10,7 +10,7 @@ import ImageIO
 
 final class PhotoSelfTest {
     let files: AppFiles
-    private let report = Report(title: "Find Photo Metadata Self-Test")
+    private let report = Report(title: "PhotoLab Photo Metadata Self-Test")
     private(set) var passed = 0
     private(set) var failed = 0
     private(set) var skipped = 0
@@ -383,7 +383,7 @@ final class PhotoSelfTest {
                     agree = false
                     why += " ExifTool: \(prob) in \(Paths.lastComponent(f))"
                 }
-                guard let n = NativeMeta.read(f) else { agree = false; why += " Find could not read \(Paths.lastComponent(f))"; continue }
+                guard let n = NativeMeta.read(f) else { agree = false; why += " PhotoLab could not read \(Paths.lastComponent(f))"; continue }
                 for k in nTags.map({ String($0.dropFirst()) }) {
                     let fld = MetaField.all.first { $0.xmp == k || $0.iptc == k }
                     let canon: (Any?) -> [String] = { v in MetaPlan.values(v).map { fld?.canonical($0) ?? $0 } }
@@ -391,13 +391,13 @@ final class PhotoSelfTest {
                     if !same { agree = false; why += " \(k) differs in \(Paths.lastComponent(f))" }
                 }
             }
-            check("T-PHOTO-33", "Find's own reader and writer (sidecar, fast in-place check): ExifTool reads every value exactly, and Find reads what ExifTool reads",
+            check("T-PHOTO-33", "PhotoLab's own reader and writer (sidecar, fast in-place check): ExifTool reads every value exactly, and PhotoLab reads what ExifTool reads",
                   nr.failed.isEmpty && nr.done.count >= 3 && agree, Ascii.clean(why) + " " + nr.summaryLines.joined(separator: " | "), safety: true)
             if let u = nr.undo { _ = try? ops.undo(u) }
             let leftovers = files.list(root).filter { $0.hasSuffix("_original") || $0.hasSuffix(".tmp") }
             check("T-PHOTO-15", "ExifTool made no backup or temp files", leftovers.isEmpty, "\(leftovers)", safety: true)
         } else {
-            check("T-PHOTO-13", "bundled ExifTool available", false, "not found inside Find.app and not installed")
+            check("T-PHOTO-13", "bundled ExifTool available", false, "not found inside PhotoLab.app and not installed")
         }
         return finish()
     }

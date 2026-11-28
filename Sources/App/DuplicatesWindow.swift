@@ -216,7 +216,7 @@ final class DuplicatesWindow: NSWindowController, NSWindowDelegate, NSOutlineVie
         if !emptied.isEmpty {
             let a = ThemedAlert()
             a.messageText = "Every copy of \(emptied.count) file\(emptied.count == 1 ? "" : "s") is selected"
-            a.informativeText = "Find always keeps at least one copy. Deselect one copy in each of these groups:\n"
+            a.informativeText = "PhotoLab always keeps at least one copy. Deselect one copy in each of these groups:\n"
                 + emptied.prefix(5).map { Paths.lastComponent($0.files[0].path) }.joined(separator: "\n")
             a.runModal()
             return

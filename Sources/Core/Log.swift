@@ -56,7 +56,7 @@ final class Report {
     /// The finished text.
     func render() -> String {
         var raw: [String] = []
-        raw.append("FIND REPORT: " + Ascii.clean(title))
+        raw.append("PHOTOLAB REPORT: " + Ascii.clean(title))
         raw.append("CREATED: " + Ascii.timestamp())
         raw.append("SUMMARY START")
         raw.append(contentsOf: summary)
@@ -76,7 +76,7 @@ final class Report {
     }
 }
 
-/// The running log for one launch of Find: ~/Library/Logs/Find/find-YYYYMMDD-HHMMSS.log
+/// The running log for one launch of Find: ~/Library/Logs/PhotoLab/find-YYYYMMDD-HHMMSS.log
 final class Log {
     static var shared: Log?
 

@@ -33,15 +33,15 @@ enum ExifToolKeeper {
         ExifToolPool.mode = ExifToolPool.Mode(rawValue: Prefs.exifToolMode) ?? .photoPanes
         switch ExifToolPool.mode {
         case .always:
-            ExifToolPool.shared.hold("Find")
+            ExifToolPool.shared.hold("PhotoLab")
             for p in photoPanes { ExifToolPool.shared.release("pane " + p) }
         case .photoPanes:
             for p in photoPanes { ExifToolPool.shared.hold("pane " + p) }
-            ExifToolPool.shared.release("Find")
+            ExifToolPool.shared.release("PhotoLab")
         case .onDemand:
             for p in photoPanes { ExifToolPool.shared.release("pane " + p) }
-            ExifToolPool.shared.release("Find")
+            ExifToolPool.shared.release("PhotoLab")
         }
-        Log.shared?.info("ExifTool behaviour: \(["with Find", "with Photography Mode", "only when needed"][ExifToolPool.mode.rawValue]), \(ExifToolPool.count) at a time, idle stop \(Prefs.exifToolIdleMinutes) min")
+        Log.shared?.info("ExifTool behaviour: \(["with PhotoLab", "with Photography Mode", "only when needed"][ExifToolPool.mode.rawValue]), \(ExifToolPool.count) at a time, idle stop \(Prefs.exifToolIdleMinutes) min")
     }
 }

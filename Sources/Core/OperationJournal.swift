@@ -4,7 +4,7 @@
 // - "PARTIAL <path>": a hidden partial copy / save (".find-partial-..."). Recovery moves it to the Trash.
 // - "RENAME <temp>\t<original>\t<intended new name>": an item under a batch-rename temporary name.
 //   Recovery renames it back.
-// Notes live in Find's own folder (Application Support/Find/Journals), one small file per operation, and
+// Notes live in Find's own folder (Application Support/PhotoLab/Journals), one small file per operation, and
 // are removed when the operation ends normally. Writing them never touches user files.
 
 #if os(Linux)

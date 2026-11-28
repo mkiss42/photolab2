@@ -21,7 +21,7 @@ enum ServerEditor {
         user.placeholderString = "account name (empty: ask, or guest)"
         let pass = NSSecureTextField(string: "")
         pass.placeholderString = existing != nil && !(existing!.user.isEmpty) ? "(unchanged)" : "password"
-        let auto = NSButton(checkboxWithTitle: "Connect when Find starts (not for each new window; skipped if already connected)", target: nil, action: nil)
+        let auto = NSButton(checkboxWithTitle: "Connect when PhotoLab starts (not for each new window; skipped if already connected)", target: nil, action: nil)
         auto.state = (base?.autoConnect ?? false) ? .on : .off
         let rows: [(String, NSView)] = [("Name", name), ("Address", address), ("Account", user), ("Password", pass)]
         let stack = NSStackView()
@@ -53,11 +53,11 @@ enum ServerEditor {
                 continue
             }
             if auto.state == .on && parsed.scheme == "ftp" {
-                problem("Not for FTP", "FTP servers open in their own Find window when you click them; there is nothing to connect when Find starts. Untick \u{201C}Connect when Find starts\u{201D}.")
+                problem("Not for FTP", "FTP servers open in their own PhotoLab window when you click them; there is nothing to connect when PhotoLab starts. Untick \u{201C}Connect when PhotoLab starts\u{201D}.")
                 continue
             }
             if auto.state == .on && parsed.share == nil {
-                problem("Which shared folder?", "To connect when Find starts, the address needs the shared folder too, e.g. \\\\\(parsed.host)\\Shoots.")
+                problem("Which shared folder?", "To connect when PhotoLab starts, the address needs the shared folder too, e.g. \\\\\(parsed.host)\\Shoots.")
                 continue
             }
             var s = existing ?? SavedServer(id: UUID().uuidString, name: "", address: "", user: "", autoConnect: false)
@@ -96,20 +96,20 @@ enum ServerActions {
     static func add(prefill: SavedServer?) -> SavedServer? {
         guard let s = ServerEditor.run(nil, prefill: prefill) else { return nil }
         Prefs.savedServers = Prefs.savedServers + [s]
-        App.log.info("Server saved: \(s.name) \(Ascii.clean(s.address))\(s.autoConnect ? " (connects when Find starts)" : "")")
+        App.log.info("Server saved: \(s.name) \(Ascii.clean(s.address))\(s.autoConnect ? " (connects when PhotoLab starts)" : "")")
         return s
     }
 
     static func edit(_ old: SavedServer) {
         guard let s = ServerEditor.run(old, prefill: nil) else { return }
         Prefs.savedServers = Prefs.savedServers.map { $0.id == s.id ? s : $0 }
-        App.log.info("Server changed: \(s.name) \(Ascii.clean(s.address))\(s.autoConnect ? " (connects when Find starts)" : "")")
+        App.log.info("Server changed: \(s.name) \(Ascii.clean(s.address))\(s.autoConnect ? " (connects when PhotoLab starts)" : "")")
     }
 
     static func setAutoConnect(_ id: String, _ on: Bool) {
         Prefs.savedServers = Prefs.savedServers.map { var x = $0; if x.id == id { x.autoConnect = on }; return x }
         if let s = Prefs.savedServers.first(where: { $0.id == id }) {
-            App.log.info("Server \(s.name): connect when Find starts \(on ? "ON" : "OFF")")
+            App.log.info("Server \(s.name): connect when PhotoLab starts \(on ? "ON" : "OFF")")
         }
     }
 

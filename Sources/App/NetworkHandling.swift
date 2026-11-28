@@ -153,7 +153,7 @@ extension BrowserPane {
             return
         }
         guard let url = VolumeRegistry.shared.remountURL(root) else {
-            showMessage("Find doesn't know this share's address", "Connect with Finder (Go > Connect to Server). This pane reloads by itself when the share is back.", style: .informational)
+            showMessage("PhotoLab doesn't know this share's address", "Connect with Finder (Go > Connect to Server). This pane reloads by itself when the share is back.", style: .informational)
             return
         }
         reconnectButton.isEnabled = false
@@ -258,7 +258,7 @@ extension BrowserPane {
 
     func openSavedServer(_ s: SavedServer, start: [String]? = nil) {
         guard let a = s.parsed else {
-            showMessage("\u{201C}\(s.name)\u{201D} has an address Find can't read", "Edit it in the sidebar (right-click > Edit).")
+            showMessage("\u{201C}\(s.name)\u{201D} has an address PhotoLab can't read", "Edit it in the sidebar (right-click > Edit).")
             return
         }
         if a.scheme == "ftp" {
@@ -332,7 +332,7 @@ extension BrowserPane {
                     App.log.warn("Connected to \(Ascii.clean(a.display)) but its folder was not recognised (code NET-ID-1). macOS gave: \(mountedAt.map { Ascii.clean($0) } ?? "nothing")")
                     for l in NetworkReport.lines(VolumeRegistry.shared.volumes, saved: Prefs.savedServers, typed: a) { App.log.warn(l) }
                     s.showMessage("Connected to \(a.display)",
-                                  "Find could not tell which folder it is (code NET-ID-1). Open it from Servers or Network in the sidebar. Help > Network Report lists what macOS reports, to send me.",
+                                  "PhotoLab could not tell which folder it is (code NET-ID-1). Open it from Servers or Network in the sidebar. Help > Network Report lists what macOS reports, to send me.",
                                   style: .informational)
                     return
                 }
