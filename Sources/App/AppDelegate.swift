@@ -795,8 +795,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         file.addItem(item("Add to Copy Queue\u{2026}", #selector(BrowserPane.addToCopyQueue(_:)), ""))
         file.addItem(item("Move To\u{2026}", #selector(BrowserPane.moveTo(_:)), "m", [.command, .shift]))
         file.addItem(item("Copy To\u{2026}", #selector(BrowserPane.copyTo(_:)), ""))
-        file.addItem(item("Copy to Other Pane", #selector(BrowserPane.copyToOtherPane(_:)), AppDelegate.key(NSF5FunctionKey), []))
-        file.addItem(item("Move to Other Pane", #selector(BrowserPane.moveToOtherPane(_:)), AppDelegate.key(NSF6FunctionKey), []))
+        // PhotoLab: F5 / F6 no longer copy / move (F5 is Refresh, below; F6 does nothing).
+        file.addItem(item("Copy to Other Pane", #selector(BrowserPane.copyToOtherPane(_:)), ""))
+        file.addItem(item("Move to Other Pane", #selector(BrowserPane.moveToOtherPane(_:)), ""))
         file.addItem(item("Move to Trash", #selector(BrowserPane.trashSelected(_:)), backspace))
         file.addItem(item("Delete Immediately\u{2026}", #selector(BrowserPane.deleteImmediatelySelected(_:)), backspace, [.command, .option]))
         file.addItem(NSMenuItem.separator())
@@ -867,6 +868,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         view.addItem(item("Smaller Thumbnails", #selector(BrowserPane.smallerThumbnails(_:)), "-"))
         view.addItem(NSMenuItem.separator())
         view.addItem(item("Refresh", #selector(BrowserPane.refresh(_:)), "r"))
+        // PhotoLab: F5 refreshes too (as in Windows Explorer and PhotoLab 1).
+        let f5 = item("Refresh (F5)", #selector(BrowserPane.refresh(_:)), AppDelegate.key(NSF5FunctionKey), [])
+        f5.isAlternate = false
+        f5.isHidden = true
+        f5.allowsKeyEquivalentWhenHidden = true
+        view.addItem(f5)
         view.addItem(item("Show/Hide Inspector", #selector(BrowserWindowController.toggleInspector(_:)), "i", [.command, .option]))
         view.addItem(item("Show/Hide Sidebar", #selector(BrowserWindowController.toggleSidebar(_:)), "s", [.command, .option]))
         view.addItem(NSMenuItem.separator())
@@ -916,6 +923,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         win.addItem(NSMenuItem.separator())
         // 0.16: named workspaces (saved sets of windows).
         win.addItem(item("Copies and Copy Queue", #selector(showCopyQueue(_:)), "", [], target: self))
+        // PhotoLab: how copy progress shows (the small panel, or Find's Copies window opening by itself).
+        let prog = NSMenuItem(title: "Copy Progress", action: nil, keyEquivalent: "")
+        let progMenu = NSMenu()
+        for (t, v) in [("Small Panel (with Details\u{2026})", "toast"), ("Copies Window", "window")] {
+            let mi = NSMenuItem(title: t, action: #selector(setProgressStyle(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.representedObject = v
+            mi.state = TransferToast.style == v ? .on : .off
+            progMenu.addItem(mi)
+        }
+        prog.submenu = progMenu
+        win.addItem(prog)
         win.addItem(NSMenuItem.separator())
         win.addItem(item("Save Windows as Workspace\u{2026}", #selector(saveWorkspace(_:)), "", [], target: self))
         let openWS = NSMenuItem(title: "Open Workspace", action: nil, keyEquivalent: "")
@@ -978,6 +997,13 @@ extension AppDelegate: NSMenuDelegate {
     }
 
     @objc func showCopyQueue(_ sender: Any?) { CopyQueueWindowController.show() }
+
+    @objc func setProgressStyle(_ sender: NSMenuItem) {
+        guard let v = sender.representedObject as? String else { return }
+        TransferToast.style = v
+        for x in sender.menu?.items ?? [] { x.state = (x.representedObject as? String) == v ? .on : .off }
+        App.log.info("Copy progress shown as: \(v == "toast" ? "small panel" : "Copies window")")
+    }
 
     @objc func saveWorkspace(_ sender: Any?) {
         let open = controllersInOrder()

@@ -109,8 +109,9 @@ final class FTPBrowser: NSObject, NSTableViewDataSource, NSTableViewDelegate {
 
     let scroll = NSScrollView()
     let table = FTPTableView()
-    /// PhotoLab: the console under the listing (FTP traffic, read-only).
+    /// PhotoLab: the console under the listing (FTP traffic, read-only), in a split view with it.
     var console: FTPConsole?
+    var split: NSSplitView?
     /// Told whenever the folder, the busy state or the status line changes.
     var onChange: (() -> Void)?
     /// The folder of another pane in the same window (Copy to Other Pane).
@@ -946,20 +947,23 @@ extension BrowserPane {
         photoBar.isHidden = true
         photoBarHeight.constant = 0
         viewButtons.isEnabled = false
-        mainPane.addSubview(b.scroll, positioned: .below, relativeTo: paneOverlay)
-        mainPane.addSubview(console.scroll, positioned: .below, relativeTo: paneOverlay)
-        b.scroll.translatesAutoresizingMaskIntoConstraints = false
-        console.scroll.translatesAutoresizingMaskIntoConstraints = false
+        // The listing and the console in a split view: drag the divider to size them (remembered).
+        let split = FTPSplit()
+        split.isVertical = false
+        split.dividerStyle = .thin
+        split.translatesAutoresizingMaskIntoConstraints = false
+        split.addSubview(b.scroll)
+        split.addSubview(console.scroll)
+        b.split = split
+        mainPane.addSubview(split, positioned: .below, relativeTo: paneOverlay)
         NSLayoutConstraint.activate([
-            console.scroll.leadingAnchor.constraint(equalTo: list.scroll.leadingAnchor),
-            console.scroll.trailingAnchor.constraint(equalTo: list.scroll.trailingAnchor),
-            console.scroll.bottomAnchor.constraint(equalTo: list.scroll.bottomAnchor),
-            console.scroll.heightAnchor.constraint(equalToConstant: 130),
-            b.scroll.topAnchor.constraint(equalTo: list.scroll.topAnchor),
-            b.scroll.bottomAnchor.constraint(equalTo: console.scroll.topAnchor),
-            b.scroll.leadingAnchor.constraint(equalTo: list.scroll.leadingAnchor),
-            b.scroll.trailingAnchor.constraint(equalTo: list.scroll.trailingAnchor),
+            split.topAnchor.constraint(equalTo: list.scroll.topAnchor),
+            split.bottomAnchor.constraint(equalTo: list.scroll.bottomAnchor),
+            split.leadingAnchor.constraint(equalTo: list.scroll.leadingAnchor),
+            split.trailingAnchor.constraint(equalTo: list.scroll.trailingAnchor),
         ])
+        mainPane.layoutSubtreeIfNeeded()
+        split.setPosition(max(80, split.bounds.height - FTPSplit.consoleHeight), ofDividerAt: 0)
         window?.makeFirstResponder(b.table)
         mainPane.layoutSubtreeIfNeeded()
         b.fitColumns(nil)
@@ -974,6 +978,7 @@ extension BrowserPane {
         b.client.traffic = nil
         b.console?.scroll.removeFromSuperview()
         b.scroll.removeFromSuperview()
+        b.split?.removeFromSuperview()
         ftpBrowser = nil
         viewButtons.isEnabled = true
         list.scroll.isHidden = false
@@ -1235,5 +1240,25 @@ final class FTPConsole: NSObject {
             if r.location != NSNotFound { storage.deleteCharacters(in: NSRange(location: 0, length: r.location + 1)); lines -= 1 }
         }
         if atEnd { text.scrollToEndOfDocument(nil) }
+    }
+}
+
+
+/// PhotoLab: listing above, console below; the console's height is remembered (at least 40 px).
+final class FTPSplit: NSSplitView, NSSplitViewDelegate {
+    static var consoleHeight: CGFloat {
+        get { let v = UserDefaults.standard.double(forKey: "ftpConsoleHeight"); return v >= 40 ? CGFloat(v) : 130 }
+        set { UserDefaults.standard.set(Double(newValue), forKey: "ftpConsoleHeight") }
+    }
+    override init(frame: NSRect) { super.init(frame: frame); delegate = self }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+    override var dividerColor: NSColor { return ThemeManager.shared.separator }
+    func splitView(_ s: NSSplitView, constrainMinCoordinate p: CGFloat, ofSubviewAt i: Int) -> CGFloat { return 80 }
+    func splitView(_ s: NSSplitView, constrainMaxCoordinate p: CGFloat, ofSubviewAt i: Int) -> CGFloat { return s.bounds.height - 40 }
+    func splitView(_ s: NSSplitView, shouldAdjustSizeOfSubview v: NSView) -> Bool { return v === s.subviews.first }
+    func splitViewDidResizeSubviews(_ n: Notification) {
+        if subviews.count == 2, subviews[1].frame.height >= 40, window != nil, inLiveResize == false {
+            FTPSplit.consoleHeight = subviews[1].frame.height
+        }
     }
 }

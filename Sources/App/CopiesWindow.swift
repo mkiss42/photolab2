@@ -59,6 +59,8 @@ final class CopiesCenter {
         // Shown if it is still running after a moment (quick copies don't flash a window).
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             guard let s = self, t.state == "running" else { return }
+            // PhotoLab: the small panel by default; the Copies window only through its Details... button.
+            if TransferToast.style == "toast" { TransferToast.shared.taskStarted(); return }
             if !(CopyQueueWindowController.shared?.window?.isVisible ?? false) { s.autoOpened = true }
             CopyQueueWindowController.show(focus: false)
         }

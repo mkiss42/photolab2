@@ -1079,8 +1079,8 @@ extension BrowserPane {
         m.addItem(NSMenuItem.separator())
         m.addItem(menuItem(("Copy " + quoted).trimmingCharacters(in: .whitespaces), #selector(copy(_:))))
         if hasPartner {
-            m.addItem(menuItem("Copy to Other Pane (F5)", #selector(copyToOtherPane(_:))))
-            m.addItem(menuItem("Move to Other Pane (F6)", #selector(moveToOtherPane(_:))))
+            m.addItem(menuItem("Copy to Other Pane", #selector(copyToOtherPane(_:))))
+            m.addItem(menuItem("Move to Other Pane", #selector(moveToOtherPane(_:))))
         }
         m.addItem(menuItem("Copy Path", #selector(copyPath(_:))))
         m.addItem(menuItem("Copy Info as Text", #selector(copyInfoAsText(_:))))

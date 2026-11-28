@@ -1,5 +1,22 @@
 # Changes
 
+## 1.0.0-alpha.16 — copy progress as a small panel; FTP console resizable; F5 = Refresh
+
+- Copies, moves and FTP transfers now show in a small panel at the bottom right of the screen (as in
+  PhotoLab 2): what is copied, one bar, "File 3 of 40, 1.2 GB of 4 GB", Stop, and Details... which
+  opens the full Copies window. It doesn't take the keyboard and goes away a moment after the
+  copy ends. Window > Copy Progress: Small Panel (default) or Copies Window (as before).
+- FTP: the console under the listing is in a split view - drag the line between them to make it
+  bigger or smaller; its height is remembered.
+- F5 is Refresh (as Cmd-R). F5 / F6 no longer copy / move to the other pane (the menu items stay,
+  without keys).
+
+Test checklist (3 minutes):
+[ ] 1  Copy a big folder: the small panel appears at the bottom right; Details... opens the Copies
+       window; Stop stops. Window > Copy Progress > Copies Window: the old behaviour.
+[ ] 2  FTP: drag the line above the console up and down; close and reopen: same height.
+[ ] 3  F5 refreshes the folder; F6 does nothing.
+
 ## 1.0.0-alpha.15 — DNG stars stick; details read on-screen first; first files show sooner; FTP console
 
 - DNG stars and colour classes now stick. After a write, PhotoLab compared the file's size and date
