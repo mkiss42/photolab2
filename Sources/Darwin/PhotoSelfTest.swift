@@ -169,29 +169,32 @@ final class PhotoSelfTest {
         check("T-PHOTO-11", "sidecar found and read", sc == p("fake.xmp") && fields?.rating == 3 && fields?.label == "Green",
               "\(sc ?? "none") \(String(describing: fields?.rating))")
 
-        // 47 DNG beside a NEF of the same name: "twin.xmp" is the NEF's only, so stars/metadata never cross over.
+        // 47 DNGs never have a sidecar (alpha.6, user's rule): "twin.xmp" is the NEF's only, the DNG is written
+        // inside itself only - also with embedded writing off in Settings - so stars/metadata never cross over.
         files.writeText("not really a raw file", to: p("twin.NEF"))
         files.writeText("not really a dng file", to: p("twin.DNG"))
         files.writeText("not really a raw file", to: p("solo.DNG"))
         files.writeText("<x:xmpmeta><rdf:RDF><rdf:Description xmp:Rating=\"4\"/></rdf:RDF></x:xmpmeta>", to: p("twin.xmp"))
         files.writeText("<x:xmpmeta><rdf:RDF><rdf:Description xmp:Rating=\"2\"/></rdf:RDF></x:xmpmeta>", to: p("solo.xmp"))
         let tNef = Sidecars.find(for: p("twin.NEF")), tDng = Sidecars.find(for: p("twin.DNG")), tSolo = Sidecars.find(for: p("solo.DNG"))
-        let tAssoc = Sidecars.associate(["twin.NEF", "twin.DNG", "twin.xmp", "twin.JPG"]).pairs
+        let tAssoc = Sidecars.associate(["twin.NEF", "twin.DNG", "twin.xmp", "twin.JPG", "solo.DNG", "solo.xmp"]).pairs
         let tCopy = Sidecars.companions(of: [p("twin.DNG")], move: false) { _ in ["twin.NEF", "twin.DNG", "twin.xmp"] }.extra
         let keepXMP = MetaPlan.writeEmbeddedXMP, keepIPTC = MetaPlan.writeEmbeddedIPTC, keepSide = MetaPlan.writeSidecar
         MetaPlan.writeEmbeddedXMP = true; MetaPlan.writeEmbeddedIPTC = true; MetaPlan.writeSidecar = true
-        let tWriteIn = MetaPlan.targets([p("twin.DNG")]).map { $0.file }
+        let tIn = MetaPlan.targets([p("twin.DNG"), p("solo.DNG")])
         MetaPlan.writeEmbeddedXMP = false; MetaPlan.writeEmbeddedIPTC = false
-        let tWriteOut = MetaPlan.targets([p("twin.DNG")]).map { $0.file }
+        let tOff = MetaPlan.targets([p("twin.DNG"), p("solo.DNG")])
+        let tOffXMP = tOff.allSatisfyCompat { MetaPlan.places(for: $0).xmp }
         let tNefWrite = MetaPlan.targets([p("twin.NEF")]).map { $0.file }
         MetaPlan.writeEmbeddedXMP = keepXMP; MetaPlan.writeEmbeddedIPTC = keepIPTC; MetaPlan.writeSidecar = keepSide
-        check("T-PHOTO-47", "a DNG and a NEF of the same name never share an XMP sidecar (reading, writing, copying)",
-              tNef == p("twin.xmp") && tDng == nil && tSolo == p("solo.xmp")
-                && tAssoc["twin.NEF"] == "twin.xmp" && tAssoc["twin.JPG"] == "twin.xmp" && tAssoc["twin.DNG"] == nil
-                && tCopy.isEmpty
-                && tWriteIn == [p("twin.DNG")] && tWriteOut == [p("twin.DNG.xmp")] && tNefWrite == [p("twin.xmp")],
-              "nef=\(tNef.map(Paths.lastComponent) ?? "-") dng=\(tDng.map(Paths.lastComponent) ?? "-") solo=\(tSolo.map(Paths.lastComponent) ?? "-") "
-                + "assoc=\(tAssoc.count) copy=\(tCopy.count) in=\(tWriteIn.map(Paths.lastComponent)) out=\(tWriteOut.map(Paths.lastComponent)) nef=\(tNefWrite.map(Paths.lastComponent))",
+        let insideOnly: ([MetaTarget]) -> Bool = { t in
+            t.map { $0.file } == [p("twin.DNG"), p("solo.DNG")] && t.allSatisfyCompat { $0.kind == .embeddedRaw } }
+        check("T-PHOTO-47", "a DNG never has an XMP sidecar: read, written and copied inside itself only",
+              tNef == p("twin.xmp") && tDng == nil && tSolo == nil
+                && tAssoc["twin.NEF"] == "twin.xmp" && tAssoc["twin.JPG"] == "twin.xmp" && tAssoc["twin.DNG"] == nil && tAssoc["solo.DNG"] == nil
+                && tCopy.isEmpty && insideOnly(tIn) && insideOnly(tOff) && tOffXMP && tNefWrite == [p("twin.xmp")],
+              "nef=\(tNef == nil ? "-" : "xmp") dng=\(tDng == nil ? "-" : "xmp") solo=\(tSolo == nil ? "-" : "xmp") "
+                + "assoc=\(tAssoc.count) copy=\(tCopy.count) in=\(tIn.count) off=\(tOff.count) offXMP=\(tOffXMP) nef=\(tNefWrite.count)",
               safety: true)
 
         // 12 Reading never changed the files.

@@ -6,6 +6,8 @@ import AppKit
 protocol PathBarDelegate: class {
     func pathBarNavigate(_ path: String)
     func pathBarSubmit(_ text: String)
+    /// 1.0.0-alpha.6: files dropped on a folder of the path bar (same copy/move as any other drop).
+    func pathBarDrop(_ paths: [String], into folder: String, move: Bool)
 }
 
 final class PathBarView: FillView, NSTextFieldDelegate {
@@ -127,6 +129,11 @@ final class PathBarView: FillView, NSTextFieldDelegate {
             b.identifier = itemID(crumb.path)
             // 1.0.0-alpha.5: local folders can be dragged out (not FTP crumbs).
             b.dragPath = customCrumbs == nil && crumb.path.hasPrefix("/") ? crumb.path : nil
+            // 1.0.0-alpha.6: and they take drops (files dragged onto a folder go into it).
+            if b.dragPath != nil {
+                b.registerForDraggedTypes(FileDrag.types)
+                b.onDrop = { [weak self] paths, dest, move in self?.delegate?.pathBarDrop(paths, into: dest, move: move) }
+            }
             let isLast = i == shown.count - 1
             b.attributedTitle = attributed(title, font: isLast ? tm.boldFont : tm.font, color: isLast ? tm.text : tm.secondaryText)
             // Above the search field's wish to be wide (250), below its minimum width (required).
@@ -194,9 +201,40 @@ final class PathBarView: FillView, NSTextFieldDelegate {
 /// application in the Dock (opens the folder with it), into Finder, Photoshop, a dialog... A click
 /// still goes to the folder. Inside PhotoLab the drag only copies (never moves the folder you are in).
 /// The drag image is the generic folder icon: nothing reads the folder (it may be on a share).
+/// 1.0.0-alpha.6: also a drop target - files dragged onto a folder of the path bar go into it, with the
+/// same rules as any drop in PhotoLab (same drive = move, other drive = copy, Option = copy,
+/// Command = move; verified, never overwriting; onto itself or its own subfolder refused).
 final class PathCrumbButton: ThemedButton, NSDraggingSource {
     /// The folder to drag; nil = not draggable (FTP crumbs).
     var dragPath: String?
+    /// Files dropped on this folder: (paths, folder, move).
+    var onDrop: (([String], String, Bool) -> Void)?
+
+    private func setDropHighlight(_ on: Bool) {
+        wantsLayer = true
+        layer?.cornerRadius = 4
+        layer?.backgroundColor = on ? ThemeManager.shared.selection.withAlphaComponent(0.55).cgColor : nil
+    }
+
+    private func dropOperation(_ info: NSDraggingInfo) -> NSDragOperation {
+        guard let dest = dragPath, onDrop != nil else { return [] }
+        let op = FileDrag.operation(info, sources: FileDrag.paths(info), dest: dest)
+        setDropHighlight(!op.isEmpty)
+        return op
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { return dropOperation(sender) }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { return dropOperation(sender) }
+    override func draggingExited(_ sender: NSDraggingInfo?) { setDropHighlight(false) }
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) { setDropHighlight(false) }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let op = dropOperation(sender)
+        setDropHighlight(false)
+        guard let dest = dragPath, !op.isEmpty else { return false }
+        onDrop?(FileDrag.paths(sender), dest, op == .move)
+        return true
+    }
 
     override func mouseDown(with event: NSEvent) {
         guard let path = dragPath, let win = window else { super.mouseDown(with: event); return }

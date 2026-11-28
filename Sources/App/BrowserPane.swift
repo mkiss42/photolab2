@@ -615,6 +615,11 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
         if isFocused { host?.paneTitleChanged(self) }
     }
 
+    /// 1.0.0-alpha.6: files dropped on a path bar folder.
+    func pathBarDrop(_ paths: [String], into folder: String, move: Bool) {
+        dropFiles(paths, into: folder, move: move)
+    }
+
     func pathBarNavigate(_ path: String) {
         if let b = ftpBrowser, path.hasPrefix("ftp-crumb:") { b.crumbClicked(path); return }
         if BrowserPane.commandClick && !path.hasPrefix("ftp-crumb:") { openInNewWindow(path); return }

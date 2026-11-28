@@ -1,5 +1,33 @@
 # Changes
 
+## 1.0.0-alpha.6 — DNGs are written inside only; drop files onto path bar folders
+
+- DNGs never get an XMP sidecar any more, and never read one. Stars, colour classes and metadata
+  given to a DNG are written inside the DNG only (XMP always, IPTC as set in Settings), whatever
+  the sidecar settings say. Fixes: rating a DNG did not work when its NEF was in the same folder
+  (alpha.5 still let the DNG use a sidecar of its own, which clashed with the NEF's).
+  If writing inside a DNG fails, that is reported; no sidecar is made instead.
+  An .xmp that happens to sit next to a lone DNG is ignored for that DNG (it stays on disk).
+  The "RAW without sidecar" filter no longer lists DNGs.
+- Files can be dropped onto any folder in the path bar: same rules as any drop in PhotoLab (same
+  drive = move, other drive = copy, Option = copy, Command = move; verified, never overwriting).
+  The folder lights up while you hover over it.
+- Not changed: in the thumbnail view, double-clicking one of several selected pictures still
+  opens just that one (the list view opens them all).
+- Self-test T-PHOTO-47 updated (safety: a DNG never has a sidecar).
+
+Test checklist (5 minutes; 10.13 iMac and 12.6 Mac):
+[ ] 1  Help > Run Safety Self-Check and the Photo Self-Test: all passed.
+[ ] 2  Folder with DSC_1.NEF, DSC_1.DNG and DSC_1.xmp: rate the DNG 5 stars -> it shows 5; the NEF keeps
+       its own stars. Rate the NEF 2 -> the DNG still shows 5. Check both in Photo Mechanic.
+[ ] 3  Colour class + caption on the DNG: shown on the DNG, nothing on the NEF; no new .xmp file appears
+       (no DSC_1.DNG.xmp either).
+[ ] 4  A DNG alone in a folder: rate it -> works; no .xmp file is made.
+[ ] 5  Drag a file onto a folder in the path bar (same drive): it moves there. Hold Option: copies.
+       Drag from another drive: copies.
+[ ] 6  Drag a file onto the folder you are in (last item in the path bar): refused (nothing happens).
+[ ] 7  Path bar drag out (alpha.5) still works: a folder onto an app in the Dock opens it there.
+
 ## 1.0.0-alpha.5 — DNG and NEF keep their own metadata; drag folders out of the path bar
 
 - A DNG and a NEF (or any other RAW) with the same name no longer share stars, colour classes or

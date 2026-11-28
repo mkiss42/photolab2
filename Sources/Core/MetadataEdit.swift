@@ -377,7 +377,7 @@ enum MetaPlan {
         switch t.kind {
         case .sidecarNew, .sidecarExisting: return (true, false)
         case .embedded(let i): return (true, i && writeEmbeddedIPTC)
-        case .embeddedRaw: return (writeEmbeddedXMP, writeEmbeddedIPTC)
+        case .embeddedRaw: return (writeEmbeddedXMP || Sidecars.isDNG(t.image), writeEmbeddedIPTC)   // alpha.6: DNG XMP always inside
         case .unsupported: return (false, false)
         }
     }
@@ -397,6 +397,10 @@ enum MetaPlan {
             let ext = Paths.fileExtension(name).lowercased()
             if PhotoFormats.isSidecar(name) {
                 out.append(MetaTarget(image: img, file: img, kind: .unsupported("an XMP sidecar itself - rate its picture instead")))
+            } else if Sidecars.isDNG(name) {
+                // 1.0.0-alpha.6: a DNG is written inside only (XMP always - stars and colour classes are
+                // XMP - and IPTC as set), never a sidecar, whatever the sidecar settings say.
+                out.append(MetaTarget(image: img, file: img, kind: .embeddedRaw))
             } else if PhotoFormats.raw.contains(ext) {
                 // 0.18.6: the three places as set - inside the RAW (embedded XMP and/or IPTC), and its
                 // sidecar (made when there is none; one shared by several pictures is written once).
@@ -408,11 +412,7 @@ enum MetaPlan {
                         out.append(MetaTarget(image: img, file: existing, kind: .sidecarExisting))
                     }
                 } else if writeSidecar || !writeEmbeddedXMP {
-                    // 1.0.0-alpha.5: a DNG beside another RAW of the same name gets no new sidecar when its
-                    // XMP goes inside it (DSC_1.xmp is the other RAW's; no extra DSC_1.DNG.xmp file).
-                    if !(writeEmbeddedXMP && Sidecars.isDNG(name) && Sidecars.hasOtherRawSibling(img)) {
-                        out.append(newSidecar(for: img))
-                    }
+                    out.append(newSidecar(for: img))
                 }
             } else if embeddedXMPAndIPTC.contains(ext) {
                 out.append(MetaTarget(image: img, file: img, kind: .embedded(iptc: true)))
@@ -428,11 +428,9 @@ enum MetaPlan {
     }
 
     /// A new sidecar for a RAW whose own file couldn't be written (0.18 fallback).
-    /// 1.0.0-alpha.5: a DNG beside another RAW of the same name gets "DSC_1.DNG.xmp", never the shared "DSC_1.xmp".
     static func newSidecar(for img: String) -> MetaTarget {
         let name = Paths.lastComponent(img)
-        let own = Sidecars.isDNG(name) && Sidecars.hasOtherRawSibling(img)
-        return MetaTarget(image: img, file: Paths.join(Paths.parent(img), (own ? name : Paths.baseName(name)) + ".xmp"), kind: .sidecarNew)
+        return MetaTarget(image: img, file: Paths.join(Paths.parent(img), Paths.baseName(name) + ".xmp"), kind: .sidecarNew)
     }
 
     /// Split a typed list ("a, b; c") into values.

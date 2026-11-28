@@ -109,7 +109,7 @@ struct PhotoFilter: Equatable {
         switch sidecar {
         case .any: break
         case .with: if !hasSidecar { return .hide }
-        case .missing: if hasSidecar || !PhotoFormats.isRaw(name) { return .hide }
+        case .missing: if hasSidecar || !PhotoFormats.isRaw(name) || Sidecars.isDNG(name) { return .hide }   // alpha.6: DNGs have none
         }
         if !needsFacts { return .show }
         guard let f = facts else { return .waiting }

@@ -45,61 +45,32 @@ enum Sidecars {
     }
 
     /// Existing sidecar for a file, or nil. Checks the disk with lstat only (no reading).
-    /// 1.0.0-alpha.5: a DNG with a same-named other RAW beside it (DSC_1.DNG + DSC_1.NEF) does not take
-    /// "DSC_1.xmp" - that sidecar is the other RAW's - only its own "DSC_1.DNG.xmp".
+    /// 1.0.0-alpha.6: never for a DNG (a DNG's metadata lives inside it only).
     static func find(for path: String) -> String? {
         let dir = Paths.parent(path)
         let name = Paths.lastComponent(path)
-        if isSidecarName(name) { return nil }
-        let base = Paths.baseName(name)
-        var sharedWithRaw: Bool?            // looked up only when a base-name sidecar exists
+        if isSidecarName(name) || isDNG(name) { return nil }
         for c in candidateNames(for: name) {
             let p = Paths.join(dir, c)
             var e: Int32 = 0
-            if let i = Sys.lstatInfo(p, &e), i.isRegular {
-                if isDNG(name) && Paths.baseName(c).lowercased() == base.lowercased() {
-                    if sharedWithRaw == nil { sharedWithRaw = hasOtherRawSibling(path) }
-                    if sharedWithRaw == true { continue }
-                }
-                return p
-            }
+            if let i = Sys.lstatInfo(p, &e), i.isRegular { return p }
         }
         return nil
     }
 
-    // MARK: DNG beside another RAW (1.0.0-alpha.5)
-    // Stars, labels and metadata given to DSC_1.DNG must not show up on DSC_1.NEF, and the other way
-    // round. Both would otherwise pair with "DSC_1.xmp" by base name. That sidecar stays the camera
-    // RAW's (Photo Mechanic, Lightroom and Bridge make it for the RAW); the DNG keeps its metadata
-    // inside the DNG, or in "DSC_1.DNG.xmp" when nothing is written inside RAW files.
+    // MARK: DNGs have no sidecar (1.0.0-alpha.6, user's rule)
+    // A DNG keeps its metadata inside the DNG, as Photo Mechanic, Lightroom and Bridge do: it is never
+    // given an .xmp sidecar and never reads one. So "DSC_1.xmp" is only ever the camera RAW's (and its
+    // JPEG twin's), and stars or metadata given to DSC_1.DNG can't show up on DSC_1.NEF, or the other
+    // way round. (alpha.5 still let a DNG use a sidecar of its own, which clashed with the NEF's.)
 
     static func isDNG(_ name: String) -> Bool {
         return Paths.fileExtension(name).lowercased() == "dng"
     }
 
-    /// RAW extensions other than DNG, most common first (lstat stops at the first hit).
-    static let otherRawExtensions: [String] = {
-        let first = ["nef", "cr3", "cr2", "arw", "raf", "orf", "rw2", "nrw", "pef", "srw", "iiq"]
-        return first + PhotoFormats.raw.subtracting(first).subtracting(["dng"]).sorted()
-    }()
-
-    /// Is there a non-DNG RAW with the same base name in the same folder? (lstat only)
-    static func hasOtherRawSibling(_ path: String) -> Bool {
-        let dir = Paths.parent(path)
-        let base = Paths.baseName(Paths.lastComponent(path))
-        for ext in otherRawExtensions {
-            for x in [ext.uppercased(), ext] {
-                var e: Int32 = 0
-                if let i = Sys.lstatInfo(Paths.join(dir, base + "." + x), &e), i.isRegular { return true }
-            }
-        }
-        return false
-    }
-
-    /// The pictures a sidecar belongs to, without DNGs when another RAW shares the base name.
+    /// The pictures a sidecar belongs to: never a DNG.
     static func owners(_ images: [String]) -> [String] {
-        let hasOtherRaw = images.contains { PhotoFormats.isRaw($0) && !isDNG($0) }
-        return hasOtherRaw ? images.filter { !isDNG($0) } : images
+        return images.filter { !isDNG($0) }
     }
 
     private static func isSidecarName(_ n: String) -> Bool { return PhotoFormats.isSidecar(n) }

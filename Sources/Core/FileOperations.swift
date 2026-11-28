@@ -1216,7 +1216,8 @@ final class FileOperations {
                 if fallbackAdded { break }
                 fallbackAdded = true
                 start = queue.count
-                for (img, failed) in rawFailed where failed && Sidecars.find(for: img) == nil {
+                // 1.0.0-alpha.6: never for a DNG (no sidecars): its failure is reported, nothing else is made.
+                for (img, failed) in rawFailed where failed && !Sidecars.isDNG(img) && Sidecars.find(for: img) == nil {
                     if let c = changeFor[img] {
                         queue.append((MetaPlan.newSidecar(for: img), c))
                         fallbackImages.insert(img)
