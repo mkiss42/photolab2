@@ -57,7 +57,6 @@ Each item: verify Find's version first (keep it if it is as good), else port.
 | P11 | XMP:ColorClass master, xmp:Label kept in step | decision 2026-11-26 | done alpha.3 (both writers: ExifTool and Find's in-place XMP; Label = Red/Orange/Yellow/Green/Blue/Purple/Cyan/Gray for classes 1-8; T-PHOTO-45) |
 | P12 | Brain, shared cache, ingest, AI, Goodbye Drill | PL2 plan / PL1 | later phases |
 | P13 | Split panes / combo window (tree + sheet + inspector + tools) | user | Find has split panes; combo window to discuss |
-| P14 | Styling like PhotoLab 1 | user | later |
 | P15 | Activity light + activity window (only if cheap) | user | later |
 
 ## 5. File-safety rules where Find and PhotoLab 2 differ (decided one by one)
@@ -95,4 +94,8 @@ until CI is green. Releases are small, each with a <= 5-minute test checklist in
 - 2026-11-28 - Sets are rows only in the LIST view (FileNode.members); the thumbnail views keep showing files (Find's twins setting there), so grid selection and photo tools are unchanged. selectedEntries() = all members; selectedRowEntries() = representatives (preview, inspector).
 - 2026-11-28 - The app's name in every user-visible text is PhotoLab (menus, dialogs, logs, reports); the find FUNCTION keeps its words ("Find...", "Find and Replace", "Find Duplicates"). Internal identifiers (notification names, pasteboard types, "find.*" queue labels) stay as Find had them.
 - 2026-11-28 - Space on a single folder in the list view opens a new window on it in Photography mode (PL2 behaviour).
+- 2026-11-28 - Contact sheet window (alpha.10): a BrowserWindowController with isContactSheet - one pane, Photography mode only, tabs always shown, no sidebar/path bar/navigation, folders hidden; 80% of the screen centred the first time, its frame remembered (not part of window reopening). Space on a folder = current tab of the front contact sheet window; Shift-Space = new tab; Shift-Space on a file = its folder in a new tab with the file selected. Supersedes the alpha.9 "new ordinary window".
+- 2026-11-28 - Cmd-F = filter (PhotoLab 2's: names containing the text, every level, thumbnails too, ends on leaving the folder); Cmd-Shift-F = Find (search).
+- 2026-11-28 - Settings: long explanations become tooltips of their control (found automatically from the built views), shown again with the "?" toggle; a search field marks sections and outlines the first hit.
+- 2026-11-28 - PhotoLab 1 styling dropped from the plan (user). A "Native (macOS)" theme uses the system colours and appearance.
 - Earlier PhotoLab 2 decisions that still hold as intent (and are re-checked when the feature is ported): sets = PL1's GROUPABLE_EXTENSIONS; XMP:ColorClass master with xmp:Label in step; thumbnails 256 px from embedded previews; one preview mode (cheapest embedded >= ~1000 px, no RAW decode for the screen, Decode Full Image on request); preview reads wait for a selection-rest delay; tags read only for rows on screen.

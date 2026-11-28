@@ -1,5 +1,45 @@
 # Changes
 
+## 1.0.0-alpha.10 — the contact sheet window; filter; Settings search; Native look
+
+- **Contact sheet window**: Photography mode only, with tabs; no sidebar, no path bar, no
+  navigation (Back/Up do nothing, folders are not shown in it). The first one opens at 80% of the
+  screen, centred; after that it keeps the size and place you give it.
+  - List view: Space on a folder shows it in the contact sheet window (in its current tab);
+    Shift-Space in a new tab. Shift-Space on a file: its folder in a new tab, the file selected.
+  - Right-click: "Open in Contact Sheet" (folders) / "Open Enclosing Folder in Contact Sheet" (a file).
+  - Space on a file is still the preview. Contact sheet windows are not reopened at the next start.
+- **Cmd-F filters** the folder shown (as in PhotoLab 2): names containing what you type, at every
+  level of the list, and in the thumbnails; a set row matches if any of its files does; opened
+  folders stay. Esc clears it; Down arrow / Return go to the list. The filter ends when you go to
+  another folder. **Cmd-Shift-F** is Find (search); "Search in Selected Folder" is in the File menu.
+- Settings > General: **Path bar at the bottom** (above the status bar) or at the top.
+- The sidebar divider **snaps to 160 px** when dragged near it.
+- Appearance: a **Native (macOS)** theme - the standard macOS look, light or dark as the system is
+  set ("Dark system controls" is then greyed out: macOS decides).
+- Photography mode: **no blue frame** around the thumbnails any more.
+- **Spinners**: "Reading <folder>..." with a spinner when a folder takes a moment; a small spinner
+  in the status bar while thumbnails are being made.
+- **Settings**: a search field at the top left finds any setting by its words (sections with hits
+  show a count, the first hit is outlined); the long explanations are now tooltips of their
+  setting, and the "?" button shows them under the settings again (remembered).
+- Settings checked for conflicts: Space/Quick Look reworded (folders always go to the contact
+  sheet); the two set options are separate per view (alpha.9); "Dark system controls" vs Native.
+
+Test checklist (5 minutes):
+[ ] 1  List view: Space on a folder: contact sheet window, 80% of the screen, centred. Move/size it,
+       close, Space on another folder: same place and size.
+[ ] 2  In it: Shift-Space on a folder in the main window adds a tab; Shift-Space on a file opens its
+       folder in a new tab with the file selected. Cmd-[ / Cmd-Up do nothing there.
+[ ] 3  Right-click a folder > Open in Contact Sheet; a file > Open Enclosing Folder in Contact Sheet.
+[ ] 4  Cmd-F, type "DSC_00": the list (and thumbnails) narrow down; Esc: everything back.
+       Cmd-Shift-F: the search field.
+[ ] 5  Settings: type "trash" in the search: sections with hits show a number. Hover a setting:
+       its explanation is the tooltip. Click "?": explanations show under the settings.
+[ ] 6  Settings > General > Path bar at the bottom: moves at once in all windows.
+[ ] 7  Appearance > Native (macOS): standard look; switch macOS to dark mode: PhotoLab follows.
+[ ] 8  Drag the sidebar edge near 160 px: it snaps.
+
 ## 1.0.0-alpha.9 — Return renames a set in place; PhotoLab everywhere; Space opens folders
 
 - Return (and M) on ONE set row renames it in place. Before, a set row counted as its 2-3 files, so
