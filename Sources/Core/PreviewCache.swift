@@ -47,6 +47,11 @@ final class PreviewCache {
         return d
     }
 
+    /// Stored already? (a local file check; nothing is read)
+    func has(path: String, size: Int64, modified: Double) -> Bool {
+        return Sys.exists(Paths.join(dir, PreviewCache.key(path: path, size: size, modified: modified)))
+    }
+
     func put(_ data: Data, path: String, size: Int64, modified: Double) {
         let p = Paths.join(dir, PreviewCache.key(path: path, size: size, modified: modified))
         _ = files.makeDir(dir)

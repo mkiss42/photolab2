@@ -159,6 +159,7 @@ final class ThumbnailGrid: NSView {
         if let o = tagObs { NotificationCenter.default.removeObserver(o); tagObs = nil }
         tagTimer?.invalidate(); tagTimer = nil
         if let o = scrollObserver { NotificationCenter.default.removeObserver(o); scrollObserver = nil }
+        track.cancelAllOperations()
         queue.cancelAllOperations()
         onSelectionChanged = nil; onOpen = nil; onSpace = nil; onOptionSpace = nil; onEscape = nil
         onTab = nil; onFocus = nil; onOptionClick = nil; onRename = nil
@@ -179,6 +180,8 @@ final class ThumbnailGrid: NSView {
         anchor = selection.first; cursor = anchor
         wantedLock.lock(); wanted.removeAll(); wantedLock.unlock()
         queue.cancelAllOperations()
+        track.cancelAllOperations()
+        trackStarted = false
         pending.removeAll()
         relayout()
         needsDisplay = true
@@ -312,6 +315,44 @@ final class ThumbnailGrid: NSView {
         override var isFlipped: Bool { return true }
         override func hitTest(_ point: NSPoint) -> NSView? { return nil }
         override func draw(_ dirtyRect: NSRect) { grid?.drawOverlays() }
+    }
+
+    // MARK: PhotoLab background track (from PhotoLab 2)
+    // After the pictures on screen, the rest of the folder's thumbnails are made one at a time and kept
+    // on disk (Caches/PhotoLab/Thumbs), so scrolling there later - or coming back tomorrow - needs no
+    // read from the share. It waits whenever pictures on screen are being loaded, and stops when the
+    // folder changes. Memory is not used for them.
+    private let track: OperationQueue = {
+        let q = OperationQueue()
+        q.maxConcurrentOperationCount = 1
+        q.qualityOfService = .utility
+        return q
+    }()
+    private var trackStarted = false
+
+    private func startBackgroundTrack() {
+        trackStarted = true
+        guard App.thumbs != nil, entries.count <= 20_000 else { return }
+        let px = pixelBucket
+        let work = entries.filter { $0.kind == .file && (PhotoFormats.isImage($0.name) || FastPreview.thumbnailable($0.name)) }
+        if work.isEmpty { return }
+        let fg = queue
+        let op = BlockOperation()
+        op.addExecutionBlock { [weak op] in
+            var made = 0
+            for e in work {
+                // Pictures on screen first: wait while they load.
+                while fg.operationCount > 0 {
+                    if op?.isCancelled ?? true { return }
+                    Thread.sleep(forTimeInterval: 0.1)
+                }
+                if op?.isCancelled ?? true { return }
+                if App.thumbs?.has(path: e.path + "|\(px)", size: e.size, modified: e.modified) == true { continue }
+                if ImageMeta.thumbnail(path: e.path, maxPixels: px, size: e.size, modified: e.modified) != nil { made += 1 }
+            }
+            if made > 0 { App.log.info("Background thumbnails: \(made) made for later (\(work.count) pictures in the folder)") }
+        }
+        track.addOperation(op)
     }
 
     private var tiles: [Int: Tile] = [:]
@@ -471,6 +512,7 @@ final class ThumbnailGrid: NSView {
             spare.append(t)
             tiles.removeValue(forKey: i)
         }
+        if !entries.isEmpty && !trackStarted { startBackgroundTrack() }
         if spare.count > 200 {
             for t in spare.dropFirst(200) { t.removeFromSuperlayer() }
             spare = Array(spare.prefix(200))

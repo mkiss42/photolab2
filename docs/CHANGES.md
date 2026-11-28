@@ -15,6 +15,10 @@
   - Status bar: "7 items (1 set, 9 total)".
   - The thumbnail views are unchanged (they show files; Photography mode's "RAW + JPEG as one"
     setting still applies there).
+- Thumbnail views: after the pictures on screen, the rest of the folder's thumbnails are made in the
+  background, one at a time, and kept on disk - scrolling there later (or reopening tomorrow) reads
+  nothing from the share. It pauses whenever pictures on screen are loading and stops when you
+  leave the folder. Log: "Background thumbnails: n made for later".
 - Space preview: the picture's stars and colour class are in the caption (Photography mode) and
   update when you rate. Zoomed into a RAW, the caption says how big the embedded preview is; press
   D to develop the RAW itself at full size (slow - reads the whole file).
@@ -26,6 +30,8 @@ Test checklist (5 minutes):
 [ ] 3  Copy the row to the desktop (Cmd-C, Cmd-V, and by dragging onto a folder in PhotoLab): all
        three arrive. Trash the row: all three go.
 [ ] 4  Switch to Photography mode and back: thumbnails as before; the list shows sets again.
+[ ] 6  Open a big folder in Photography mode, wait a minute without scrolling, then scroll to the
+       end: thumbnails are there at once.
 [ ] 5  Photography mode, Space on a RAW, press 3: the caption shows three stars. Z, then D: the
        caption says "RAW developed by macOS".
 
