@@ -298,8 +298,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @discardableResult
     /// PhotoLab: the window behind `w` comes to the front (Esc in a contact sheet window, like Cmd-`).
     func bringPreviousWindow(before w: NSWindow) {
-        let next = NSApp.orderedWindows.first { $0 !== w && $0.isVisible && !$0.isMiniaturized && $0.canBecomeMain
-            && controllers.contains(where: { c in c.window === $0 }) }
+        let next = NSApp.orderedWindows.first { win in win !== w && win.isVisible && !win.isMiniaturized && win.canBecomeMain
+            && controllers.contains(where: { c in c.window === win }) }
         if let n = next { n.makeKeyAndOrderFront(nil) } else { NSSound.beep() }
     }
 
