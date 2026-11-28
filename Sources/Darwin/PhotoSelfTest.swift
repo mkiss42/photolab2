@@ -105,7 +105,7 @@ final class PhotoSelfTest {
         for n in ["DSC_1.NEF", "DSC_1.JPG", "DSC_1.xmp", "DSC_2.JPG", "notes.txt", "DSC_3.xmp"] {
             _ = files.writeData(Data("x".utf8), to: Paths.join(setDir, n))
         }
-        let setRows = FileSets.rows(DirectoryReader.read(setDir).entries)
+        let setRows = FileSets.rows(DirectoryReader.read(setDir, includeHidden: false).entries)
         let set1 = setRows.first { $0.entry.name == "DSC_1.NEF" }
         let ren = set1.flatMap { FileSets.renames(members: $0.members, repName: "DSC_1.NEF", newName: "Job_1.NEF") } ?? []
         check("T-PHOTO-48", "sets: DSC_1 NEF+JPG+XMP one row (RAW shown), others alone; renaming the row renames all three",
