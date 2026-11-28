@@ -13,7 +13,18 @@
 - Stalls: the live-tags watcher (FSEvents) was started on the main thread; on a slow share that can
   wait for the server. It is started in the background now.
 
+- Sets (list view): a RAW, its JPEG/HEIC and its XMP/ACR sidecar with the same name are one row
+  (the RAW shown, total size, Ext column "NEF+JPG+XMP"). Copy, move, Trash, drag, rename and
+  metadata on that row act on every member; renaming the row renames them all (DSC_1 -> Job_1).
+  Status line: "7 items (1 set, 9 total)". The thumbnail views still show every file.
+- A DNG never joins a set with a same-named NEF (or other RAW) or with an XMP sidecar: it stays its
+  own row, so rating the NEF's row never reaches the DNG (alpha.6 rule). DNG + JPEG alone are a set.
+  Self-test T-PHOTO-49 (safety).
+
 Test checklist (5 minutes, 12.6 Mac on the share):
+[ ] 0  List view, folder with DSC_1.NEF, DSC_1.JPG, DSC_1.xmp, DSC_1.DNG: two rows - "NEF+JPG+XMP"
+       and "DNG". Rate the NEF row: the DNG keeps its own stars. Rename the NEF row: NEF, JPG and
+       xmp renamed; the DNG keeps its name.
 [ ] 1  Photography mode on a big NEF folder: scroll fast up and down - no stutter, no blank cells
        staying blank; thumbnails fill in.
 [ ] 2  Same in the plain thumbnail view (View > as Thumbnails), and with a dark/light theme switch.

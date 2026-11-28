@@ -54,7 +54,18 @@ enum FileSets {
             byStem[stem, default: []].append(e)
         }
         for stem in order {
-            let m = byStem[stem]!.sorted { a, b in
+            var group = byStem[stem]!
+            // 1.0.0-alpha.7 (user's rule, alpha.6): a DNG never shares a row with another RAW or with a
+            // sidecar - commands and metadata on a set row reach every member, and a DNG's metadata must
+            // stay its own (DNGs have no sidecar). Such a DNG is its own row; DNG + JPEG alone stay a set.
+            let hasOtherRaw = group.contains { PhotoFormats.isRaw($0.name) && !Sidecars.isDNG($0.name) }
+            let hasSidecar = group.contains { rank($0.name) == 2 }
+            if hasOtherRaw || hasSidecar {
+                for d in group where Sidecars.isDNG(d.name) { out.append(SetRow(entry: d, members: [])) }
+                group = group.filter { !Sidecars.isDNG($0.name) }
+                if group.isEmpty { continue }
+            }
+            let m = group.sorted { a, b in
                 let ra = rank(a.name), rb = rank(b.name)
                 return ra != rb ? ra < rb : a.name < b.name
             }

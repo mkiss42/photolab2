@@ -114,6 +114,18 @@ final class PhotoSelfTest {
                 && FileSets.renames(members: set1?.members ?? [], repName: "DSC_1.NEF", newName: "Job_1.TIF") == nil,
               "\(setRows.map { $0.entry.name + "/" + "\($0.members.count)" }) \(ren.map { $0.newName })")
 
+        // 49 A DNG is never in a set with another RAW or a sidecar (its metadata stays its own).
+        let dngDir = p("sets-dng")
+        _ = files.makeDir(dngDir)
+        for n in ["DSC_5.NEF", "DSC_5.DNG", "DSC_5.JPG", "DSC_5.xmp", "DSC_6.DNG", "DSC_6.JPG"] {
+            _ = files.writeData(Data("x".utf8), to: Paths.join(dngDir, n))
+        }
+        let dngRows = FileSets.rows(DirectoryReader.read(dngDir, includeHidden: false).entries)
+        let dngLabels = Set(dngRows.map { FileSets.extLabel($0.entry.name, members: $0.members) + ":" + $0.entry.name })
+        check("T-PHOTO-49", "sets: a DNG never shares a row with a same-named NEF or an XMP; DNG+JPG alone is a set",
+              dngLabels == ["DNG:DSC_5.DNG", "NEF+JPG+XMP:DSC_5.NEF", "DNG+JPG:DSC_6.DNG"],
+              dngLabels.sorted().joined(separator: " "), safety: true)
+
         // 45 PhotoLab: xmp:Label follows the colour class (ColorClass is the master).
         var lc = MetaChange()
         lc.colorClass = 4
