@@ -95,6 +95,9 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
     /// and one in the status bar while thumbnails are being made.
     let loadingSpinner = NSProgressIndicator()
     let thumbSpinner = NSProgressIndicator()
+    /// PhotoLab (PhotoLab 1's contact sheet): a very thin bar along the top of the thumbnails while
+    /// the pictures' details (stars, colours, camera) are being read.
+    let factsBar = ThinProgressBar()
     /// PhotoLab P15: the activity light (status bar, left).
     let activityLight = ActivityLight(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
     var backgroundWrites = 0
@@ -497,6 +500,14 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
             overlay.centerXAnchor.constraint(equalTo: list.scroll.centerXAnchor),
             overlay.centerYAnchor.constraint(equalTo: list.scroll.centerYAnchor),
             overlay.widthAnchor.constraint(lessThanOrEqualTo: list.scroll.widthAnchor, constant: -40),
+        ])
+        factsBar.translatesAutoresizingMaskIntoConstraints = false
+        mainPane.addSubview(factsBar)
+        NSLayoutConstraint.activate([
+            factsBar.topAnchor.constraint(equalTo: gridScroll.topAnchor),
+            factsBar.leadingAnchor.constraint(equalTo: gridScroll.leadingAnchor),
+            factsBar.trailingAnchor.constraint(equalTo: gridScroll.trailingAnchor),
+            factsBar.heightAnchor.constraint(equalToConstant: 3),
         ])
         mainPane.addSubview(loadingSpinner)
         NSLayoutConstraint.activate([

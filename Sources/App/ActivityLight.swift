@@ -118,3 +118,19 @@ final class ActivityLight: NSView {
         }
     }
 }
+
+/// PhotoLab: a 3 px progress line (PhotoLab 1's contact sheet). `progress` nil = hidden.
+final class ThinProgressBar: NSView {
+    var progress: Double? { didSet { isHidden = progress == nil; needsDisplay = true } }
+    override init(frame: NSRect) { super.init(frame: frame); isHidden = true }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+    override func hitTest(_ point: NSPoint) -> NSView? { return nil }
+    override func draw(_ dirtyRect: NSRect) {
+        guard let p = progress else { return }
+        let tm = ThemeManager.shared
+        tm.accent.withAlphaComponent(0.18).setFill()
+        bounds.fill()
+        tm.accent.setFill()
+        NSRect(x: 0, y: 0, width: bounds.width * CGFloat(max(0, min(1, p))), height: bounds.height).fill()
+    }
+}

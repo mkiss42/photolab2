@@ -219,6 +219,13 @@ extension BrowserPane {
         for f in folders { after = host?.addPane(path: f.path, after: after) ?? after }
     }
 
+    /// PhotoLab: every picture under the folder (all subfolders) in one contact sheet.
+    @objc func openInContactSheetRecursive(_ sender: Any?) {
+        guard let d = NSApp.delegate as? AppDelegate else { return }
+        let folders = (isFTP ? [] : list.selectedRowEntries()).filter { isPlainFolder($0) }
+        for (i, f) in folders.enumerated() { d.openContactSheet(f.path, newTab: i > 0, recursive: true) }
+    }
+
     /// PhotoLab: folders in the contact sheet window (each in a tab); a file: its folder, file selected.
     @objc func openInContactSheet(_ sender: Any?) {
         guard let d = NSApp.delegate as? AppDelegate else { return }
@@ -1013,6 +1020,7 @@ extension BrowserPane {
         m.addItem(menuItem("Open", #selector(openSelected(_:))))
         if hasFolders {
             m.addItem(menuItem("Open in Contact Sheet", #selector(openInContactSheet(_:))))
+            m.addItem(menuItem("Open in Contact Sheet with All Subfolders", #selector(openInContactSheetRecursive(_:))))
         } else if let f = one, f.kind == .file {
             m.addItem(menuItem("Open Enclosing Folder in Contact Sheet", #selector(openInContactSheet(_:))))
         }

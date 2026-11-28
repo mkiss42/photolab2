@@ -255,11 +255,13 @@ extension BrowserPane {
         if keepFactsOnReload { keepFactsOnReload = false } else { photoFacts = [:] }
         let photos = all.filter { $0.kind == .file && PhotoFormats.isImage($0.name) }
         factsProgress = (0, photos.count)
+        factsBar.progress = photos.isEmpty ? nil : 0
         if photos.isEmpty { return }
         PhotoFactsStore.shared.load(photos, onBatch: { [weak self] got, done, total in
             guard let s = self else { return }
             for (k, v) in got { s.photoFacts[k] = v }
             s.factsProgress = (done, total)
+            s.factsBar.progress = total > 0 ? Double(done) / Double(total) : nil
             if s.photoFilter.needsFacts {
                 s.refreshGrid()
             } else {
@@ -270,6 +272,7 @@ extension BrowserPane {
         }, onDone: { [weak self] in
             guard let s = self else { return }
             s.factsProgress = (s.factsProgress.total, s.factsProgress.total)
+            s.factsBar.progress = nil
             s.refreshGrid()
         })
     }
@@ -513,9 +516,15 @@ extension BrowserPane {
             }
         }
         if viewMode == "photo" && Prefs.hideJPEGTwins && Prefs.twinsShareMetadata {
-            all += RawTwins.twins(of: paths) { d in ((try? FileManager.default.contentsOfDirectory(atPath: d)) ?? []) }
+            // PhotoLab: the twins from the listing already in memory - listing the folder again here (on
+            // the main thread) made rating hang on a slow share.
+            var byFolder: [String: [String]] = [:]
+            for e in list.rootEntries where e.kind == .file { byFolder[Paths.parent(e.path), default: []].append(e.name) }
+            all += RawTwins.twins(of: paths) { d in byFolder[d] ?? [] }
         }
         if background && App.ops.metadataTool != nil {
+            // PhotoLab: every picture waiting for this write shows a spinner until it is done.
+            MetaPending.shared.add(all)
             BackgroundMetaWriter.shared.enqueue(all.map { (image: $0, change: c) }, title: title, pane: self)
             return
         }
@@ -605,6 +614,16 @@ extension BrowserPane {
 extension BrowserPane {
     /// Photography mode: show every picture in this folder and all folders inside it, in one grid.
     /// Stays on while you move between folders in Photography mode; off when you leave the mode.
+    /// PhotoLab: a contact sheet opened "recursively" shows every picture under the folder in one sheet
+    /// (Include subfolders); a plain one doesn't. `folderShown`: the folder is already on screen.
+    func setContactSheetRecursive(_ on: Bool, folderShown: Bool) {
+        if on == subfoldersOn { return }
+        if folderShown && !list.loading { setIncludeSubfolders(on); return }
+        subfoldersOn = on   // applied when the folder has loaded (recursiveAfterLoad)
+        photoBar.setSubfolders(on)
+        if !on { stopRecursive(reload: false) }
+    }
+
     func setIncludeSubfolders(_ on: Bool) {
         subfoldersOn = on
         photoBar.setSubfolders(on)

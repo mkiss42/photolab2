@@ -42,6 +42,11 @@ struct BulkOutcome {
 }
 
 enum DirectoryReader {
+    /// PhotoLab: hidden items shown anyway - /Volumes in / (the way to every disk and share).
+    static func alwaysShown(_ dir: String, _ name: String) -> Bool {
+        return name == "Volumes" && (dir == "/" || dir.isEmpty)
+    }
+
     /// Set by the macOS layer at start-up (getattrlistbulk: many entries per request, which matters most
     /// on network shares). nil on Linux and whenever it has been switched off: readdir + lstat is used.
     static var bulkLister: ((String, () -> Bool, (BulkItem) -> Void) -> BulkOutcome)? = nil
@@ -82,7 +87,7 @@ enum DirectoryReader {
                 let path = Paths.join(dir, item.name)
                 var entry = FileEntry.make(name: item.name, path: path, info: item.info)
                 entry.added = item.added
-                if entry.isHidden && !includeHidden {
+                if entry.isHidden && !includeHidden && !DirectoryReader.alwaysShown(dir, entry.name) {
                     result.hiddenSkipped += 1
                     return
                 }
@@ -149,7 +154,7 @@ enum DirectoryReader {
             }
             var entry = FileEntry.make(name: name, path: path, info: info)
             if let ad = addedDate { entry.added = ad(path) }
-            if entry.isHidden && !includeHidden {
+            if entry.isHidden && !includeHidden && !DirectoryReader.alwaysShown(dir, entry.name) {
                 result.hiddenSkipped += 1
                 continue
             }

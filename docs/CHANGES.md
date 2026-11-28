@@ -1,5 +1,30 @@
 # Changes
 
+## 1.0.0-alpha.14 — no hang when rating; pending writes shown; details fill in as they come
+
+- Rating / colouring on a slow share no longer hangs. The hang came from PhotoLab listing the
+  folder again (on the window's own thread) to find the JPEG twins; it now uses the listing it
+  already has.
+- Every picture with a metadata change still to be written shows a small turning ring on its
+  thumbnail (and "writing..." after its name in the list) until the change is written and checked
+  - queued, or ExifTool / the share still busy with it. Then the ring goes away.
+- Photography mode: stars, colours and camera details fill in a few pictures at a time (chunks of 4)
+  instead of all at once at the end; a very thin bar along the top of the thumbnails shows how far
+  the reading is (as in PhotoLab 1).
+- The Space preview reads ahead in the direction you are going: the next 3 pictures and 1 behind,
+  and those reads are no longer dropped when you arrow on before they finish.
+- / always shows Volumes, whatever the hidden-files setting.
+- Right-click a folder > "Open in Contact Sheet with All Subfolders": every picture under it in one
+  contact sheet (Include subfolders on in that tab).
+- To-do added: metadata editor and IPTC stationery after PhotoLab 1 (SuppCat 1/2/3 as three fields).
+
+Test checklist (5 minutes, slow share):
+[ ] 1  Photography mode, rate 10 pictures quickly: no beachball; each shows a ring until written.
+[ ] 2  Open a big folder: the stars/colours appear a few at a time; the thin bar runs along the top.
+[ ] 3  Space on a RAW, hold the right arrow briefly, then step slowly: the next pictures are ready.
+[ ] 4  Go to / (Macintosh HD's top): Volumes is there.
+[ ] 5  Right-click a folder with subfolders > Open in Contact Sheet with All Subfolders.
+
 ## 1.0.0-alpha.13 — contact sheet cells like PhotoLab 1's
 
 - Photography mode / contact sheet window: under each picture the name (2 lines), then up to 4

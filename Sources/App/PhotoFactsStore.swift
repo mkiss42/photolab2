@@ -71,14 +71,14 @@ final class PhotoFactsStore {
                         forExifTool.append((e, stamp, f))
                     }
                 }
-                if batch.count >= 40 { flush(force: false) }
+                if batch.count >= 4 { flush(force: false) }   // PhotoLab: small chunks - the sheet fills in as it goes
             }
             flush(force: false)
             // Files macOS couldn't read: ExifTool, 50 at a time.
             var i = 0
             while i < forExifTool.count {
                 if flag.value != token { return }
-                let chunk = Array(forExifTool[i..<min(i + 50, forExifTool.count)])
+                let chunk = Array(forExifTool[i..<min(i + 8, forExifTool.count)])
                 let got = PhotoFactsReader.readBatchExifTool(chunk.map { $0.0.path })
                 for (e, stamp, native) in chunk {
                     var f = got[e.path] ?? native
@@ -89,7 +89,7 @@ final class PhotoFactsStore {
                     done += 1
                 }
                 flush(force: true)
-                i += 50
+                i += 8
             }
             flush(force: true)
             Log.shared?.info(String(format: "Photo details read for %d pictures (%d via ExifTool) in %.1f s",

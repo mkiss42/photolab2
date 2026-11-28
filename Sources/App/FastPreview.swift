@@ -424,7 +424,9 @@ final class FastPreview: NSObject, NSWindowDelegate {
         let op = BlockOperation(block: {})
         op.queuePriority = priority
         op.addExecutionBlock { [weak self, weak op] in
-            if op?.isCancelled == true || flag.value != gen { return }
+            // gen < 0: a read ahead (PhotoLab): kept while its picture is still among the next ones.
+            if op?.isCancelled == true || (gen >= 0 && flag.value != gen) { return }
+            if gen < 0 && !FastPreview.aheadWanted(k as String) { return }
             var r: (image: CGImage, source: String)? = nil
             if slowKind, let q = ImageMeta.preview(path: e.path, maxPixels: px, allowSlow: false) {
                 if q.source == "saved preview" {
@@ -436,7 +438,7 @@ final class FastPreview: NSObject, NSWindowDelegate {
                 }
             }
             if r == nil {
-                if op?.isCancelled == true || flag.value != gen { return }
+                if op?.isCancelled == true || (gen >= 0 && flag.value != gen) { return }
                 r = ImageMeta.preview(path: e.path, maxPixels: px)
             }
             DispatchQueue.main.async {
@@ -456,18 +458,47 @@ final class FastPreview: NSObject, NSWindowDelegate {
     }
 
     /// Prepare the next two and the previous picture so arrowing through a shoot is instant.
+    // PhotoLab (as PhotoLab 1/2): read ahead in the direction you are going - the next 3 pictures and
+    // the one behind - and keep those reads going while you arrow (they are not dropped when you move
+    // on; only pictures that left the window are skipped).
+    private static let aheadLock = NSLock()
+    private static var ahead = Set<String>()
+    fileprivate static func aheadWanted(_ k: String) -> Bool {
+        aheadLock.lock(); defer { aheadLock.unlock() }
+        return ahead.contains(k)
+    }
+    private var lastIndex: Int?
+
     private func prefetch(_ list: FileListController, around index: Int?, px: Int, gen: Int) {
         guard let i = index else { return }
-        for d in [1, 2, -1] {
-            guard let n = list.table.item(atRow: i + d) as? FileNode else { continue }
-            let e = n.entry
-            if e.kind != .file || !PhotoFormats.isImage(e.name) { continue }
-            // Never read big Photoshop files ahead: only what you actually look at.
-            if PreviewCache.worthCaching(name: e.name, size: e.size) { continue }
-            if cache.object(forKey: key(e, px)) != nil { continue }
-            load(e, px: px, gen: gen, priority: .low, done: nil)
+        let back = lastIndex.map { i < $0 } ?? false
+        lastIndex = i
+        var want: [(FileEntry, NSString)] = []
+        // The next pictures in that direction (sidecars and other files skipped), then one behind.
+        func collect(_ dir: Int, _ count: Int) {
+            var j = i + dir, got = 0, tries = 0
+            while got < count && tries < 40, let n = list.table.item(atRow: j) as? FileNode {
+                let e = n.entry
+                tries += 1
+                j += dir
+                guard e.kind == .file, PhotoFormats.isImage(e.name), !PhotoFormats.isSidecar(e.name) else { continue }
+                got += 1
+                // Never read big Photoshop files ahead: only what you actually look at.
+                if PreviewCache.worthCaching(name: e.name, size: e.size) { continue }
+                want.append((e, key(e, px)))
+            }
+        }
+        collect(back ? -1 : 1, 3)
+        collect(back ? 1 : -1, 1)
+        FastPreview.aheadLock.lock()
+        FastPreview.ahead = Set(want.map { $0.1 as String })
+        FastPreview.aheadLock.unlock()
+        for (e, k) in want where cache.object(forKey: k) == nil && !queuedAhead.contains(k as String) {
+            queuedAhead.insert(k as String)
+            load(e, px: px, gen: -1, priority: .low) { [weak self] _, _ in self?.queuedAhead.remove(k as String) }
         }
     }
+    private var queuedAhead = Set<String>()
 
     // MARK: Viewers
 

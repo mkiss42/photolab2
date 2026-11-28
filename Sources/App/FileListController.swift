@@ -148,6 +148,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     /// Colour tags arrived for some paths: redraw just those visible rows' names.
     private var tagCheckTimer: Timer?
+    private var pendingObserver: NSObjectProtocol?
 
     /// Shares only (local changes come from FSEvents), only while the window is on screen.
     private func checkVisibleTags() {
@@ -167,7 +168,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         if visible.length <= 0 { return }
         var rows = IndexSet()
         for r in visible.location..<(visible.location + visible.length) {
-            if let n = table.item(atRow: r) as? FileNode, paths.contains(n.path) { rows.insert(r) }
+            if let n = table.item(atRow: r) as? FileNode, paths.contains(n.path) || n.members.contains(where: { paths.contains($0.path) }) { rows.insert(r) }
         }
         if !rows.isEmpty { table.reloadData(forRowIndexes: rows, columnIndexes: IndexSet(integer: 0)) }
     }
@@ -230,6 +231,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         stopWatching()
         if let o = tagObserver { NotificationCenter.default.removeObserver(o); tagObserver = nil }
         tagCheckTimer?.invalidate(); tagCheckTimer = nil
+        if let o = pendingObserver { NotificationCenter.default.removeObserver(o); pendingObserver = nil }
         TagWatcher.shared.watch(owner: self, folder: nil)
         onRootsChanged = nil; onLoaded = nil; onSelectionChanged = nil; onRowsChanged = nil; onOpen = nil; onFolderGone = nil
         onDrop = nil; onBackgroundCheck = nil; holdReloads = nil
@@ -312,6 +314,10 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         tagObserver = NotificationCenter.default.addObserver(forName: .findTagsRead, object: nil, queue: .main) { [weak self] n in
             guard let s = self, let paths = n.userInfo?["paths"] as? [String] else { return }
             s.tagsRead(Set(paths))
+        }
+        pendingObserver = NotificationCenter.default.addObserver(forName: MetaPending.changed, object: nil, queue: .main) { [weak self] n in
+            guard let s = self, let paths = n.userInfo?["paths"] as? [String] else { return }
+            s.tagsRead(Set(paths))   // the same row refresh
         }
         // PhotoLab: tags changed by other Macs on a share - a light check of the rows on screen every 5 s.
         tagCheckTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.checkVisibleTags() }
@@ -1313,6 +1319,8 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
             var text = e.name
             if n.loading { text += "  \u{2026}" }
             if let fe = n.error { text += "  (can't open: \(fe.reason))" }
+            // PhotoLab: a metadata change still being written.
+            if n.entries.contains(where: { MetaPending.shared.contains($0.path) }) { text += "  \u{27F3} writing\u{2026}" }
             v.textField?.stringValue = text
             v.imageView?.image = IconCache.shared.icon(for: e)
             v.imageView?.alphaValue = e.isHidden ? 0.5 : 1.0

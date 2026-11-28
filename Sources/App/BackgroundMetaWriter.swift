@@ -50,6 +50,7 @@ final class BackgroundMetaWriter {
                 App.log.info(String(format: "\(title) (in the background): \(r.done.count) file(s) written and checked in %.1f s", Date().timeIntervalSince(started)))
                 for n in r.notes { App.log.info("Note: " + n) }
                 for j in jobs { j.pane?.metadataWriting(-j.items.count) }
+                MetaPending.shared.remove(jobs.flatMap { $0.items.map { $0.image } })
                 // Undo and the report on the pane the last change came from; the others just read again.
                 var seen = Set<ObjectIdentifier>()
                 for (k, p) in panes.reversed().enumerated() where !seen.contains(ObjectIdentifier(p)) {
@@ -67,5 +68,28 @@ final class BackgroundMetaWriter {
 
     private func updateStatus(_ p: BrowserPane) {
         p.photoBar.status.stringValue = "Writing \(busy) in the background\u{2026}"
+    }
+}
+
+/// PhotoLab: the pictures with a metadata change still to be written (queued, or ExifTool / the share
+/// still busy with it). Their thumbnails and rows show a spinner until it is done. Main thread.
+final class MetaPending {
+    static let shared = MetaPending()
+    static let changed = Notification.Name("PhotoLabMetaPending")
+    private var counts: [String: Int] = [:]
+
+    func contains(_ path: String) -> Bool { return counts[path] != nil }
+    var isEmpty: Bool { return counts.isEmpty }
+
+    func add(_ paths: [String]) {
+        for p in paths { counts[p, default: 0] += 1 }
+        NotificationCenter.default.post(name: MetaPending.changed, object: nil, userInfo: ["paths": paths])
+    }
+
+    func remove(_ paths: [String]) {
+        for p in paths {
+            if let n = counts[p] { if n <= 1 { counts.removeValue(forKey: p) } else { counts[p] = n - 1 } }
+        }
+        NotificationCenter.default.post(name: MetaPending.changed, object: nil, userInfo: ["paths": paths])
     }
 }

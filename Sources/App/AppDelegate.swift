@@ -305,8 +305,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// PhotoLab: the contact sheet window (the front one, or a new one at its remembered size: 80% of
     /// the screen, centred, the first time). `newTab`: in a new tab of it.
-    func openContactSheet(_ folder: String, select: [String] = [], newTab: Bool) {
+    func openContactSheet(_ folder: String, select: [String] = [], newTab: Bool, recursive: Bool = false) {
         if let c = controllers.last(where: { $0.isContactSheet && $0.window?.isVisible == true }) {
+            let same = !newTab && c.pane.currentPath == folder
+            c.pane.setContactSheetRecursive(recursive, folderShown: same)
             c.pane.showContactSheet(folder, select: select, newTab: newTab)
             c.window?.makeKeyAndOrderFront(nil)
             c.window?.makeFirstResponder(c.pane.grid)
@@ -325,7 +327,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             w.makeFirstResponder(c.pane.grid)
         }
         if !select.isEmpty { c.pane.showContactSheet(folder, select: select, newTab: false) }
-        App.log.info("Contact sheet window opened")
+        c.pane.setContactSheetRecursive(recursive, folderShown: false)
+        App.log.info("Contact sheet window opened" + (recursive ? " (with all subfolders)" : ""))
     }
 
     func newWindow(path: String) -> BrowserWindowController {

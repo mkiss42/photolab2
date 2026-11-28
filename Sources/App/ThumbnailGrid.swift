@@ -204,7 +204,14 @@ final class ThumbnailGrid: NSView {
     private var tagObs: NSObjectProtocol?
     private var tagTimer: Timer?
 
+    private var pendingObs: NSObjectProtocol?
+
     private func watchTags() {
+        if pendingObs == nil {
+            pendingObs = NotificationCenter.default.addObserver(forName: MetaPending.changed, object: nil, queue: .main) { [weak self] _ in
+                self?.scheduleTiles()
+            }
+        }
         if tagObs != nil { return }
         tagObs = NotificationCenter.default.addObserver(forName: .findTagsRead, object: nil, queue: .main) { [weak self] n in
             guard let s = self, let paths = n.userInfo?["paths"] as? [String] else { return }
@@ -224,6 +231,7 @@ final class ThumbnailGrid: NSView {
 
     func shutdown() {
         if let o = tagObs { NotificationCenter.default.removeObserver(o); tagObs = nil }
+        if let o = pendingObs { NotificationCenter.default.removeObserver(o); pendingObs = nil }
         tagTimer?.invalidate(); tagTimer = nil
         if let o = scrollObserver { NotificationCenter.default.removeObserver(o); scrollObserver = nil }
         track.cancelAllOperations()
@@ -362,6 +370,9 @@ final class ThumbnailGrid: NSView {
 
     private final class Tile: CALayer {
         let picture = CALayer()
+        /// PhotoLab: turns while the picture's metadata change is still being written.
+        let spinner = CAShapeLayer()
+        var spinning = false
         var captionKey: NSString?
         var pictureKey: String?
         override init() {
@@ -372,6 +383,37 @@ final class ThumbnailGrid: NSView {
             picture.actions = none
             picture.contentsGravity = .resize
             addSublayer(picture)
+            spinner.actions = none
+            spinner.fillColor = nil
+            spinner.lineWidth = 2.5
+            spinner.lineCap = .round
+            spinner.strokeColor = NSColor.white.cgColor
+            spinner.shadowColor = NSColor.black.cgColor
+            spinner.shadowOpacity = 0.6
+            spinner.shadowRadius = 2
+            spinner.shadowOffset = .zero
+            spinner.isHidden = true
+            addSublayer(spinner)
+        }
+
+        func setSpinning(_ on: Bool, in box: CGRect) {
+            if on == spinning { return }
+            spinning = on
+            spinner.isHidden = !on
+            if on {
+                let s: CGFloat = 22
+                spinner.frame = CGRect(x: box.maxX - s - 6, y: box.minY + 6, width: s, height: s)
+                spinner.path = CGPath(ellipseIn: CGRect(x: 2, y: 2, width: s - 4, height: s - 4), transform: nil)
+                spinner.strokeEnd = 0.75
+                let a = CABasicAnimation(keyPath: "transform.rotation.z")
+                a.fromValue = 0
+                a.toValue = -2 * Double.pi
+                a.duration = 0.9
+                a.repeatCount = .infinity
+                spinner.add(a, forKey: "spin")
+            } else {
+                spinner.removeAnimation(forKey: "spin")
+            }
         }
         override init(layer: Any) { super.init(layer: layer) }
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -571,9 +613,11 @@ final class ThumbnailGrid: NSView {
                     }
                     t.pictureKey = pk
                 }
+                t.setSpinning(MetaPending.shared.contains(e.path), in: NSRect(x: 8, y: 6, width: thumbSize, height: thumbSize))
             }
         }
         for (i, t) in tiles where !keep.contains(i) {
+            t.setSpinning(false, in: .zero)
             t.isHidden = true
             t.contents = nil
             t.picture.contents = nil
