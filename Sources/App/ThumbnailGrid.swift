@@ -66,7 +66,9 @@ final class ThumbnailGrid: NSView {
     private var bandRect: NSRect?
     private var bandBase = IndexSet()
     /// Photography mode (not plain thumbnails): dragged pictures take their XMP sidecars along.
-    var photoMode = false
+    var photoMode = false {
+        didSet { if photoMode != oldValue { relayout(); needsDisplay = true } }
+    }
     // Drop highlight
     private var dropIndex: Int?
     private var dropOnAll = false
@@ -111,7 +113,68 @@ final class ThumbnailGrid: NSView {
     private let pad: CGFloat = 10
     /// Names wrap onto up to 3 lines (then are truncated), plus one line of badges.
     private var lineHeight: CGFloat { return ceil(ThemeManager.shared.smallFont.pointSize * 1.3) }
-    private var captionHeight: CGFloat { return lineHeight * 4 + 6 }
+    private var captionHeight: CGFloat {
+        // PhotoLab (P17, PhotoLab 1's tiles): in Photography mode the name (2 lines), the chosen
+        // metadata rows, a badge line and the star row on its colour-class band.
+        if photoMode { return lineHeight * CGFloat(3 + ThumbnailGrid.sheetRows.count) + starRowHeight + 12 }
+        return lineHeight * 4 + 6
+    }
+    private var starRowHeight: CGFloat { return lineHeight + 6 }
+
+    // MARK: PhotoLab sheet rows (Settings > Photography > Contact sheet rows)
+
+    static let rowChoices: [(id: String, title: String)] = [
+        ("camera", "Camera"), ("lens", "Lens"), ("dimensions", "Dimensions"), ("size", "File size"),
+        ("date", "Date taken"), ("exposure", "Exposure (shutter, aperture, ISO)"), ("modified", "Date modified"),
+    ]
+    static var sheetRows: [String] {
+        get { return UserDefaults.standard.stringArray(forKey: "sheetRows") ?? ["camera", "date"] }
+        set { UserDefaults.standard.set(Array(newValue.prefix(4)), forKey: "sheetRows") }
+    }
+
+    private func rowText(_ id: String, _ e: FileEntry, _ f: PhotoFacts?) -> String {
+        switch id {
+        case "camera": return f?.camera ?? ""
+        case "lens": return f?.lens ?? ""
+        case "dimensions": return (f?.width ?? 0) > 0 ? "\(f!.width) \u{00D7} \(f!.height)" : ""
+        case "size": return Listing.sizeText(e.size)
+        case "date": return f?.dateTaken ?? ""
+        case "modified": return ThumbnailGrid.dateFormat.string(from: Date(timeIntervalSince1970: e.modified))
+        case "exposure":
+            var p: [String] = []
+            if let t = f?.exposure, t > 0 { p.append(t >= 1 ? String(format: "%.1f s", t) : "1/\(Int((1 / t).rounded())) s") }
+            if let a = f?.fNumber, a > 0 { p.append(String(format: "f/%.1f", a)) }
+            if let i = f?.iso { p.append("ISO \(i)") }
+            return p.joined(separator: "  ")
+        default: return ""
+        }
+    }
+
+    private static let dateFormat: DateFormatter = {
+        let d = DateFormatter()
+        d.dateStyle = .short
+        d.timeStyle = .short
+        return d
+    }()
+
+    /// The star row of a cell (Photography mode): five stars on the colour-class band.
+    private func starRect(cell r: NSRect) -> NSRect {
+        return NSRect(x: r.minX + 6, y: r.maxY - starRowHeight - 4, width: r.width - 12, height: starRowHeight)
+    }
+
+    /// Which star (1-5) is at `p` in cell `i`, or nil.
+    private func star(at p: NSPoint, cell i: Int) -> Int? {
+        guard photoMode, i < entries.count, PhotoFormats.isImage(entries[i].name) else { return nil }
+        let sr = starRect(cell: rect(of: i))
+        guard sr.contains(p) else { return nil }
+        let w: CGFloat = 16
+        let left = sr.midX - w * 2.5
+        let k = Int((p.x - left) / w) + 1
+        return k >= 1 && k <= 5 ? k : nil
+    }
+
+    /// Click on a star: that rating (the same star again: no rating). Returns true when it was a star.
+    var onRateOne: ((Int, Int) -> Void)?
     private var cellWidth: CGFloat { return thumbSize + 16 }
     private var cellHeight: CGFloat { return thumbSize + 12 + captionHeight }
     private var columns: Int { return max(1, Int((bounds.width - pad) / (cellWidth + pad))) }
@@ -284,6 +347,7 @@ final class ThumbnailGrid: NSView {
         let colors = TagCache.shared.colors(e.path)
         if let c = colors.first { key += "|t\(c)" }
         if folderRoot != nil { key += "|r" }
+        if photoMode { key += "|p" + ThumbnailGrid.sheetRows.joined(separator: ",") }
         if Finish.depth > 0 || Finish.glow > 0 { key += "|f\(Finish.depth),\(Finish.glow)" }
         return key
     }
@@ -588,6 +652,10 @@ final class ThumbnailGrid: NSView {
         let nameRect = self.nameRect(cell: r, box: box)
         let nameStr = NSAttributedString(string: e.name, attributes: nameAttrs)
         nameStr.draw(with: nameRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], context: nil)
+        if photoMode {
+            drawSheetCaption(i, e, r, nameRect: nameRect, badgeAttrs: badgeAttrs)
+            return
+        }
         var badges: [String] = []
         if let t = twinBadges[e.path] { badges.append(t) }
         if let f = facts[e.path] {
@@ -621,6 +689,69 @@ final class ThumbnailGrid: NSView {
         }
     }
 
+    /// PhotoLab (P17): Photography mode caption - metadata rows, badges, and the star row on the colour
+    /// class band (PhotoLab 1's tiles). Stars can be clicked.
+    private func drawSheetCaption(_ i: Int, _ e: FileEntry, _ r: NSRect, nameRect: NSRect, badgeAttrs: [AttrKey: Any]) {
+        let tm = ThemeManager.shared
+        let f = facts[e.path]
+        var y = nameRect.maxY + 1
+        let rowAttrs: [AttrKey: Any] = [.font: tm.smallFont, .foregroundColor: tm.secondaryText, .paragraphStyle: {
+            let p = NSMutableParagraphStyle(); p.alignment = .center; p.lineBreakMode = .byTruncatingTail; return p }()]
+        for id in ThumbnailGrid.sheetRows {
+            let t = rowText(id, e, f)
+            if !t.isEmpty { NSString(string: t).draw(in: NSRect(x: r.minX + 4, y: y, width: r.width - 8, height: lineHeight), withAttributes: rowAttrs) }
+            y += lineHeight
+        }
+        var badges: [String] = []
+        if let t = twinBadges[e.path] { badges.append(t) }
+        if let l = f?.label, !l.isEmpty, f?.colorClass == nil { badges.append(l) }
+        if sidecarPaths.contains(e.path) { badges.append("XMP") }
+        if let root = folderRoot {
+            let parent = Paths.parent(e.path)
+            let rel = parent == root ? "" : String(parent.dropFirst(root.count).drop(while: { $0 == "/" }))
+            badges.insert(rel.isEmpty ? "\u{2302} top" : "\u{25B8} " + rel, at: 0)
+        }
+        if !badges.isEmpty {
+            NSString(string: badges.joined(separator: "  ")).draw(in: NSRect(x: r.minX + 4, y: y, width: r.width - 8, height: lineHeight), withAttributes: badgeAttrs)
+        }
+        // Finder tag dot (top right), as before.
+        if let first = TagCache.shared.colors(e.path).first, let col = ColorLabelColors.color(first) {
+            col.setFill()
+            NSBezierPath(ovalIn: NSRect(x: r.maxX - 16, y: r.minY + 6, width: 9, height: 9)).fill()
+        }
+        guard e.kind == .file, PhotoFormats.isImage(e.name) else { return }
+        // The star row: on the colour class's colour (the whole band - easy to see), its name at the right.
+        let sr = starRect(cell: r)
+        var textColor = tm.text
+        if let cc = f?.colorClass, let col = Prefs.colorClassColor(cc) {
+            col.setFill()
+            NSBezierPath(roundedRect: sr, xRadius: 4, yRadius: 4).fill()
+            textColor = col.brightnessComponentSafe > 0.62 ? NSColor.black : NSColor.white
+            // Also a small square at the top left, as Find had it.
+            NSBezierPath(roundedRect: NSRect(x: r.minX + 6, y: r.minY + 6, width: 12, height: 12), xRadius: 3, yRadius: 3).fill()
+        } else {
+            tm.text.withAlphaComponent(0.06).setFill()
+            NSBezierPath(roundedRect: sr, xRadius: 4, yRadius: 4).fill()
+        }
+        let rating = f?.rating ?? 0
+        let w: CGFloat = 16
+        let left = sr.midX - w * 2.5
+        let starFont = NSFont.systemFont(ofSize: max(11, lineHeight - 1))
+        if rating < 0 {
+            let s = NSAttributedString(string: "\u{2715} Rejected", attributes: [.font: tm.smallFont, .foregroundColor: textColor])
+            let sz = s.size()
+            s.draw(at: NSPoint(x: sr.midX - sz.width / 2, y: sr.midY - sz.height / 2))
+        } else {
+            for k in 1...5 {
+                let on = k <= rating
+                let s = NSAttributedString(string: on ? "\u{2605}" : "\u{2606}",
+                                           attributes: [.font: starFont, .foregroundColor: on ? textColor : textColor.withAlphaComponent(0.45)])
+                let sz = s.size()
+                s.draw(at: NSPoint(x: left + CGFloat(k - 1) * w + (w - sz.width) / 2, y: sr.midY - sz.height / 2))
+            }
+        }
+    }
+
     /// 0.18.10: "NEF+JPG" etc. for pictures whose JPEG twin is hidden in Photography Mode.
     var twinBadges: [String: String] = [:]
 
@@ -648,7 +779,7 @@ final class ThumbnailGrid: NSView {
     }
 
     private func nameRect(cell r: NSRect, box: NSRect) -> NSRect {
-        return NSRect(x: r.minX + 4, y: box.maxY + 4, width: r.width - 8, height: lineHeight * 3)
+        return NSRect(x: r.minX + 4, y: box.maxY + 4, width: r.width - 8, height: lineHeight * (photoMode ? 2 : 3))
     }
 
     /// Where an item's name is drawn (for renaming in place).
@@ -736,6 +867,14 @@ final class ThumbnailGrid: NSView {
         downPoint = p
         downEvent = event
         downIndex = index(at: p)
+        // PhotoLab: a click on a star rates that picture (the same star again: no rating).
+        if event.clickCount == 1, let i = index(at: p), let k = star(at: p, cell: i) {
+            let current = facts[entries[i].path]?.rating ?? 0
+            if selection != IndexSet(integer: i) { selection = IndexSet(integer: i); anchor = i; cursor = i; changed() }
+            onRateOne?(i, k == current ? 0 : k)
+            resetMouse()
+            return
+        }
         if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .option, let i = index(at: p),
             onOptionClick?(entries[i]) == true {
             resetMouse()
@@ -1095,4 +1234,12 @@ enum ColorLabelColors {
 final class CGImageBox {
     let image: CGImage
     init(_ i: CGImage) { image = i }
+}
+
+extension NSColor {
+    /// 0...1 brightness in sRGB (catalog / pattern colours: 0.5).
+    var brightnessComponentSafe: CGFloat {
+        guard let c = usingColorSpace(NSColorSpace.sRGB) else { return 0.5 }
+        return 0.299 * c.redComponent + 0.587 * c.greenComponent + 0.114 * c.blueComponent
+    }
 }

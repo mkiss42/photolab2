@@ -76,6 +76,7 @@ extension BrowserPane {
         photoBar.onEditMetadata = { [weak self] in self?.editMetadata(nil) }
         photoBar.onMetadataTemplate = { [weak self] in self?.metadataTemplate(nil) }
         grid.onRate = { [weak self] n in self?.rateSelected(n) }
+        grid.onRateOne = { [weak self] _, n in self?.rateSelected(n) }   // the grid selected that picture first
         grid.onColorClass = { [weak self] n in self?.colorClassSelected(n) }
         photoBar.onColorClass = { [weak self] n in self?.colorClassSelected(n) }
         photoBar.onSubfolders = { [weak self] on in self?.setIncludeSubfolders(on) }

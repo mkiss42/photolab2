@@ -430,6 +430,23 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         rows.append(twinMetaCheck)
         rows.append(note("Photography Mode (plain thumbnails show every file): a JPEG with a RAW of the same name in the same folder is hidden; the RAW shows the badge. Copying, moving, dragging, Move to Trash and Delete go to both. Folders with JPEGs only show them as always. The two boxes are separate: each view has its own."))
 
+        // PhotoLab P17: what the contact sheet shows under each picture (PhotoLab 1's "extra rows").
+        let rowsHead = NSTextField(labelWithString: "Contact sheet rows under each picture (Photography mode, up to 4)")
+        rowsHead.font = NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)
+        rows.append(rowsHead)
+        var rowBoxes: [NSView] = []
+        for (id, title) in ThumbnailGrid.rowChoices {
+            let b = NSButton(checkboxWithTitle: title, target: self, action: #selector(sheetRowChanged(_:)))
+            b.identifier = NSUserInterfaceItemIdentifier("sheetRow." + id)
+            b.state = ThumbnailGrid.sheetRows.contains(id) ? .on : .off
+            rowBoxes.append(b)
+        }
+        let rowGrid1 = NSStackView(views: Array(rowBoxes.prefix(4))); rowGrid1.orientation = .horizontal; rowGrid1.spacing = 16
+        let rowGrid2 = NSStackView(views: Array(rowBoxes.dropFirst(4))); rowGrid2.orientation = .horizontal; rowGrid2.spacing = 16
+        rows.append(rowGrid1)
+        rows.append(rowGrid2)
+        rows.append(note("The name, these rows, then the stars on the colour class's colour. Click a star to rate a picture (the same star again removes the rating)."))
+
         // 0.18.10: thumbnails - memory, preparing ahead, decoding.
         let thHead = NSTextField(labelWithString: "Thumbnails and scrolling (thumbnail view and Photography Mode)")
         thHead.font = NSFont.boldSystemFont(ofSize: 13)
@@ -648,6 +665,23 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         Prefs.metaWriteMode = m
         for b in modeRadios { b.state = b.tag == m.rawValue ? .on : .off }
         App.log.info("Metadata: write mode \(m.rawValue)")
+    }
+
+    @objc private func sheetRowChanged(_ sender: NSButton) {
+        guard let id = sender.identifier?.rawValue.replacingOccurrences(of: "sheetRow.", with: "") else { return }
+        var r = ThumbnailGrid.sheetRows
+        if sender.state == .on {
+            if r.count >= 4 { sender.state = .off; NSSound.beep(); return }
+            if !r.contains(id) { r.append(id) }
+        } else {
+            r = r.filter { $0 != id }
+        }
+        // Kept in the order of the list.
+        ThumbnailGrid.sheetRows = ThumbnailGrid.rowChoices.map { $0.id }.filter { r.contains($0) }
+        App.log.info("Contact sheet rows: \(ThumbnailGrid.sheetRows.joined(separator: ", "))")
+        for w in (NSApp.delegate as? AppDelegate)?.windowControllers ?? [] {
+            for p in w.panes { p.grid.relayout(); p.grid.needsDisplay = true }
+        }
     }
 
     @objc private func setsChanged(_ sender: NSButton) {

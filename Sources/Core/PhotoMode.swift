@@ -13,6 +13,11 @@ struct PhotoFacts: Equatable {
     var lens: String? = nil
     var width: Int = 0
     var height: Int = 0
+    /// PhotoLab contact sheet rows (P17): exposure and date, when macOS can read them.
+    var iso: Int? = nil
+    var fNumber: Double? = nil
+    var exposure: Double? = nil
+    var dateTaken: String? = nil
     /// PhotoLab S6: the picture's own xmp:MetadataDate (seconds since 1970), if it has one.
     var metadataDate: Double? = nil
     /// Where the rating came from: "sidecar" or "embedded".

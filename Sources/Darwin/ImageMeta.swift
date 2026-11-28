@@ -317,6 +317,10 @@ enum PhotoFactsReader {
         f.height = (props["PixelHeight"] as? NSNumber)?.intValue ?? 0
         f.camera = ExifSummary.cameraName(make: tiff["Make"] as? String, model: tiff["Model"] as? String)
         f.lens = (exif["LensModel"] as? String) ?? (aux["LensModel"] as? String)
+        f.iso = (exif["ISOSpeedRatings"] as? [NSNumber])?.first?.intValue
+        f.fNumber = (exif["FNumber"] as? NSNumber)?.doubleValue
+        f.exposure = (exif["ExposureTime"] as? NSNumber)?.doubleValue
+        f.dateTaken = exif["DateTimeOriginal"] as? String
         if let r = (iptc["StarRating"] as? NSNumber)?.intValue { f.rating = r; f.ratingSource = "embedded" }
         if let meta = CGImageSourceCopyMetadataAtIndex(src, 0, nil) {
             if let r = CGImageMetadataCopyStringValueWithPath(meta, nil, "xmp:Rating" as CFString), let v = Int(r as String) {
