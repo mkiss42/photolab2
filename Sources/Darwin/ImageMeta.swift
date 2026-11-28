@@ -87,7 +87,11 @@ enum ImageMeta {
         desc.add("Creator", byline)
         desc.add("Copyright", (iptc["CopyrightNotice"] as? String) ?? (tiff["Copyright"] as? String))
 
-        return [image, camera, location, desc].filter { !$0.rows.isEmpty }
+        let out = [image, camera, location, desc].filter { !$0.rows.isEmpty }
+        // PhotoLab: some macOS versions (12) give an empty description for a file they can't read
+        // (T-PHOTO-10 on the lab's 12.6 Mac): say so instead of showing nothing.
+        if out.isEmpty { return [MetaSection("Image", [("Metadata", "macOS can't read this file's details on this system")])] }
+        return out
     }
 
     /// Preview image no larger than `maxPixels` on its long side.

@@ -9,6 +9,7 @@
   also while you scroll - like the thumbnails.
 - Opening a folder on a slow share: the first 100 items appear as soon as they are read, instead of
   after the first 1000 (or the whole folder). Listing itself was already the fast bulk listing.
+- Photo Self-Test T-PHOTO-10 (failed on the 12.6 Mac): a file macOS can't read now says so in the Info panel instead of showing nothing.
 - FTP: under every FTP pane, a read-only console shows the traffic as in PhotoLab 1 (commands,
   server replies, connection notes; the password is never shown). Select to copy.
 
