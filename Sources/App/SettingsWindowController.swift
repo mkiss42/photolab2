@@ -474,23 +474,23 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         let modes: [(MetaWriteMode, String, String)] = [
             (.workingCopy, "Safest, slowest: separate working copy + picture fingerprint",
              "Each file is first copied, the copy is changed, and its picture data is compared with the original's. About 4 reads + 2 writes of every file. No safer than the next one; for comparison or a share that misbehaves."),
-            (.fingerprint, "Safe (recommended): picture fingerprint, no extra copy",
+            (.fingerprint, "Safe: picture fingerprint, no extra copy",
              "ExifTool writes the new version straight beside the original; PhotoLab checks every value AND that the picture data is identical before it takes the original's place. About 3 reads + 1 write of every file."),
             (.fingerprintLocal, "Fingerprint on this Mac's disks; fast on network shares",
              "Full check on your own disks; on shares the fastest way below. About 1 read + 1 write on shares."),
-            (.fast, "Fastest: no picture fingerprint",
+            (.fast, "Fastest (default in PhotoLab): no picture fingerprint",
              "Every value is still read back and checked, and the original stays untouched until then; only the proof that the picture data is identical is skipped. 1 read + 1 write of every file."),
         ]
         inPlaceCheck.state = Prefs.metaInPlace ? .on : .off
         inPlaceCheck.target = self
         inPlaceCheck.action = #selector(inPlaceChanged(_:))
         rows.append(inPlaceCheck)
-        rows.append(note("FASTEST (off by default). NEF, NRW, DNG, ARW, PEF and TIFF: only the new XMP / IPTC block (a few KB) and the small directory entry pointing to it are written - the rest of the file, the picture included, is never written. JPEG: only when the new values fit into the space the old ones take (often after a first normal write); otherwise the normal way below. Before each change PhotoLab notes the bytes it will overwrite; it reads every value back, and puts the old bytes back if anything isn't as asked or PhotoLab stops half way (at the next start). The file isn't copied first; Undo puts the old values back."))
+        rows.append(note("FASTEST (on by default in PhotoLab). NEF, NRW, DNG, ARW, PEF and TIFF: only the new XMP / IPTC block (a few KB) and the small directory entry pointing to it are written - the rest of the file, the picture included, is never written. JPEG: only when the new values fit into the space the old ones take (often after a first normal write); otherwise the normal way below. Before each change PhotoLab notes the bytes it will overwrite; it reads every value back, and puts the old bytes back if anything isn't as asked or PhotoLab stops half way (at the next start). The file isn't copied first; Undo puts the old values back."))
         inPlaceFastCheck.state = Prefs.inPlaceExifToolCheck ? .off : .on
         inPlaceFastCheck.target = self
         inPlaceFastCheck.action = #selector(inPlaceFastChanged(_:))
         rows.append(inPlaceFastCheck)
-        rows.append(note("Off (default, SAFEST): after each in-place change ExifTool reads every value back - an independent check. On (FASTEST): PhotoLab reads back exactly the bytes it wrote, checks that the file's structure is sound, and (0.18.11) reads every value back with its own reader; only the second program's opinion is skipped."))
+        rows.append(note("Off (SAFEST): after each in-place change ExifTool reads every value back - an independent check. On (default in PhotoLab, FASTEST): PhotoLab reads back exactly the bytes it wrote, checks that the file's structure is sound, and (0.18.11) reads every value back with its own reader; only the second program's opinion is skipped."))
         rows.append(NSTextField(labelWithString: "Files that are rewritten (2 and 3 above, when not changed in place), how carefully:"))
         for (m, title, desc) in modes {
             let b = NSButton(radioButtonWithTitle: title, target: self, action: #selector(modeChanged(_:)))
@@ -524,9 +524,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         fHead.font = NSFont.boldSystemFont(ofSize: 12)
         rows.append(fHead)
         let flushes: [(FlushMode, String, String)] = [
-            (.full, "Thorough flush (default, SAFEST)", "PhotoLab waits until the drive confirms each change is on the disk itself, past its own cache: safe even against a power cut a moment later. The slowest: on a local SSD about 15 ms per RAW."),
+            (.full, "Thorough flush (SAFEST)", "PhotoLab waits until the drive confirms each change is on the disk itself, past its own cache: safe even against a power cut a moment later. The slowest: on a local SSD about 15 ms per RAW."),
             (.normal, "Normal flush (FASTER)", "PhotoLab waits until each change is handed to the drive. A power cut in the second after a change could still lose it, or leave that file's new metadata half-written."),
-            (.none, "No flush (FASTEST, as ExifTool and most apps do)", "PhotoLab goes straight on; macOS writes the changes within seconds. Safe if PhotoLab or another app stops or crashes. A power cut or macOS crash in those seconds can leave the metadata of the files changed last half-written - in the worst case such a RAW won't open until repaired (PhotoLab puts the old bytes back at its next start if its note reached the disk). The picture data itself is never written by a metadata change."),
+            (.none, "No flush (default in PhotoLab, FASTEST, as ExifTool and most apps do)", "PhotoLab goes straight on; macOS writes the changes within seconds. Safe if PhotoLab or another app stops or crashes. A power cut or macOS crash in those seconds can leave the metadata of the files changed last half-written - in the worst case such a RAW won't open until repaired (PhotoLab puts the old bytes back at its next start if its note reached the disk). The picture data itself is never written by a metadata change."),
         ]
         for (m, title, desc) in flushes {
             let b = NSButton(radioButtonWithTitle: title, target: self, action: #selector(flushChanged(_:)))

@@ -142,6 +142,18 @@ final class IOLog {
     /// PhotoLab activity light: told (at most a few times a second, see `pulse`) that PhotoLab reads or
     /// writes - true = a network volume. Nothing runs when nothing is read.
     static var activity: ((Bool) -> Void)?
+    /// PhotoLab: a read that may wait for a server starts (returns a token) / ends - the light turns red
+    /// while one has been waiting too long.
+    static var waitBegin: ((Bool) -> Int)?
+    static var waitEnd: ((Int) -> Void)?
+
+    /// Run `body` as one possibly-waiting read of `path` (for the activity light).
+    static func waiting<T>(_ path: String, _ body: () -> T) -> T {
+        guard let b = waitBegin else { return body() }
+        let t = b(isNetworkPath(path))
+        defer { waitEnd?(t) }
+        return body()
+    }
 
     /// More bytes of a file already counted by smallRead (PhotoLab's shared readers: one file, many reads).
     static func smallReadBytes(_ path: String, bytes: Int64) {

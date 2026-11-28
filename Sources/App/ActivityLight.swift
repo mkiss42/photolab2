@@ -37,6 +37,51 @@ final class ActivityLight: NSView {
 
     static func install() {
         IOLog.activity = { pulse(network: $0) }
+        IOLog.waitBegin = { begin(network: $0) }
+        IOLog.waitEnd = { end($0) }
+    }
+
+    // MARK: Waiting (red): a read on a share that has not come back for over 0.7 s.
+    private static var waits: [Int: (start: Date, net: Bool)] = [:]
+    private static var nextToken = 0
+    private static var checking = false
+    static let stallSeconds = 0.7
+
+    static func begin(network: Bool) -> Int {
+        lock.lock()
+        nextToken += 1
+        let t = nextToken
+        if network { waits[t] = (Date(), true) }
+        let start = network && !checking
+        if start { checking = true }
+        lock.unlock()
+        if start { DispatchQueue.main.async { scheduleCheck() } }
+        return t
+    }
+
+    static func end(_ t: Int) {
+        lock.lock()
+        waits.removeValue(forKey: t)
+        lock.unlock()
+    }
+
+    /// Seconds the oldest unfinished share read has been waiting (0: none).
+    static var waitingFor: Double {
+        lock.lock(); defer { lock.unlock() }
+        guard let oldest = waits.values.map({ $0.start }).min() else { return 0 }
+        return Date().timeIntervalSince(oldest)
+    }
+
+    /// Main thread: while share reads are under way, look every 0.25 s (stops when none is left).
+    private static func scheduleCheck() {
+        Timer.scheduledTimer(withTimeInterval: 0.25, repeats: false) { _ in
+            NotificationCenter.default.post(name: changed, object: nil)
+            lock.lock()
+            let more = !waits.isEmpty
+            if !more { checking = false }
+            lock.unlock()
+            if more { scheduleCheck() }
+        }
     }
 
     private var observer: NSObjectProtocol?
@@ -55,10 +100,21 @@ final class ActivityLight: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let now = Date()
-        let net = ActivityLight.netUntil > now, disk = ActivityLight.diskUntil > now
-        let c: NSColor = net ? .systemOrange : (disk ? .systemBlue : ThemeManager.shared.secondaryText.withAlphaComponent(0.25))
+        let wait = ActivityLight.waitingFor
+        let stalled = wait >= ActivityLight.stallSeconds
+        let net = ActivityLight.netUntil > now || wait > 0, disk = ActivityLight.diskUntil > now
+        let c: NSColor = stalled ? .systemRed : (net ? .systemOrange : (disk ? .systemBlue : ThemeManager.shared.secondaryText.withAlphaComponent(0.25)))
         c.setFill()
         NSBezierPath(ovalIn: bounds.insetBy(dx: 2, dy: 2)).fill()
-        if net || disk { toolTip = "Busy: " + Activity.shared.describe }
+        // What it is doing: PhotoLab's own label for bigger jobs; otherwise what the light saw.
+        let job = Activity.shared.describe
+        let known = !job.isEmpty && job.lowercased() != "idle"
+        if stalled {
+            toolTip = String(format: "Waiting for the server: no answer for %.1f s", wait) + (known ? " (" + job + ")" : "")
+        } else if net || disk {
+            toolTip = known ? "Busy: " + job : (net ? "Reading / writing on a network volume" : "Reading / writing on this Mac's disks")
+        } else {
+            toolTip = "Idle. Orange = network volume, blue = this Mac's disks, red = waiting for a server"
+        }
     }
 }

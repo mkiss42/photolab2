@@ -59,7 +59,7 @@ enum DirectoryReader {
             return readInner(dir, includeHidden: includeHidden, batchSize: batchSize, batch: batch, isCancelled: isCancelled, addedDate: addedDate)
         }
         let t0 = Date()
-        let r = readInner(dir, includeHidden: includeHidden, batchSize: batchSize, batch: batch, isCancelled: isCancelled, addedDate: addedDate)
+        let r = IOLog.waiting(dir) { readInner(dir, includeHidden: includeHidden, batchSize: batchSize, batch: batch, isCancelled: isCancelled, addedDate: addedDate) }
         let n = r.entries.count + r.hiddenSkipped
         log.record("FOLDER-READ items=\(n)" + (r.cancelled ? " (stopped)" : ""), seconds: Date().timeIntervalSince(t0), detail: dir,
                    error: r.folderError != nil ? "E-READ" : nil)

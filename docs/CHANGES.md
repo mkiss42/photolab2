@@ -1,5 +1,22 @@
 # Changes
 
+## 1.0.0-alpha.12 — fastest metadata writes by default; red light when a share hangs
+
+- Metadata (rule S3, your decision): the fastest, cheapest way is now the default - changed in place
+  where the file type allows it (only the metadata block, a few KB, is written - not the whole
+  50 MB NEF), checked by PhotoLab's own read-back, no picture fingerprint, no extra flush. Each
+  of these can be set back in Settings > Photography. If you changed these settings before, your
+  choice is kept.
+- Activity light: RED while a read on a share has had no answer for 0.7 s or more (hover: how long
+  it has been waiting). Orange / blue as before. The tooltip no longer says "Busy: idle": it says
+  what is going on (network / this Mac / waiting) when PhotoLab has no job name for it.
+- To-do added: contact sheet cells like PhotoLab 2's (metadata rows, clickable stars, clearer colours).
+
+Test checklist (3 minutes):
+[ ] 1  Rate a big NEF on the share: noticeably quicker than before; stars show; Undo works.
+[ ] 2  On the slow share: the light goes red during the hangs, orange while data comes.
+[ ] 3  Hover the light while it is orange: "Reading / writing on a network volume" (or a job name).
+
 ## 1.0.0-alpha.11 — contact sheet path, Esc goes back; Settings "?" fixed; metadata dates
 
 - Contact sheet window: shows where it is - a read-only path (select it to copy), at the top or

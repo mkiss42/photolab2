@@ -336,7 +336,7 @@ enum Prefs {
 
     /// 0.18.10: in-place changes checked by ExifTool (true, default) or by Find's fast check.
     static var inPlaceExifToolCheck: Bool {
-        get { return d.object(forKey: "inPlaceExifToolCheck") as? Bool ?? true }
+        get { return d.object(forKey: "inPlaceExifToolCheck") as? Bool ?? false }   // PhotoLab S3: the fast byte check
         set { d.set(newValue, forKey: "inPlaceExifToolCheck"); MetaPlan.inPlaceExifToolCheck = newValue }
     }
     /// 0.18.11: Find's own reader / sidecar writer / ExifTool double check / thorough flush (Settings > Photography).
@@ -356,7 +356,8 @@ enum Prefs {
     static var metaFlush: FlushMode {
         get {
             if let n = d.object(forKey: "metaFlush") as? Int, let m = FlushMode(rawValue: n) { return m }
-            return (d.object(forKey: "metaFullFlush") as? Bool ?? true) ? .full : .normal
+            if let old = d.object(forKey: "metaFullFlush") as? Bool { return old ? .full : .normal }
+            return .none   // PhotoLab S3 (user, 2026-11-28): the fastest way is the default
         }
         set { d.set(newValue.rawValue, forKey: "metaFlush"); MetaPlan.flush = newValue }
     }
@@ -386,7 +387,7 @@ enum Prefs {
 
     /// 0.18.8: change only the metadata part of files when possible (off by default).
     static var metaInPlace: Bool {
-        get { return d.bool(forKey: "metaInPlace") }
+        get { return d.object(forKey: "metaInPlace") as? Bool ?? true }   // PhotoLab S3: in place by default
         set { d.set(newValue, forKey: "metaInPlace"); MetaPlan.inPlace = newValue }
     }
     static var metaEmbeddedIPTC: Bool {
@@ -395,7 +396,7 @@ enum Prefs {
     }
     /// 0.18.5: MetaWriteMode raw value (default 1 = fingerprint, no working copy).
     static var metaWriteMode: MetaWriteMode {
-        get { return MetaWriteMode(rawValue: d.object(forKey: "metaWriteMode") as? Int ?? 1) ?? .fingerprint }
+        get { return MetaWriteMode(rawValue: d.object(forKey: "metaWriteMode") as? Int ?? 3) ?? .fast }   // PhotoLab S3: fastest
         set { d.set(newValue.rawValue, forKey: "metaWriteMode"); MetaPlan.writeMode = newValue }
     }
 

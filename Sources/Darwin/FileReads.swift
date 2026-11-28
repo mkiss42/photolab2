@@ -60,7 +60,7 @@ final class BlockReader {
         guard ensureOpen() else { return nil }
         let n = Int(min(Int64(count), size - offset))
         var d = Data(count: n)
-        let got = d.withUnsafeMutableBytes { p -> Int in
+        let got = IOLog.waiting(path) { d.withUnsafeMutableBytes { p -> Int in
             var done = 0
             while done < n {
                 let r = Darwin.pread(fd, p.baseAddress!.advanced(by: done), n - done, off_t(offset) + off_t(done))
@@ -69,7 +69,7 @@ final class BlockReader {
                 done += r
             }
             return done
-        }
+        } }
         if got < 0 { return nil }
         reads += 1
         bytes += Int64(got)
