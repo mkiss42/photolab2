@@ -1,5 +1,29 @@
 # Changes
 
+## 1.0.0-alpha.7 — smooth contact sheet again, far fewer bytes read from RAWs, fewer stalls
+
+- Photography mode and thumbnail view: each cell on screen is now a graphics layer (as in
+  PhotoLab 2's contact sheet). Scrolling only moves layers - nothing is drawn while you scroll;
+  a thumbnail arriving only puts its picture in place; a cell's name, stars and badges are drawn
+  again only when they change. Cells half a screen above and below are prepared ahead.
+- RAWs: alpha.3 let macOS read RAW details (stars, camera, size) through PhotoLab's shared reader,
+  and for RAWs macOS then reads the WHOLE file (your report: 34 MB per file). macOS reads RAW details
+  from the file itself again (only what it needs, as in Find). Thumbnails and previews still come
+  from the embedded JPEGs through the shared reader.
+- Stalls: the live-tags watcher (FSEvents) was started on the main thread; on a slow share that can
+  wait for the server. It is started in the background now.
+
+Test checklist (5 minutes, 12.6 Mac on the share):
+[ ] 1  Photography mode on a big NEF folder: scroll fast up and down - no stutter, no blank cells
+       staying blank; thumbnails fill in.
+[ ] 2  Same in the plain thumbnail view (View > as Thumbnails), and with a dark/light theme switch.
+[ ] 3  Select with a click, Shift-click and a drag rectangle; drag a thumbnail onto a folder: the
+       selection and the drop highlight show as before.
+[ ] 4  Rate and colour a few pictures: stars and colour squares appear on the right cells.
+[ ] 5  After browsing ~100 RAWs: Help > Short Report - retype READS and STALLS (KB/file should be
+       hundreds, not 34000; STALLS ideally none).
+[ ] 6  10.13 iMac: open the contact sheet once, scroll - it should look the same as on 12.6.
+
 ## 1.0.0-alpha.6 — DNGs are written inside only; drop files onto path bar folders
 
 - DNGs never get an XMP sidecar any more, and never read one. Stars, colour classes and metadata
