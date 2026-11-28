@@ -10,6 +10,8 @@
 - Activity light: RED while a read on a share has had no answer for 0.7 s or more (hover: how long
   it has been waiting). Orange / blue as before. The tooltip no longer says "Busy: idle": it says
   what is going on (network / this Mac / waiting) when PhotoLab has no job name for it.
+- Rule S6 finished: the metadata-date rule (alpha.11) now also decides what the inspector shows and
+  which values a metadata write starts from (so a RAW and its sidecar always agree with what you see).
 - To-do added: contact sheet cells like PhotoLab 2's (metadata rows, clickable stars, clearer colours).
 
 Test checklist (3 minutes):

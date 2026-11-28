@@ -272,7 +272,10 @@ final class InspectorController: NSObject {
         if let sc = Sidecars.find(for: path) {
             var e2: Int32 = 0
             let scMod = Sys.lstatInfo(sc, &e2)?.modified ?? 0
-            if MetaPlan.current(imageModified: e.modified, sidecarModified: scMod) == .sidecar {
+            // PhotoLab S6: metadata dates first when both have one.
+            let sd = XMPReader.read(path: sc)?.metadataDate
+            let id = sd == nil ? nil : ImageMeta.metadataDate(path)
+            if MetaPlan.current(imageModified: e.modified, sidecarModified: scMod, imageMetadataDate: id, sidecarMetadataDate: sd) == .sidecar {
                 var s = MetaSection("Description (sidecar \(Paths.lastComponent(sc)))")
                 if let f = XMPReader.read(path: sc) {
                     if let r = f.rating { s.add("Rating", MetaFormat.stars(r)) }

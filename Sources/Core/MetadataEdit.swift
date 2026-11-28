@@ -363,8 +363,15 @@ enum MetaPlan {
         var e: Int32 = 0
         let im = Sys.statInfo(image, &e)?.modified ?? 0
         let sm = Sys.statInfo(sc, &e)?.modified
-        return current(imageModified: im, sidecarModified: sm) == .sidecar ? (sc, .sidecar) : (image, .embedded)
+        // PhotoLab S6: the metadata dates first, when both sides have one.
+        let sd = XMPReader.read(path: sc)?.metadataDate
+        let id = sd == nil ? nil : imageMetadataDate?(image)
+        return current(imageModified: im, sidecarModified: sm, imageMetadataDate: id, sidecarMetadataDate: sd) == .sidecar
+            ? (sc, .sidecar) : (image, .embedded)
     }
+
+    /// PhotoLab S6: a picture's own xmp:MetadataDate (set by the macOS side; nil on Linux tests).
+    static var imageMetadataDate: ((String) -> Double?)?
 
     /// The complete set a RAW and its sidecar are both written with: everything the current set holds,
     /// with the change on top (so neither keeps a value the other lacks).

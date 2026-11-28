@@ -211,6 +211,13 @@ enum ImageMeta {
         return nil
     }
 
+    /// PhotoLab S6: the picture's own xmp:MetadataDate (embedded XMP), nil if it has none.
+    static func metadataDate(_ path: String) -> Double? {
+        guard let src = source(path), let meta = CGImageSourceCopyMetadataAtIndex(src, 0, nil),
+            let d = CGImageMetadataCopyStringValueWithPath(meta, nil, "xmp:MetadataDate" as CFString) else { return nil }
+        return MetaPlan.xmpDate(d as String)
+    }
+
     /// PhotoLab: the size the biggest version of this picture will have, upright - from the header
     /// (RAW: the largest embedded preview, which is what the preview shows; others: the image).
     static func finalSize(_ path: String, size: Int64? = nil, modified: Double? = nil) -> CGSize? {
