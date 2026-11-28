@@ -342,6 +342,20 @@ extension BrowserPane {
             a.addButton(withTitle: "Cancel")
             if a.runModal() != .alertFirstButtonReturn { return nil }
         }
+        // PhotoLab: renaming a set's row renames every member (DSC_1.NEF/.JPG/.xmp -> Job_1.NEF/.JPG/.xmp).
+        let members = list.groupSets ? list.setMembers(of: e.path) : []
+        if members.count > 1, let work = FileSets.renames(members: members, repName: e.name, newName: newName) {
+            do {
+                let (pairs, rec) = try App.ops.renameBatch(work)
+                registerUndo(rec)
+                let newRep = pairs.first { $0.from == e.path }?.to ?? Paths.join(Paths.parent(e.path), newName)
+                App.log.info("RENAME SET \(members.count) files -> \(FileSets.split(newName).stem)")
+                refreshList(select: [newRep])
+            } catch {
+                showFailure("Rename failed", error)
+            }
+            return nil
+        }
         do {
             let (newPath, rec) = try App.ops.rename(e.path, to: newName)
             registerUndo(rec)

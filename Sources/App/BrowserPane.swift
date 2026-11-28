@@ -924,7 +924,13 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
             // 0.18.15: in the list, the items shown - with opened folders' contents - and, when that differs,
             // how many are in this folder itself.
             let shown = viewMode == "list" ? list.table.numberOfRows : list.rootCount
-            parts.append("\(shown) item\(shown == 1 ? "" : "s")" + (shown != list.rootCount ? " shown (\(list.rootCount) in this folder)" : ""))
+            let sc = list.setCounts
+            if list.groupSets && sc.sets > 0 && shown == list.rootCount {
+                // PhotoLab: "7 items (1 set, 9 total)"
+                parts.append("\(shown) item\(shown == 1 ? "" : "s") (\(sc.sets) set\(sc.sets == 1 ? "" : "s"), \(sc.files) total)")
+            } else {
+                parts.append("\(shown) item\(shown == 1 ? "" : "s")" + (shown != list.rootCount ? " shown (\(list.rootCount) in this folder)" : ""))
+            }
         }
         let sel = list.table.selectedRowIndexes.count
         if sel > 0 { parts.append("\(sel) selected") }

@@ -310,7 +310,25 @@ final class FileTableView: NSOutlineView {
         cancelClickRename()
         FileDrag.photoDrag = nil   // a list drag never brings hidden sidecars along
         super.draggingSession(session, willBeginAt: screenPoint)
-        FileDrag.addFilenames(session.draggingPasteboard, nil)
+        // PhotoLab sets: a set's row drags all its files. Drops inside PhotoLab take them all
+        // (FileDrag.paths); other apps get the file list too (the older "file names" form).
+        let pb = session.draggingPasteboard
+        let opts: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        let dragged = Set((pb.readObjects(forClasses: [NSURL.self], options: opts) as? [URL])?.map { $0.path } ?? [])
+        var extra: [String] = []
+        if !dragged.isEmpty {
+            for i in 0..<numberOfRows {
+                guard let n = item(atRow: i) as? FileNode, !n.members.isEmpty, dragged.contains(n.path) else { continue }
+                extra += n.members.map { $0.path }.filter { !dragged.contains($0) }
+            }
+        }
+        if extra.isEmpty {
+            FileDrag.setDragExtra = nil
+            FileDrag.addFilenames(pb, nil)
+        } else {
+            FileDrag.addFilenames(pb, Array(dragged) + extra)
+            FileDrag.setDragExtra = (pb.changeCount, extra)   // after: adding a type moves the count
+        }
     }
 
     @objc private func clickRenameFired() {

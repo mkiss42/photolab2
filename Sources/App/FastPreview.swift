@@ -266,7 +266,7 @@ final class FastPreview: NSObject, NSWindowDelegate {
 
     private func show(force: Bool) {
         guard let list = owner else { return }
-        let entries = list.selectedEntries()
+        let entries = list.selectedRowEntries()   // a set row: its RAW (or JPEG)
         guard let e = entries.first else { return }
         if !force && e.path == currentPath { return }
         currentPath = e.path

@@ -99,6 +99,21 @@ final class PhotoSelfTest {
 
         // 40-44 PhotoLab: embedded previews through the shared reader (CameraPreviews, FileReads).
         embeddedPreviewChecks()
+        // 48 PhotoLab: sets (RAW + JPEG + sidecar as one row).
+        let setDir = p("sets")
+        _ = files.makeDir(setDir)
+        for n in ["DSC_1.NEF", "DSC_1.JPG", "DSC_1.xmp", "DSC_2.JPG", "notes.txt", "DSC_3.xmp"] {
+            _ = files.writeData(Data("x".utf8), to: Paths.join(setDir, n))
+        }
+        let setRows = FileSets.rows(DirectoryReader.read(setDir).entries)
+        let set1 = setRows.first { $0.entry.name == "DSC_1.NEF" }
+        let ren = set1.flatMap { FileSets.renames(members: $0.members, repName: "DSC_1.NEF", newName: "Job_1.NEF") } ?? []
+        check("T-PHOTO-48", "sets: DSC_1 NEF+JPG+XMP one row (RAW shown), others alone; renaming the row renames all three",
+              setRows.count == 4 && set1.map { FileSets.extLabel($0.entry.name, members: $0.members) } == "NEF+JPG+XMP"
+                && set1?.entry.size == 3 && Set(ren.map { $0.newName }) == ["Job_1.NEF", "Job_1.JPG", "Job_1.xmp"]
+                && FileSets.renames(members: set1?.members ?? [], repName: "DSC_1.NEF", newName: "Job_1.TIF") == nil,
+              "\(setRows.map { $0.entry.name + "/" + "\($0.members.count)" }) \(ren.map { $0.newName })")
+
         // 45 PhotoLab: xmp:Label follows the colour class (ColorClass is the master).
         var lc = MetaChange()
         lc.colorClass = 4

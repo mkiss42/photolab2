@@ -387,7 +387,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSSpl
 
     func updateInspector() {
         guard inspectorShown, let p = focusedPane else { return }
-        inspector.show(entries: p.list.selectedEntries(), folder: p.currentPath)
+        inspector.show(entries: p.list.selectedRowEntries(), folder: p.currentPath)   // a set: its representative
     }
 
     /// Show/hide the inspector. Showing it widens the window (the panes keep their size) as far as the

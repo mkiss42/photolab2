@@ -106,6 +106,9 @@ extension BrowserPane {
         photoOutline.isHidden = viewMode != "photo"
         photoOutline.needsDisplay = true
         if focus { window?.makeFirstResponder(gridOn ? grid as NSView : list.table as NSView) }
+        // PhotoLab: sets (RAW + JPEG + XMP) are one row in the list view; the thumbnail views show files.
+        let sets = viewMode == "list" && FileSets.enabled
+        if list.groupSets != sets { list.groupSets = sets; list.regroup() }
         if viewMode != "photo" {
             PhotoFactsStore.shared.cancel()
             photoFacts = [:]
@@ -484,6 +487,14 @@ extension BrowserPane {
     func applyMetadata(_ paths: [String], _ c: MetaChange, title: String, background: Bool = false, done: ((BatchReport) -> Void)? = nil) {
         // 0.18.10: hidden JPEG twins get the same stars, labels and metadata (Settings > Photography).
         var all = paths
+        // PhotoLab: a set row's pictures (RAW and JPEG) get the same values (its sidecar is handled with the RAW).
+        if list.groupSets {
+            for p in paths {
+                for m in list.setMembers(of: p) where m.path != p && !PhotoFormats.isSidecar(m.name) && PhotoFormats.isImage(m.name) && !all.contains(m.path) {
+                    all.append(m.path)
+                }
+            }
+        }
         if viewMode == "photo" && Prefs.hideJPEGTwins && Prefs.twinsShareMetadata {
             all += RawTwins.twins(of: paths) { d in ((try? FileManager.default.contentsOfDirectory(atPath: d)) ?? []) }
         }

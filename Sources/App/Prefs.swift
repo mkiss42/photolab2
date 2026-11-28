@@ -10,7 +10,7 @@ enum Prefs {
         static let foldersFirst = "foldersFirst"
         static let sortColumn = "sortColumn"
         static let sortAscending = "sortAscending"
-        static let visibleColumns = "visibleColumns3"   // 3: default became Modified + Size only
+        static let visibleColumns = "visibleColumns4"   // 4 (PhotoLab): Modified + Size + Ext
         static let columnWidths = "columnWidths2"
         static let favorites = "favorites"
         static let favoriteNames = "favoriteNames"
@@ -75,7 +75,7 @@ enum Prefs {
             Key.foldersFirst: false,
             Key.sortColumn: "name",
             Key.sortAscending: true,
-            Key.visibleColumns: ["modified", "size"],
+            Key.visibleColumns: ["modified", "size", "ext"],
             Key.favorites: [h, h + "/Desktop", h + "/Documents", h + "/Downloads", h + "/Pictures", "/Applications"],
             Key.startMode: "home",
             Key.sidebarWidth: 190.0,
@@ -204,7 +204,7 @@ enum Prefs {
     }
 
     static var visibleColumns: [String] {
-        get { return d.stringArray(forKey: Key.visibleColumns) ?? ["modified", "size"] }
+        get { return d.stringArray(forKey: Key.visibleColumns) ?? ["modified", "size", "ext"] }
         set { d.set(newValue, forKey: Key.visibleColumns) }
     }
 

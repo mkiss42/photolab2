@@ -67,8 +67,15 @@ enum FileDrag {
         for o in objs {
             if let u = o as? URL, u.isFileURL { out.append(u.path) } else if let u = o as? NSURL, let p = u.path { out.append(p) }
         }
+        // PhotoLab sets: the other files of dragged set rows (this drag only).
+        if let x = setDragExtra, x.stamp == pasteboard(info).changeCount {
+            for p in x.paths where !out.contains(p) { out.append(p) }
+        }
         return out
     }
+
+    /// PhotoLab: the members of set rows in the current list drag (pasteboard change count, paths).
+    static var setDragExtra: (stamp: Int, paths: [String])?
 
     /// FTP items being dragged (set while hovering; used when they are dropped).
     static var ftpDropPayload: FTPDragPayload?

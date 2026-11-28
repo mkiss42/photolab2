@@ -11,6 +11,8 @@ final class FileNode {
     weak var parent: FileNode?
     /// nil = not loaded yet.
     var children: [FileNode]? = nil
+    /// PhotoLab sets: this row stands for these files (RAW + JPEG + XMP...); empty for ordinary rows.
+    var members: [FileEntry] = []
     var loading = false
     var error: ReadProblem? = nil
 
@@ -20,6 +22,8 @@ final class FileNode {
     }
 
     var path: String { return entry.path }
+    /// Every file this row stands for.
+    var entries: [FileEntry] { return members.isEmpty ? [entry] : members }
 }
 
 final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate {
@@ -41,6 +45,8 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         ColumnDef(id: "added", title: "Added", width: 74, minWidth: 54, sortKey: .added),
         ColumnDef(id: "size", title: "Size", width: 64, minWidth: 44, sortKey: .size),
         ColumnDef(id: "kind", title: "Kind", width: 70, minWidth: 44, sortKey: .kind),
+        // PhotoLab: "NEF+JPG+XMP" for a set, the extension for other files.
+        ColumnDef(id: "ext", title: "Ext", width: 80, minWidth: 40, sortKey: nil),
     ]
 
     let table = FileTableView()
@@ -74,7 +80,39 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     }
 
     /// Top-level items in their current order (the folder's contents, or search results).
-    var rootEntries: [FileEntry] { return roots.map { $0.entry } }
+    /// Every file at the top level (a set row's members each), as the thumbnail grid and tools want them.
+    var rootEntries: [FileEntry] { return roots.flatMap { $0.entries } }
+
+    /// PhotoLab: show sets (RAW + JPEG + sidecar) as one row - the pane turns it on in the list view.
+    var groupSets = false
+
+    /// Rows, sets and files at the top level ("7 items (1 set, 9 total)").
+    var setCounts: (rows: Int, sets: Int, files: Int) {
+        return FileSets.counts(roots.map { ($0.entry, $0.members) })
+    }
+
+    /// Sets on/off changed: rebuild the rows from what is loaded (no new listing), keeping folders as
+    /// they are (opened, with their contents).
+    func regroup() {
+        let keep = selectedPaths()
+        let sort = currentSort
+        func level(_ nodes: [FileNode], parent: FileNode?) -> [FileNode] {
+            var folders: [String: FileNode] = [:]
+            for n in nodes where n.members.isEmpty && n.entry.kind != .file { folders[n.path] = n }
+            let made = sortedNodes(nodes.flatMap { $0.entries }, parent: parent, sort: sort)
+            return made.map { m in
+                if let f = folders[m.path] {
+                    if let c = f.children { f.children = level(c, parent: f) }
+                    return f
+                }
+                return m
+            }
+        }
+        retire(roots)
+        roots = level(roots, parent: nil)
+        table.reloadData()
+        select(paths: keep, scroll: false)
+    }
     private(set) var result = FolderReadResult()
     private(set) var loading = false
     private(set) var loadMillis = 0
@@ -400,6 +438,16 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     }
 
     private func sortedNodes(_ entries: [FileEntry], parent: FileNode?, sort: SortSpec) -> [FileNode] {
+        if groupSets {
+            let rows = FileSets.rows(entries)
+            var members: [String: [FileEntry]] = [:]
+            for r in rows where !r.members.isEmpty { members[r.entry.path] = r.members }
+            return Listing.sorted(rows.map { $0.entry }, by: sort, kindOf: KindCache.shared.kind).map { e in
+                let n = FileNode(e, parent: parent)
+                if let m = members[e.path] { n.members = m }
+                return n
+            }
+        }
         return Listing.sorted(entries, by: sort, kindOf: KindCache.shared.kind).map { FileNode($0, parent: parent) }
     }
 
@@ -1074,8 +1122,19 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         return table.selectedRowIndexes.compactMap { table.item(atRow: $0) as? FileNode }
     }
 
+    /// Every selected file - a set row counts as all its members (commands act on whole sets).
     func selectedEntries() -> [FileEntry] {
+        return selectedNodes().flatMap { $0.entries }
+    }
+
+    /// One entry per selected row (a set: its representative) - preview, inspector.
+    func selectedRowEntries() -> [FileEntry] {
         return selectedNodes().map { $0.entry }
+    }
+
+    /// The other files of the set whose row is `path` (empty if it isn't a set row).
+    func setMembers(of path: String) -> [FileEntry] {
+        return node(forPath: path)?.members ?? []
     }
 
     func selectedNames() -> [String] {
@@ -1105,7 +1164,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     func node(forPath p: String) -> FileNode? {
         for i in 0..<table.numberOfRows {
-            if let n = table.item(atRow: i) as? FileNode, n.path == p { return n }
+            if let n = table.item(atRow: i) as? FileNode, n.path == p || n.members.contains(where: { $0.path == p }) { return n }
         }
         return nil
     }
@@ -1130,7 +1189,8 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         let wanted = Set(paths)
         var idx = IndexSet()
         for i in 0..<table.numberOfRows {
-            if let n = table.item(atRow: i) as? FileNode, wanted.contains(n.path) { idx.insert(i) }
+            if let n = table.item(atRow: i) as? FileNode,
+                wanted.contains(n.path) || n.members.contains(where: { wanted.contains($0.path) }) { idx.insert(i) }
         }
         table.selectRowIndexes(idx, byExtendingSelection: false)
         if scroll, let first = idx.first { table.scrollRowToVisible(first) }
@@ -1217,6 +1277,8 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
             }
         case "kind":
             v.textField?.stringValue = KindCache.shared.kind(e)
+        case "ext":
+            v.textField?.stringValue = e.kind == .file ? FileSets.extLabel(e.name, members: n.members) : ""
         default:
             v.textField?.stringValue = ""
         }
