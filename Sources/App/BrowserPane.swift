@@ -95,6 +95,8 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
     /// and one in the status bar while thumbnails are being made.
     let loadingSpinner = NSProgressIndicator()
     let thumbSpinner = NSProgressIndicator()
+    /// PhotoLab P15: the activity light (status bar, left).
+    let activityLight = ActivityLight(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
     var backgroundWrites = 0
     private var backgroundChecks = 0
     private let problemButton = makeButton("", nil, #selector(BrowserPane.showProblems(_:)))
@@ -347,6 +349,8 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
         thumbSpinner.controlSize = .small
         thumbSpinner.toolTip = "Making thumbnails"
         statusBar.addSubview(thumbSpinner)
+        activityLight.translatesAutoresizingMaskIntoConstraints = false
+        statusBar.addSubview(activityLight)
         NSLayoutConstraint.activate([
             thumbSpinner.trailingAnchor.constraint(equalTo: backgroundSpinner.leadingAnchor, constant: -6),
             thumbSpinner.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
@@ -364,7 +368,11 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
         moveEarlier.translatesAutoresizingMaskIntoConstraints = false
         moveLater.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            statusLabel.leadingAnchor.constraint(equalTo: statusBar.leadingAnchor, constant: 10),
+            activityLight.leadingAnchor.constraint(equalTo: statusBar.leadingAnchor, constant: 8),
+            activityLight.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
+            activityLight.widthAnchor.constraint(equalToConstant: 10),
+            activityLight.heightAnchor.constraint(equalToConstant: 10),
+            statusLabel.leadingAnchor.constraint(equalTo: activityLight.trailingAnchor, constant: 6),
             statusLabel.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
             problemButton.leadingAnchor.constraint(greaterThanOrEqualTo: statusLabel.trailingAnchor, constant: 12),
             problemButton.trailingAnchor.constraint(equalTo: backgroundSpinner.leadingAnchor, constant: -8),

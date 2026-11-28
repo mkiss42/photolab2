@@ -57,7 +57,7 @@ Each item: verify Find's version first (keep it if it is as good), else port.
 | P11 | XMP:ColorClass master, xmp:Label kept in step | decision 2026-11-26 | done alpha.3 (both writers: ExifTool and Find's in-place XMP; Label = Red/Orange/Yellow/Green/Blue/Purple/Cyan/Gray for classes 1-8; T-PHOTO-45) |
 | P12 | Brain, shared cache, ingest, AI, Goodbye Drill | PL2 plan / PL1 | later phases |
 | P13 | Split panes / combo window (tree + sheet + inspector + tools) | user | Find has split panes; combo window to discuss |
-| P15 | Activity light + activity window (only if cheap) | user | later |
+| P15 | Activity light + activity window (only if cheap) | user | done alpha.11 (status bar dot: orange = network, blue = local disk; event-driven from the I/O logs, max 4 updates/s, nothing runs when idle; tooltip = what PhotoLab is busy with). Activity window: later, if wanted |
 | P16 | FTP: PhotoLab 2's FTP logic (more reliable than Find's), opened in a pane / window like any folder, every FTP pane with PhotoLab 2's read-only console at the bottom | PL2 + user | todo |
 
 ## 5. File-safety rules where Find and PhotoLab 2 differ (decided one by one)

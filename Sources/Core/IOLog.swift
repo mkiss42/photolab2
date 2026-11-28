@@ -121,6 +121,7 @@ final class IOLog {
     /// A copy from `src` to `dst`: in the network log when either side is a share, in the disk log
     /// when either side is on this Mac.
     static func copy(_ what: String, src: String, dst: String, bytes: Int64, seconds: Double, error: String? = nil) {
+        activity?(isNetworkPath(src) || isNetworkPath(dst))
         let sNet = isNetworkPath(src), dNet = isNetworkPath(dst)
         let detail = "\(src) -> \(dst)"
         if sNet || dNet {
@@ -133,16 +134,25 @@ final class IOLog {
 
     /// A small read of a file (thumbnail, preview, header), counted in the log of its volume.
     static func smallRead(_ path: String, bytes: Int64) {
-        (isNetworkPath(path) ? network : disk)?.countSmallRead(bytes: bytes)
+        let net = isNetworkPath(path)
+        (net ? network : disk)?.countSmallRead(bytes: bytes)
+        activity?(net)
     }
+
+    /// PhotoLab activity light: told (at most a few times a second, see `pulse`) that PhotoLab reads or
+    /// writes - true = a network volume. Nothing runs when nothing is read.
+    static var activity: ((Bool) -> Void)?
 
     /// More bytes of a file already counted by smallRead (PhotoLab's shared readers: one file, many reads).
     static func smallReadBytes(_ path: String, bytes: Int64) {
-        (isNetworkPath(path) ? network : disk)?.countSmallRead(bytes: bytes, newFile: false)
+        let net = isNetworkPath(path)
+        (net ? network : disk)?.countSmallRead(bytes: bytes, newFile: false)
+        activity?(net)
     }
 
     /// An operation on one file (read and written in place), in the log of its volume.
     static func onFile(_ what: String, path: String, read: Int64, written: Int64, seconds: Double, error: String? = nil) {
+        activity?(isNetworkPath(path))
         (isNetworkPath(path) ? network : disk)?.record(what, read: read, written: written, seconds: seconds, detail: path, error: error)
     }
 

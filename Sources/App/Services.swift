@@ -53,6 +53,7 @@ enum App {
         IOLog.network = IOLog(files: files, network: true, appVersion: App.version)
         IOLog.disk = IOLog(files: files, network: false, appVersion: App.version)
         IOLog.readEconomy = { FileReads.economy(network: $0) }
+        ActivityLight.install()
         Log.debugEnabled = Prefs.debugLogging
         // Phase 5: notes about operations in progress; finish what a crash or power cut interrupted,
         // before anything else can run.

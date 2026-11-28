@@ -12,6 +12,9 @@
   (xmp:MetadataDate), the newer one decides whose stars, colour class and label are shown - file
   dates change when files are copied, metadata dates don't. Otherwise, as before, the newer file.
   (The inspector and writing still go by file dates; next step.)
+- Activity light: a small dot at the left of each status bar - orange while PhotoLab reads or writes
+  on a network volume, blue on this Mac's disks, grey when idle (its tooltip says what PhotoLab is
+  busy with). It costs nothing while idle: it only reacts to PhotoLab's own reads and writes.
 - To-do added: FTP from PhotoLab 2, opened like any folder, with the read-only console at the bottom.
 
 Test checklist (3 minutes):
@@ -19,6 +22,8 @@ Test checklist (3 minutes):
        it moves to the bottom. Select it, Cmd-C, paste somewhere: the path.
 [ ] 2  Esc in the contact sheet window: the main window comes to the front.
 [ ] 3  Settings: "?" on, "?" off: every checkbox still has its words. Switch sections: unchanged.
+[ ] 4  Open a share folder in Photography mode: the dot flickers orange while thumbnails load,
+       then goes grey.
 
 ## 1.0.0-alpha.10 — the contact sheet window; filter; Settings search; Native look
 
