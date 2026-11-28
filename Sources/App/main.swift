@@ -38,6 +38,17 @@ if arguments.contains("--searchtest") {
     exit(t.failed == 0 ? 0 : 1)
 }
 
+if let i = arguments.index(of: "--ftptest") {
+    App.start()
+    let addr = i + 1 < arguments.count ? arguments[i + 1] : "127.0.0.1:2121"
+    let t = FTPSelfTest(files: App.files)
+    let text = t.run(server: addr, appVersion: App.version)
+    App.files.writeText(text, to: Paths.join(App.files.logsDir, "ftptest-\(Ascii.fileStamp()).txt"))
+    App.log.flush()
+    print(text, terminator: "")
+    exit(t.failed == 0 ? 0 : 1)
+}
+
 if arguments.contains("--indextest") {
     App.start()
     let t = IndexSelfTest(files: App.files, isPackage: { p, ext in KindCache.shared.isPackage(path: p, ext: ext) })

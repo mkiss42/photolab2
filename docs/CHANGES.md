@@ -1,5 +1,26 @@
 # Changes
 
+## 1.0.0-alpha.17 — FTP keeps its connection open
+
+- FTP: PhotoLab now logs in once and keeps the connection open while the pane shows the server.
+  Listings, renames, new folders, deletes and size checks all go over it (before, every one of them
+  was a new connection and a new login). Opening folders on an FTP server is faster, and the console
+  shows one login instead of one per click.
+- If the server drops the connection (servers close idle connections after a few minutes), the next
+  click logs in again by itself - at most 3 tries, then a message says what happened.
+- Uploads and downloads still run on their own connections, so a long copy never holds up browsing.
+- If a server refuses data connections over the kept-open link, PhotoLab falls back to the old way.
+- New self-test --ftptest (CI runs it against a local test FTP server): list, new folder, upload,
+  size, rename, a broken connection logged in again, delete, password never shown.
+
+Test checklist (3 minutes):
+[ ] 1  Open an FTP server: the console shows one USER/PASS ****, then each folder you open is just
+       EPSV/MLSD - no new login.
+[ ] 2  Rename, make a folder, delete a test file: all work; still no new login in the console.
+[ ] 3  Leave the pane idle for 10+ minutes, then open a folder: the console says "logging in again"
+       and the folder opens.
+[ ] 4  Upload and download a file while browsing: both still work.
+
 ## 1.0.0-alpha.16 — copy progress as a small panel; FTP console resizable; F5 = Refresh
 
 - Copies, moves and FTP transfers now show in a small panel at the bottom right of the screen (as in

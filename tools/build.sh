@@ -191,6 +191,15 @@ if [ "$WITH_SELFTEST" = 1 ]; then
       fi
     done
   done
+  # PhotoLab: the kept-open FTP connection, against a local test server when CI started one.
+  if [ -n "${PHOTOLAB_FTP_TEST:-}" ]; then
+    ST="$BUILD/ftptest.txt"
+    "$EXE" --ftptest "$PHOTOLAB_FTP_TEST" > "$ST" 2>&1
+    RC=$?
+    note "ftptest rc=$RC $(grep -E 'PASSED|FAILED' "$ST" | tail -n 1)"
+    grep -E '^(FAIL|E-)' "$ST" | head -n 20 | while IFS= read -r l; do note "  $l"; done
+    if [ $RC -ne 0 ]; then tail -n 60 "$ST" >> "$RAW"; fail "E-BUILD-12" "FTP self-test failed"; fi
+  fi
 fi
 
 # ---- Disk image ----------------------------------------------------------------------------

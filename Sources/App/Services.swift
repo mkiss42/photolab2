@@ -5,7 +5,7 @@ import AppKit
 import CoreServices
 
 enum App {
-    static let version = "1.0.0-alpha.16"
+    static let version = "1.0.0-alpha.17"
     static var files: AppFiles!
     static var log: Log!
     static var ops: FileOperations!

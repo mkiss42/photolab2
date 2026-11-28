@@ -976,6 +976,9 @@ extension BrowserPane {
         guard let b = ftpBrowser else { return }
         b.stopRequested = true
         b.client.traffic = nil
+        // The kept-open connection says goodbye (off the main thread: it may wait for the server).
+        let client = b.client
+        DispatchQueue.global(qos: .utility).async { client.session.quit() }
         b.console?.scroll.removeFromSuperview()
         b.scroll.removeFromSuperview()
         b.split?.removeFromSuperview()

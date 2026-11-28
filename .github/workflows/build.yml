@@ -34,6 +34,13 @@ jobs:
           if [ -z "$X" ]; then echo "E-CI-1 no Xcode 26 on this runner image"; ls -d /Applications/Xcode*.app; exit 1; fi
           echo "DEVELOPER_DIR=$X/Contents/Developer" >> "$GITHUB_ENV"
           echo "Using $X"
+      - name: Local FTP test server (PhotoLab FTP self-test)
+        run: |
+          python3 -m pip install --user --break-system-packages pyftpdlib >/dev/null 2>&1 || python3 -m pip install --user pyftpdlib
+          mkdir -p /tmp/ftproot
+          nohup python3 -m pyftpdlib -p 2121 -w -d /tmp/ftproot > /tmp/ftpd.log 2>&1 &
+          sleep 2
+          echo "PHOTOLAB_FTP_TEST=127.0.0.1:2121" >> "$GITHUB_ENV"
       - name: Build (legacy profile)
         run: ./build-legacy.sh
       - name: Build log

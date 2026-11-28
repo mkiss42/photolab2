@@ -316,7 +316,32 @@ final class FTPClient {
     var stallSeconds = 60
     /// PhotoLab (PhotoLab 1's FTP console): every line of FTP traffic - commands sent ("> "), the
     /// server's replies ("< ") and connection notes ("* ") - as it happens. The password never appears.
-    var traffic: ((String) -> Void)?
+    var traffic: ((String) -> Void)? {
+        didSet { session.traffic = traffic }
+    }
+    /// PhotoLab: the kept-open connection for listings and commands (transfers still use curl).
+    /// Off: every command is a curl run, as in Find.
+    var persistent = true
+    private(set) lazy var session = FTPSession(server: server)
+
+    /// The session's answer, or nil to do it with curl (persistent off, or no data connection
+    /// possible through the kept-open connection - curl then tries its own way).
+    private func viaSession<T>(_ body: (FTPSession) -> FTPResult<T>) -> FTPResult<T>? {
+        guard persistent else { return nil }
+        let r = body(session)
+        if case .failed(let f) = r, f.code == "FTP-DATA" { return nil }
+        return r
+    }
+
+    /// One command through the kept-open connection: nil = done; else what went wrong.
+    private func sessionCommand(_ r: FTPResult<FTPSession.Outcome>, refusedCode: String, refused: String) -> FTPFailure? {
+        switch r {
+        case .failed(let f): return f
+        case .ok(.ok): return nil
+        case .ok(.refused(let code, let text)):
+            return FTPFailure(code: refusedCode, text: refused + " (\(code) \(text.trimmingCharacters(in: .whitespacesAndNewlines)))")
+        }
+    }
 
     /// One line of curl's -v output for the console, or nil if it is not traffic.
     static func trafficLine(_ raw: String) -> String? {
@@ -569,6 +594,7 @@ final class FTPClient {
     // MARK: Listing
 
     func list(_ dir: [String]) -> FTPResult<[FTPEntry]> {
+        if let r = viaSession({ $0.list(dir) }) { return r }
         let u = url(dir, dir: true)
         let m = run(["-X", "MLSD", u], timeout: 120)
         if m.status == 0, let text = String(data: m.out, encoding: .utf8) ?? String(data: m.out, encoding: .isoLatin1),
@@ -587,6 +613,7 @@ final class FTPClient {
 
     /// The size the server reports for a file (SIZE), or from its folder listing.
     func size(_ file: [String]) -> Int64? {
+        if persistent, let n = session.size(file) { return n }
         let r = run(["-I", url(file, dir: false)], timeout: 60)
         if r.status == 0, let text = String(data: r.out, encoding: .utf8) {
             for line in text.components(separatedBy: "\n") where line.lowercased().hasPrefix("content-length:") {
@@ -636,12 +663,17 @@ final class FTPClient {
         let dir = Array(file.dropLast())
         // DELE with the path from the login folder, sent right after logging in (before curl changes
         // folder and lists it). Nothing else is sent.
+        if persistent {
+            if let f = sessionCommand(session.simple("DELE", file), refusedCode: "FTP-DELE",
+                                      refused: "The server refused to delete it - you may not have permission in this folder") { return f }
+        } else {
         let r = run(["-Q", "DELE " + file.joined(separator: "/"), url(dir, dir: true), "-o", "/dev/null"], timeout: 120)
         if r.status != 0 {
             if r.status == 21 || r.status == 9 {
                 return FTPFailure(code: "FTP-DELE", text: "The server refused to delete it - you may not have permission in this folder.")
             }
             return FTPClient.failure(r, doing: "delete it")
+        }
         }
         guard let after = list(dir).value else {
             return FTPFailure(code: "FTP-CHECK", text: "Deleted, but the folder could not be listed again to confirm.")
@@ -670,12 +702,17 @@ final class FTPClient {
             return FTPFailure(code: "FTP-EXISTS", text: "\u{201C}\(newName)\u{201D} is already in this folder. Nothing was renamed.")
         }
         let from = file.joined(separator: "/"), to = (dir + [newName]).joined(separator: "/")
+        if persistent {
+            if let f = sessionCommand(session.renameOnServer(file, dir + [newName]), refusedCode: "FTP-RENAME",
+                                      refused: "The server refused to rename it - you may not have permission in this folder") { return f }
+        } else {
         let r = run(["-Q", "RNFR " + from, "-Q", "RNTO " + to, url(dir, dir: true), "-o", "/dev/null"], timeout: 120)
         if r.status != 0 {
             if r.status == 21 || r.status == 9 {
                 return FTPFailure(code: "FTP-RENAME", text: "The server refused to rename it - you may not have permission in this folder.")
             }
             return FTPClient.failure(r, doing: "rename it")
+        }
         }
         guard let after = list(dir).value else {
             return FTPFailure(code: "FTP-CHECK", text: "Renamed, but the folder could not be listed again to confirm.")
@@ -703,6 +740,10 @@ final class FTPClient {
         if there.contains(where: { $0.name.lowercased() == name.lowercased() }) {
             return FTPFailure(code: "FTP-EXISTS", text: "\u{201C}\(name)\u{201D} is already in \(destDir.last ?? "the top folder"). Nothing was moved or replaced.")
         }
+        if persistent {
+            if let f = sessionCommand(session.renameOnServer(item, destDir + [name]), refusedCode: "FTP-MOVE",
+                                      refused: "The server refused to move it - you may not have permission there") { return f }
+        } else {
         let r = run(["-Q", "RNFR " + item.joined(separator: "/"), "-Q", "RNTO " + (destDir + [name]).joined(separator: "/"),
                      url(fromDir, dir: true), "-o", "/dev/null"], timeout: 120)
         if r.status != 0 {
@@ -710,6 +751,7 @@ final class FTPClient {
                 return FTPFailure(code: "FTP-MOVE", text: "The server refused to move it - you may not have permission there.")
             }
             return FTPClient.failure(r, doing: "move it")
+        }
         }
         guard let after = list(destDir).value, after.contains(where: { $0.name == name }) else {
             return FTPFailure(code: "FTP-CHECK", text: "The server answered, but \u{201C}\(name)\u{201D} could not be found in the destination to confirm.")
@@ -728,12 +770,17 @@ final class FTPClient {
         if before.contains(where: { $0.name.lowercased() == name.lowercased() }) {
             return FTPFailure(code: "FTP-EXISTS", text: "\u{201C}\(name)\u{201D} is already in this folder.")
         }
+        if persistent {
+            if let f = sessionCommand(session.simple("MKD", dir + [name]), refusedCode: "FTP-MKD",
+                                      refused: "The server refused to make a folder here - you may not have permission in this folder") { return f }
+        } else {
         let r = run(["-Q", "MKD " + (dir + [name]).joined(separator: "/"), url(dir, dir: true), "-o", "/dev/null"], timeout: 120)
         if r.status != 0 {
             if r.status == 21 || r.status == 9 {
                 return FTPFailure(code: "FTP-MKD", text: "The server refused to make a folder here - you may not have permission in this folder.")
             }
             return FTPClient.failure(r, doing: "make a folder here")
+        }
         }
         guard let after = list(dir).value, after.contains(where: { $0.name == name && $0.isDir }) else {
             return FTPFailure(code: "FTP-CHECK", text: "The server answered, but the new folder could not be found to confirm.")
@@ -771,6 +818,13 @@ final class FTPClient {
         for d in dirs {
             if isCancelled() { return (files, folders, FTPFailure(code: "FTP-STOP", text: "Stopped. Deleted so far: \(files) files, \(folders) folders.")) }
             onItem(d.joined(separator: "/") + "/")
+            if persistent {
+                if sessionCommand(session.simple("RMD", d), refusedCode: "FTP-RMD", refused: "") != nil {
+                    return (files, folders, FTPFailure(code: "FTP-RMD", text: "The server refused to remove the folder \(d.last ?? "") - you may not have permission there."))
+                }
+                folders += 1
+                continue
+            }
             let r = run(["-Q", "RMD " + d.joined(separator: "/"), url(Array(d.dropLast()), dir: true), "-o", "/dev/null"], timeout: 120)
             if r.status != 0 {
                 return (files, folders, FTPFailure(code: "FTP-RMD", text: "The server refused to remove the folder \(d.last ?? "") - you may not have permission there."))
