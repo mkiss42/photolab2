@@ -235,6 +235,10 @@ final class SectionList: FillView {
     private(set) var selected = 0
     var onSelect: ((Int) -> Void)?
     private let rowHeight: CGFloat = 30
+    /// PhotoLab Settings search: matches per section (nil = no search); sections without any are dimmed.
+    var matchCounts: [Int]? { didSet { needsDisplay = true } }
+    /// Space above the first row (the search field sits there).
+    var topInset: CGFloat = 16 { didSet { needsDisplay = true } }
 
     func setTitles(_ t: [String]) {
         titles = t
@@ -254,25 +258,33 @@ final class SectionList: FillView {
         fillColor = tm.sidebar
         super.draw(dirtyRect)
         for (i, t) in titles.enumerated() {
-            let r = NSRect(x: 10, y: 16 + CGFloat(i) * rowHeight, width: bounds.width - 20, height: rowHeight - 4)
+            let r = NSRect(x: 10, y: topInset + CGFloat(i) * rowHeight, width: bounds.width - 20, height: rowHeight - 4)
+            let count = matchCounts.map { i < $0.count ? $0[i] : 0 }
+            let dim = count == 0
             if i == selected {
                 tm.selection.setFill()
                 NSBezierPath(roundedRect: r, xRadius: 6, yRadius: 6).fill()
                 tm.accent.setFill()
                 NSBezierPath(roundedRect: NSRect(x: r.minX, y: r.minY + 5, width: 3, height: r.height - 10), xRadius: 1.5, yRadius: 1.5).fill()
             }
-            let attrs: [AttrKey: Any] = [.foregroundColor: i == selected ? tm.text : tm.secondaryText,
+            let base = i == selected ? tm.text : tm.secondaryText
+            let attrs: [AttrKey: Any] = [.foregroundColor: dim ? base.withAlphaComponent(0.35) : base,
                                                        .font: i == selected ? NSFont.boldSystemFont(ofSize: 13) : NSFont.systemFont(ofSize: 13)]
             let a = NSAttributedString(string: t, attributes: attrs)
             let size = a.size()
             a.draw(with: NSRect(x: r.minX + 14, y: r.midY - size.height / 2, width: r.width - 18, height: size.height + 2), options: [.usesLineFragmentOrigin])
+            if let c = count, c > 0 {
+                let ca = NSAttributedString(string: "\(c)", attributes: [.foregroundColor: tm.accent, .font: NSFont.boldSystemFont(ofSize: 11)])
+                let cs = ca.size()
+                ca.draw(at: NSPoint(x: r.maxX - cs.width - 8, y: r.midY - cs.height / 2))
+            }
         }
     }
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
-        let i = Int((p.y - 16) / rowHeight)
-        guard p.y >= 16, i >= 0, i < titles.count, i != selected else { return }
+        let i = Int((p.y - topInset) / rowHeight)
+        guard p.y >= topInset, i >= 0, i < titles.count, i != selected else { return }
         select(i)
         onSelect?(i)
     }

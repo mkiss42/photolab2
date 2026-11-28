@@ -17,7 +17,7 @@ final class BrowserTab {
     }
 }
 
-final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, TabBarDelegate {
+final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, TabBarDelegate, NSSearchFieldDelegate {
 
     /// The window this pane lives in.
     weak var host: BrowserWindowController?
@@ -91,6 +91,10 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
     private let statusLabel = makeLabel("")
     /// 0.17: turns while a remembered listing (FTP or network share) is checked in the background.
     let backgroundSpinner = NSProgressIndicator()
+    /// PhotoLab (from PhotoLab 2): a spinner in the middle while a folder is read (nothing to show yet),
+    /// and one in the status bar while thumbnails are being made.
+    let loadingSpinner = NSProgressIndicator()
+    let thumbSpinner = NSProgressIndicator()
     var backgroundWrites = 0
     private var backgroundChecks = 0
     private let problemButton = makeButton("", nil, #selector(BrowserPane.showProblems(_:)))
@@ -111,11 +115,23 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
     private var forwardButton: ThemedButton!
     private var upButton: ThemedButton!
     private var tabBarHeight: NSLayoutConstraint!
+    private var navRowHeight: NSLayoutConstraint!
+    // PhotoLab: filter bar and path bar position.
+    let filterBar = FillView()
+    let filterField = NSSearchField()
+    private var filterBarHeight: NSLayoutConstraint!
+    private let pathRow = FillView()
+    private var pathRowHeight: NSLayoutConstraint!
+    private var pathBarTop: [NSLayoutConstraint] = []
+    private var pathBarBottom: [NSLayoutConstraint] = []
     private var freeSpaceText = ""
     private var observers: [NSObjectProtocol] = []
 
 
     var currentPath: String { return tabs.isEmpty ? NSHomeDirectory() : tabs[active].path }
+
+    /// PhotoLab: this pane is a contact sheet window's (Photography mode only; tabs; no navigation).
+    var isContactSheet: Bool { return host?.isContactSheet ?? false }
 
     init(path: String, host: BrowserWindowController) {
         self.host = host
@@ -127,7 +143,82 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
         active = 0
         observe()
         applyTheme()
+        applyPathBarPosition()
+        if isContactSheet {
+            restoreViewMode("photo")
+            navRowHeight.constant = 0
+            navRow.isHidden = true
+            pathRowHeight.constant = 0
+            pathRow.isHidden = true
+        }
         showTab(0, select: [])
+    }
+
+    // MARK: PhotoLab path bar position (Settings > General: top or bottom, from PhotoLab 2)
+
+    static var pathBarAtBottom: Bool {
+        get { return UserDefaults.standard.bool(forKey: "pathBarAtBottom") }
+        set { UserDefaults.standard.set(newValue, forKey: "pathBarAtBottom") }
+    }
+
+    func applyPathBarPosition() {
+        if isContactSheet { return }
+        let bottom = BrowserPane.pathBarAtBottom
+        NSLayoutConstraint.deactivate(bottom ? pathBarTop : pathBarBottom)
+        if bottom { pathRow.addSubview(pathBar) } else { navRow.addSubview(pathBar) }
+        NSLayoutConstraint.activate(bottom ? pathBarBottom : pathBarTop)
+        navRowHeight.constant = bottom ? 34 : 62
+        pathRowHeight.constant = bottom ? 32 : 0
+        pathRow.isHidden = !bottom
+    }
+
+    // MARK: PhotoLab filter bar (Cmd-F)
+
+    @objc func showFilter(_ sender: Any?) {
+        if ftpBrowser != nil { NSSound.beep(); return }
+        filterBarHeight.constant = 32
+        filterBar.isHidden = false
+        window?.makeFirstResponder(filterField)
+    }
+
+    @objc private func filterChanged(_ sender: Any?) {
+        list.setFilter(filterField.stringValue.trimmingCharacters(in: .whitespaces))
+        updateStatus()
+    }
+
+    func closeFilter(focusList: Bool) {
+        filterField.stringValue = ""
+        filterBarHeight.constant = 0
+        filterBar.isHidden = true
+        if !list.filterText.isEmpty { list.setFilter(""); updateStatus() }
+        if focusList { window?.makeFirstResponder(focusView) }
+    }
+
+    /// Esc clears and hides the filter; Down arrow / Return go to the list or thumbnails.
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard control === filterField else { return false }
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) { closeFilter(focusList: true); return true }
+        if commandSelector == #selector(NSResponder.moveDown(_:)) || commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            window?.makeFirstResponder(focusView)
+            if viewMode == "list" && list.table.selectedRow < 0 && list.table.numberOfRows > 0 {
+                list.table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+            }
+            return true
+        }
+        return false
+    }
+
+    /// PhotoLab contact sheet: show `folder` (in this tab, or a new one) with `select` selected.
+    func showContactSheet(_ folder: String, select: [String], newTab: Bool) {
+        if newTab {
+            saveTabState()
+            tabs.insert(BrowserTab(path: folder), at: active + 1)
+            showTab(active + 1, select: select)
+        } else if folder == currentPath {
+            if !select.isEmpty { list.select(paths: select.map { Paths.join(folder, $0) }, scroll: true); grid.setSelection(paths: select.map { Paths.join(folder, $0) }) }
+        } else {
+            navigate(to: folder, select: select)
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -184,10 +275,13 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
         // 0.17: two rows - the path bar alone on top (full width), everything else on the row below:
         // Back / Forward / Up on the left; views, new-pane buttons, search and close on the right.
         let row2 = navRow.bottomAnchor
-        NSLayoutConstraint.activate([
+        pathBarTop = [
             pathBar.leadingAnchor.constraint(equalTo: navRow.leadingAnchor, constant: 8),
             pathBar.trailingAnchor.constraint(equalTo: navRow.trailingAnchor, constant: -8),
             pathBar.topAnchor.constraint(equalTo: navRow.topAnchor, constant: 4),
+        ]
+        NSLayoutConstraint.activate(pathBarTop)
+        NSLayoutConstraint.activate([
             pathBar.heightAnchor.constraint(equalToConstant: 26),
             navStack.leadingAnchor.constraint(equalTo: navRow.leadingAnchor, constant: 10),
             navStack.centerYAnchor.constraint(equalTo: row2, constant: -15),
@@ -218,6 +312,22 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
         backgroundSpinner.toolTip = "Checking this folder on the server in the background (the list shown is the one remembered from last time; it updates by itself if anything changed)"
         backgroundSpinner.translatesAutoresizingMaskIntoConstraints = false
         statusBar.addSubview(backgroundSpinner)
+        for sp in [loadingSpinner, thumbSpinner] {
+            sp.style = .spinning
+            sp.isIndeterminate = true
+            sp.isDisplayedWhenStopped = false
+            sp.translatesAutoresizingMaskIntoConstraints = false
+        }
+        loadingSpinner.controlSize = .regular
+        thumbSpinner.controlSize = .small
+        thumbSpinner.toolTip = "Making thumbnails"
+        statusBar.addSubview(thumbSpinner)
+        NSLayoutConstraint.activate([
+            thumbSpinner.trailingAnchor.constraint(equalTo: backgroundSpinner.leadingAnchor, constant: -6),
+            thumbSpinner.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
+            thumbSpinner.widthAnchor.constraint(equalToConstant: 14),
+            thumbSpinner.heightAnchor.constraint(equalToConstant: 14),
+        ])
         moveEarlier = makeButton("\u{25C0}", self, #selector(movePaneEarlier(_:)), tip: "Move this pane one place to the left (up when stacked)")
         moveLater = makeButton("\u{25B6}", self, #selector(movePaneLater(_:)), tip: "Move this pane one place to the right (down when stacked)")
         statusBar.addSubview(moveEarlier)
@@ -252,12 +362,32 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
         pathBar.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(rawValue: 300), for: .horizontal)
         contentGlassHost.translatesAutoresizingMaskIntoConstraints = false
         mainPane.addSubview(contentGlassHost)
-        for v in [tabBar, navRow, search.bar, photoBar, list.scroll, gridScroll, statusBar] as [NSView] {
+        // PhotoLab: the filter bar (Cmd-F) under the search bar; the path bar's own row above the status
+        // bar when Settings put it at the bottom.
+        filterBar.isBar = true
+        filterField.placeholderString = "Filter names (Esc clears)"
+        filterField.sendsSearchStringImmediately = true
+        filterField.target = self
+        filterField.action = #selector(filterChanged(_:))
+        filterField.delegate = self
+        filterField.translatesAutoresizingMaskIntoConstraints = false
+        filterBar.addSubview(filterField)
+        pathRow.isBar = true
+        filterBar.isHidden = true
+        for v in [tabBar, navRow, search.bar, filterBar, photoBar, list.scroll, gridScroll, pathRow, statusBar] as [NSView] {
             mainPane.addSubview(v)
             v.translatesAutoresizingMaskIntoConstraints = false
         }
         tabBarHeight = tabBar.heightAnchor.constraint(equalToConstant: 0)
+        navRowHeight = navRow.heightAnchor.constraint(equalToConstant: 62)
         photoBarHeight = photoBar.heightAnchor.constraint(equalToConstant: 0)
+        filterBarHeight = filterBar.heightAnchor.constraint(equalToConstant: 0)
+        pathRowHeight = pathRow.heightAnchor.constraint(equalToConstant: 0)
+        pathBarBottom = [
+            pathBar.leadingAnchor.constraint(equalTo: pathRow.leadingAnchor, constant: 8),
+            pathBar.trailingAnchor.constraint(equalTo: pathRow.trailingAnchor, constant: -8),
+            pathBar.centerYAnchor.constraint(equalTo: pathRow.centerYAnchor),
+        ]
         NSLayoutConstraint.activate([
             tabBar.topAnchor.constraint(equalTo: mainPane.topAnchor),
             tabBar.leadingAnchor.constraint(equalTo: mainPane.leadingAnchor),
@@ -266,12 +396,19 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
             navRow.topAnchor.constraint(equalTo: tabBar.bottomAnchor),
             navRow.leadingAnchor.constraint(equalTo: mainPane.leadingAnchor),
             navRow.trailingAnchor.constraint(equalTo: mainPane.trailingAnchor),
-            navRow.heightAnchor.constraint(equalToConstant: 62),
+            navRowHeight,
             search.bar.topAnchor.constraint(equalTo: navRow.bottomAnchor),
             search.bar.leadingAnchor.constraint(equalTo: mainPane.leadingAnchor),
             search.bar.trailingAnchor.constraint(equalTo: mainPane.trailingAnchor),
             search.heightConstraint,
-            photoBar.topAnchor.constraint(equalTo: search.bar.bottomAnchor),
+            filterBar.topAnchor.constraint(equalTo: search.bar.bottomAnchor),
+            filterBar.leadingAnchor.constraint(equalTo: mainPane.leadingAnchor),
+            filterBar.trailingAnchor.constraint(equalTo: mainPane.trailingAnchor),
+            filterBarHeight,
+            filterField.leadingAnchor.constraint(equalTo: filterBar.leadingAnchor, constant: 8),
+            filterField.trailingAnchor.constraint(equalTo: filterBar.trailingAnchor, constant: -8),
+            filterField.centerYAnchor.constraint(equalTo: filterBar.centerYAnchor),
+            photoBar.topAnchor.constraint(equalTo: filterBar.bottomAnchor),
             photoBar.leadingAnchor.constraint(equalTo: mainPane.leadingAnchor),
             photoBar.trailingAnchor.constraint(equalTo: mainPane.trailingAnchor),
             photoBarHeight,
@@ -286,7 +423,11 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
             contentGlassHost.trailingAnchor.constraint(equalTo: list.scroll.trailingAnchor),
             list.scroll.leadingAnchor.constraint(equalTo: mainPane.leadingAnchor),
             list.scroll.trailingAnchor.constraint(equalTo: mainPane.trailingAnchor),
-            list.scroll.bottomAnchor.constraint(equalTo: statusBar.topAnchor),
+            list.scroll.bottomAnchor.constraint(equalTo: pathRow.topAnchor),
+            pathRow.leadingAnchor.constraint(equalTo: mainPane.leadingAnchor),
+            pathRow.trailingAnchor.constraint(equalTo: mainPane.trailingAnchor),
+            pathRow.bottomAnchor.constraint(equalTo: statusBar.topAnchor),
+            pathRowHeight,
             statusBar.leadingAnchor.constraint(equalTo: mainPane.leadingAnchor),
             statusBar.trailingAnchor.constraint(equalTo: mainPane.trailingAnchor),
             statusBar.bottomAnchor.constraint(equalTo: mainPane.bottomAnchor),
@@ -323,6 +464,11 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
             overlay.centerXAnchor.constraint(equalTo: list.scroll.centerXAnchor),
             overlay.centerYAnchor.constraint(equalTo: list.scroll.centerYAnchor),
             overlay.widthAnchor.constraint(lessThanOrEqualTo: list.scroll.widthAnchor, constant: -40),
+        ])
+        mainPane.addSubview(loadingSpinner)
+        NSLayoutConstraint.activate([
+            loadingSpinner.centerXAnchor.constraint(equalTo: list.scroll.centerXAnchor),
+            loadingSpinner.bottomAnchor.constraint(equalTo: overlay.topAnchor, constant: -10),
         ])
         reconnectButton.target = self
         reconnectButton.isHidden = true
@@ -459,6 +605,7 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
         let t = tabs[i]
         endSearchUI(reload: false)
         list.load(t.path, selectPaths: select.isEmpty ? t.selection : select.map { Paths.join(t.path, $0) }, showHidden: Prefs.showHidden)
+        showLoadingSoon()
         pathBar.setPath(t.path)
         if isFocused { host?.paneChangedFolder(self) }
         updateTabBar()
@@ -469,8 +616,10 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
     private func updateTabBar() {
         let titles = tabs.map { Paths.lastComponent($0.path) == "/" ? "Computer" : Paths.lastComponent($0.path) }
         tabBar.setTabs(titles, active: active)
-        tabBarHeight.constant = tabs.count > 1 ? 28 : 0
-        tabBar.isHidden = tabs.count <= 1
+        // A contact sheet window always shows its tabs (they name the folders).
+        let show = tabs.count > 1 || isContactSheet
+        tabBarHeight.constant = show ? 28 : 0
+        tabBar.isHidden = !show
     }
 
     func newTab(path: String) {
@@ -543,6 +692,7 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
         }
         saveTabState()
         rememberScroll()
+        if !list.filterText.isEmpty || !filterBar.isHidden { closeFilter(focusList: false) }   // a filter belongs to one folder
         if addHistory {
             tab.back.append(tab.path)
             if tab.back.count > 100 { tab.back.removeFirst() }
@@ -552,6 +702,7 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
         tab.selection = []
         restoreScroll(for: path)
         list.load(path, select: select, showHidden: Prefs.showHidden)
+        showLoadingSoon()
         pathBar.setPath(path)
         Prefs.noteVisit(path)
         if isFocused { host?.paneChangedFolder(self) }
@@ -561,6 +712,7 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
     }
 
     @objc func goBack(_ sender: Any?) {
+        if isContactSheet { NSSound.beep(); return }
         if let b = ftpBrowser {
             // FTP: the previous FTP folder; at the first one, back to this pane's local folder.
             if !b.goBack() { leaveFTP(reload: true) }
@@ -574,6 +726,7 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
     }
 
     @objc func goForward(_ sender: Any?) {
+        if isContactSheet { NSSound.beep(); return }
         if let b = ftpBrowser { b.goForward(); return }
         let tab = tabs[active]
         guard let next = tab.forward.popLast() else { NSSound.beep(); return }
@@ -586,6 +739,7 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
             tv.moveToBeginningOfDocument(nil)
             return
         }
+        if isContactSheet { NSSound.beep(); return }
         if let b = ftpBrowser { b.goUp(); return }
         let p = currentPath
         if p == "/" { NSSound.beep(); return }
@@ -891,7 +1045,26 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
         if any { backgroundSpinner.startAnimation(nil) } else { backgroundSpinner.stopAnimation(nil) }
     }
 
+    /// PhotoLab: "Reading <folder>..." with a spinner when a folder takes a moment and nothing shows yet.
+    func showLoadingSoon() {
+        let ticket = currentPath
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let s = self, s.currentPath == ticket, s.list.loading, s.list.rootCount == 0, s.ftpBrowser == nil else { return }
+            s.overlay.stringValue = "Reading \(Paths.lastComponent(ticket))\u{2026}"
+            s.overlay.textColor = ThemeManager.shared.secondaryText
+            s.overlay.isHidden = false
+            s.loadingSpinner.startAnimation(nil)
+            s.loadingShown = true
+        }
+    }
+    private var loadingShown = false
+
     func updateStatus() {
+        if loadingShown && (!list.loading || list.rootCount > 0) {
+            loadingShown = false
+            loadingSpinner.stopAnimation(nil)
+            if overlay.stringValue.hasPrefix("Reading ") { overlay.isHidden = true }
+        }
         if let b = ftpBrowser {
             setSpinner(b.refreshing || b.busy)
             statusLabel.textColor = ThemeManager.shared.secondaryText
@@ -936,6 +1109,7 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
         let sel = list.table.selectedRowIndexes.count
         if sel > 0 { parts.append("\(sel) selected") }
         if r.hiddenSkipped > 0 { parts.append("\(r.hiddenSkipped) hidden") }
+        if !list.filterText.isEmpty { parts.insert("filter \u{201C}\(list.filterText)\u{201D}", at: min(1, parts.count)) }
         if !freeSpaceText.isEmpty { parts.append(freeSpaceText) }
         statusLabel.stringValue = parts.joined(separator: "  \u{00B7}  ")
         let tm = ThemeManager.shared

@@ -84,7 +84,11 @@ final class ThumbnailGrid: NSView {
         q.qualityOfService = .userInitiated
         return q
     }()
-    private var pending = Set<String>()
+    private var pending = Set<String>() {
+        didSet { if pending.isEmpty != oldValue.isEmpty { onBusyChanged?(!pending.isEmpty) } }
+    }
+    /// PhotoLab: thumbnails being made (true) / all done (false) - the pane's spinner.
+    var onBusyChanged: ((Bool) -> Void)?
     /// Latest cached thumbnail per file (any size), for windows that want something to show at once.
     private static var latestKey: [String: String] = [:]
 

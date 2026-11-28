@@ -38,7 +38,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
     private let hiddenCheck = NSButton(checkboxWithTitle: "Show hidden files", target: nil, action: nil)
     private let foldersCheck = NSButton(checkboxWithTitle: "Keep folders on top when sorting by name or kind", target: nil, action: nil)
     private let sizesCheck = NSButton(checkboxWithTitle: "Calculate folder sizes (counted in the background after the list appears)", target: nil, action: nil)
-    private let qlCheck = NSButton(checkboxWithTitle: "Space bar opens macOS Quick Look instead of PhotoLab's Fast Preview", target: nil, action: nil)
+    private let qlCheck = NSButton(checkboxWithTitle: "Space on a file opens macOS Quick Look instead of PhotoLab's preview (a folder always opens in the contact sheet window)", target: nil, action: nil)
+    private let pathBottomCheck = NSButton(checkboxWithTitle: "Path bar at the bottom of the window (above the status bar)", target: nil, action: nil)
     private let reopenCheck = NSButton(checkboxWithTitle: "Reopen windows where and how they were when PhotoLab was quit", target: nil, action: nil)
     private let tabs = NSTabView(frame: NSRect(x: 0, y: 0, width: 760, height: 620))
     private let sidebarRows = NSStackView()
@@ -53,6 +54,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
     private var sidebarObserver: NSObjectProtocol?
 
     private let sections = SectionList()
+    // PhotoLab: search and explanations on/off.
+    private let help = SettingsHelp()
+    private let searchField = NSSearchField()
+    private let helpButton = NSButton(title: "?", target: nil, action: nil)
     private var themeObserver: NSObjectProtocol?
 
     init() {
@@ -115,10 +120,29 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         content.fillColor = ThemeManager.shared.background
         sections.setTitles(tabs.tabViewItems.map { $0.label })
         sections.onSelect = { [weak self] i in self?.tabs.selectTabViewItem(at: i) }
-        for v in [sections, tabs] as [NSView] {
+        for v in [sections, tabs, searchField, helpButton] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(v)
         }
+        sections.topInset = 52
+        searchField.placeholderString = "Search settings"
+        searchField.sendsSearchStringImmediately = true
+        searchField.target = self
+        searchField.action = #selector(searchSettings(_:))
+        helpButton.bezelStyle = .helpButton
+        helpButton.title = ""
+        helpButton.setButtonType(.pushOnPushOff)
+        helpButton.state = SettingsHelp.shown ? .on : .off
+        helpButton.target = self
+        helpButton.action = #selector(toggleHelp(_:))
+        helpButton.toolTip = "Show or hide the explanations under the settings (they are always in the tooltips)"
+        NSLayoutConstraint.activate([
+            searchField.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
+            searchField.topAnchor.constraint(equalTo: content.topAnchor, constant: 14),
+            searchField.trailingAnchor.constraint(equalTo: helpButton.leadingAnchor, constant: -6),
+            helpButton.trailingAnchor.constraint(equalTo: sections.trailingAnchor, constant: -8),
+            helpButton.centerYAnchor.constraint(equalTo: searchField.centerYAnchor),
+        ])
         NSLayoutConstraint.activate([
             sections.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             sections.topAnchor.constraint(equalTo: content.topAnchor),
@@ -144,6 +168,36 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
             self?.refreshSidebar()
         }
         refreshSidebar()
+        help.install(pages: scrolls.map { $0.page })
+    }
+
+    // MARK: PhotoLab search / explanations
+
+    @objc private func toggleHelp(_ sender: NSButton) {
+        SettingsHelp.shown = sender.state == .on
+        help.apply()
+        fitSections(nil)
+    }
+
+    @objc private func searchSettings(_ sender: NSSearchField) {
+        let q = sender.stringValue.trimmingCharacters(in: .whitespaces)
+        if q.isEmpty { sections.matchCounts = nil; return }
+        let found = scrolls.map { SettingsHelp.matches(q, on: $0.page) }
+        sections.matchCounts = found.map { $0.count }
+        let cur = tabs.indexOfTabViewItem(tabs.selectedTabViewItem ?? tabs.tabViewItems[0])
+        let pick = (cur < found.count && !found[cur].isEmpty) ? cur : (found.index { !$0.isEmpty } ?? -1)
+        guard pick >= 0 else { return }
+        if pick != cur { tabs.selectTabViewItem(at: pick); sections.select(pick) }
+        DispatchQueue.main.async { [weak self] in
+            self?.fitSections(nil)
+            if let v = found[pick].first(where: { !SettingsWindowController.hiddenInside($0) }) { SettingsHelp.flash(v) }
+        }
+    }
+
+    private static func hiddenInside(_ v: NSView) -> Bool {
+        var x: NSView? = v
+        while let y = x { if y.isHidden { return true }; x = y.superview }
+        return false
     }
 
     required init?(coder: NSCoder) {
@@ -660,6 +714,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         qlCheck.action = #selector(qlChanged(_:))
         reopenCheck.target = self
         reopenCheck.action = #selector(reopenChanged(_:))
+        pathBottomCheck.target = self
+        pathBottomCheck.action = #selector(pathBottomChanged(_:))
         let note = NSTextField(wrappingLabelWithString: "Saved previews, caches and clean-up: see Storage & Maintenance.\n\nReopened windows go back to their position, display and desktop, with their panes, tabs, view modes, sidebar and Info panel. If a display is gone they move to the main one. macOS has no official way for an app to choose a window's desktop; if this macOS refuses, the window opens on the current desktop.\n\nNew windows open in screen quarters: top-left, then top-right, bottom-left, bottom-right. If a window has been moved or resized, the next one opens top-left. With all four taken, a new window reuses the oldest window's quarter.\n\nRemoving an item moves it to the Trash. Only where there is no Trash (most shared volumes), or with File > Delete Immediately, does PhotoLab delete permanently - and only after you confirm, as in Finder. Nothing is ever overwritten.")
         note.textColor = NSColor.secondaryLabelColor
         let stack = NSStackView(views: [
@@ -669,6 +725,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
             foldersCheck,
             sizesCheck,
             qlCheck,
+            pathBottomCheck,
             reopenCheck,
             note,
         ])
@@ -696,12 +753,19 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         foldersCheck.state = Prefs.foldersFirst ? .on : .off
         sizesCheck.state = Prefs.calculateFolderSizes ? .on : .off
         qlCheck.state = Prefs.spaceOpensQuickLook ? .on : .off
+        pathBottomCheck.state = BrowserPane.pathBarAtBottom ? .on : .off
         reopenCheck.state = Prefs.reopenWindows ? .on : .off
     }
 
     @objc private func reopenChanged(_ sender: NSButton) {
         Prefs.reopenWindows = sender.state == .on
         App.log.info("Reopen windows at start: \(Prefs.reopenWindows ? "ON" : "OFF")")
+    }
+
+    @objc private func pathBottomChanged(_ sender: NSButton) {
+        BrowserPane.pathBarAtBottom = sender.state == .on
+        App.log.info("Path bar at the bottom: \(BrowserPane.pathBarAtBottom ? "ON" : "OFF")")
+        for w in (NSApp.delegate as? AppDelegate)?.windowControllers ?? [] { for p in w.panes { p.applyPathBarPosition() } }
     }
 
     @objc private func qlChanged(_ sender: NSButton) {
@@ -1059,6 +1123,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         sizeLabel.stringValue = "\(Int(working.fontSize)) pt"
         densityPopup.selectItem(at: working.density)
         darkCheck.state = working.dark ? .on : .off
+        // PhotoLab "Native": macOS decides light or dark (System Settings), so this box does nothing then.
+        darkCheck.isEnabled = working.name != Theme.nativeName
     }
 
     /// Editing a preset turns it into "Custom" so the preset itself stays as shipped.

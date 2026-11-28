@@ -296,6 +296,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: Windows
 
     @discardableResult
+    /// PhotoLab: the contact sheet window (the front one, or a new one at its remembered size: 80% of
+    /// the screen, centred, the first time). `newTab`: in a new tab of it.
+    func openContactSheet(_ folder: String, select: [String] = [], newTab: Bool) {
+        if let c = controllers.last(where: { $0.isContactSheet && $0.window?.isVisible == true }) {
+            c.pane.showContactSheet(folder, select: select, newTab: newTab)
+            c.window?.makeKeyAndOrderFront(nil)
+            c.window?.makeFirstResponder(c.pane.grid)
+            return
+        }
+        let c = BrowserWindowController(path: folder, contactSheet: true)
+        c.onClose = { [weak self] ctrl in
+            guard let s = self else { return }
+            s.controllers = s.controllers.filter { $0 !== ctrl }
+        }
+        controllers.append(c)
+        if let w = c.window {
+            w.setFrame(BrowserWindowController.contactSheetFrame(), display: false)
+            c.finishLayout()
+            w.makeKeyAndOrderFront(nil)
+            w.makeFirstResponder(c.pane.grid)
+        }
+        if !select.isEmpty { c.pane.showContactSheet(folder, select: select, newTab: false) }
+        App.log.info("Contact sheet window opened")
+    }
+
     func newWindow(path: String) -> BrowserWindowController {
         let reference = NSApp.keyWindow
         let c = BrowserWindowController(path: path)
@@ -768,8 +793,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         file.addItem(item("Add to Sidebar", #selector(BrowserPane.addToSidebar(_:)), "t", [.command, .control]))
         file.addItem(item("Show in Finder", #selector(BrowserPane.revealInFinder(_:)), "r", [.command, .shift]))
         file.addItem(NSMenuItem.separator())
-        file.addItem(item("Find\u{2026}", #selector(BrowserPane.focusSearch(_:)), "f"))
-        file.addItem(item("Search in Selected Folder\u{2026}", #selector(BrowserPane.searchHere(_:)), "f", [.command, .shift]))
+        // PhotoLab: Cmd-F filters the folder shown (as in PhotoLab 2); Cmd-Shift-F searches.
+        file.addItem(item("Filter\u{2026}", #selector(BrowserPane.showFilter(_:)), "f"))
+        file.addItem(item("Find\u{2026}", #selector(BrowserPane.focusSearch(_:)), "f", [.command, .shift]))
+        file.addItem(item("Search in Selected Folder\u{2026}", #selector(BrowserPane.searchHere(_:)), ""))
         addSubmenu(main, "File", file)
 
         // Edit

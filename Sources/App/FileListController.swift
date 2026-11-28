@@ -53,7 +53,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     let scroll = NSScrollView()
     private(set) var path = ""
     private(set) var roots: [FileNode] = [] {
-        didSet { scheduleRootsChanged() }
+        didSet { rootFilterCache = nil; filterCache.removeAll(); scheduleRootsChanged() }
     }
     /// Told (once per run-loop turn) whenever the top-level items change: the thumbnail grid follows it.
     var onRootsChanged: (() -> Void)?
@@ -472,6 +472,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         func walk(_ n: FileNode) {
             if let c = n.children {
                 n.children = sortLevel(c)
+                filterCache.removeAll()
                 for x in n.children ?? [] { walk(x) }
             }
         }
@@ -726,6 +727,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         me.retire(node.children)
         me.applyCachedSizes(kids)
         node.children = kids
+        filterCache.removeAll()
         node.error = r.folderError
         me.table.reloadItem(node, reloadChildren: true)
         me.onRowsChanged?()
@@ -878,6 +880,7 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
         for p in Array(expandedPaths) where Paths.isInside(p, root: node.path) { expandedPaths.remove(p) }
         retire(node.children)
         node.children = nil
+        filterCache.removeAll()
         table.reloadItem(node, reloadChildren: true)
     }
 
@@ -1146,17 +1149,21 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     /// Space: Fast Preview, or macOS Quick Look if chosen in Settings.
     func previewSelection() {
-        // PhotoLab (from PhotoLab 2): Space on one folder opens it in a new window, as a contact sheet
-        // (Photography mode), focused.
+        // PhotoLab: Space on one folder shows it in the contact sheet window; Shift-Space in a new tab
+        // of it. Shift-Space on a file: its folder in a new contact sheet tab, with the file selected.
         let rows = selectedRowEntries()
-        if rows.count == 1, let f = rows.first, f.kind == .directory, FileDrag.isDropFolder(f), let d = NSApp.delegate as? AppDelegate {
-            FastPreview.shared.close()
-            let c = d.newWindow(path: f.path)
-            c.pane.restoreViewMode("photo")
-            c.window?.makeKeyAndOrderFront(nil)
-            c.window?.makeFirstResponder(c.pane.grid)
-            App.log.info("Space on a folder: opened in a new window as a contact sheet")
-            return
+        let shift = NSEvent.modifierFlags.contains(.shift)
+        if rows.count == 1, let f = rows.first, let d = NSApp.delegate as? AppDelegate {
+            if f.kind == .directory && FileDrag.isDropFolder(f) {
+                FastPreview.shared.close()
+                d.openContactSheet(f.path, newTab: shift)
+                return
+            }
+            if shift && f.kind == .file {
+                FastPreview.shared.close()
+                d.openContactSheet(Paths.parent(f.path), select: [f.name], newTab: true)
+                return
+            }
         }
         if Prefs.spaceOpensQuickLook {
             FastPreview.shared.close()
@@ -1229,14 +1236,52 @@ final class FileListController: NSObject, NSOutlineViewDataSource, NSOutlineView
     // MARK: Outline data source / delegate
 
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
-        guard let n = item as? FileNode else { return roots.count }
-        return n.children?.count ?? 0
+        return shown(item as? FileNode).count
     }
 
     func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
-        guard let n = item as? FileNode else { return roots[index] }
-        return n.children?[index] ?? roots[0]
+        return shown(item as? FileNode)[index]
     }
+
+    // MARK: PhotoLab filter (Cmd-F, from PhotoLab 2): names containing the text, at every level;
+    // opened folders stay so their matching contents can show. A set row matches if any member does.
+
+    /// The text typed in the filter bar ("" = everything).
+    private(set) var filterText = ""
+    private var filterCache: [ObjectIdentifier: (count: Int, list: [FileNode])] = [:]
+    private var rootFilterCache: (count: Int, list: [FileNode])?
+
+    func setFilter(_ text: String) {
+        if text == filterText { return }
+        let keep = selectedPaths()
+        filterText = text
+        filterCache.removeAll(); rootFilterCache = nil
+        table.reloadData()
+        select(paths: keep, scroll: true)
+        onRootsChanged?()
+    }
+
+    private func matches(_ n: FileNode) -> Bool {
+        if n.entry.name.localizedCaseInsensitiveContains(filterText) { return true }
+        return n.members.contains { $0.name.localizedCaseInsensitiveContains(filterText) }
+    }
+
+    /// A level as shown (filtered). Cached per level; a changed level (other count) is filtered again.
+    private func shown(_ n: FileNode?) -> [FileNode] {
+        let all = n == nil ? roots : (n!.children ?? [])
+        if filterText.isEmpty { return all }
+        if let n = n {
+            if let c = filterCache[ObjectIdentifier(n)], c.count == all.count { return c.list }
+        } else if let c = rootFilterCache, c.count == all.count {
+            return c.list
+        }
+        let list = all.filter { matches($0) || ($0.children != nil && table.isItemExpanded($0)) }
+        if let n = n { filterCache[ObjectIdentifier(n)] = (all.count, list) } else { rootFilterCache = (all.count, list) }
+        return list
+    }
+
+    /// The top level as shown (the filter applied) - the thumbnail views and photo tools follow it.
+    var shownRootEntries: [FileEntry] { return shown(nil).flatMap { $0.entries } }
 
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
         guard let n = item as? FileNode else { return false }

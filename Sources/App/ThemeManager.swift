@@ -79,11 +79,28 @@ final class ThemeManager {
         boldFont = makeFont(theme.fontFamily, size, bold: true)
         smallFont = makeFont(theme.fontFamily, max(10, size - 2), bold: false)
         smallBoldFont = makeFont(theme.fontFamily, max(10, size - 2), bold: true)
+        if isNative {
+            // PhotoLab "Native": the system's own colours (they follow light / dark mode).
+            background = .controlBackgroundColor
+            sidebar = .windowBackgroundColor
+            alternateRow = NSColor.controlAlternatingRowBackgroundColors.count > 1 ? NSColor.controlAlternatingRowBackgroundColors[1] : .controlBackgroundColor
+            text = .labelColor
+            secondaryText = .secondaryLabelColor
+            accent = .keyboardFocusIndicatorColor
+            selection = .selectedTextBackgroundColor
+            separator = .gridColor
+            warning = .systemOrange
+            error = .systemRed
+        }
     }
+
+    /// PhotoLab: the Native theme - standard macOS look, no colours of PhotoLab's own.
+    var isNative: Bool { return theme.name == Theme.nativeName }
 
     var rowHeight: CGFloat { return CGFloat(theme.rowHeight) }
 
     var appearance: NSAppearance? {
+        if isNative { return nil }   // whatever macOS is set to
         return NSAppearance(named: theme.dark ? NSAppearance.Name.vibrantDark : NSAppearance.Name.aqua)
     }
 

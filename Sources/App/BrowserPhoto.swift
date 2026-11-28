@@ -24,6 +24,10 @@ extension BrowserPane {
         grid.quickLook = list.quickLook
         grid.onOpen = { [weak self] e in self?.openClicked(e) }
         grid.onSpace = { [weak self] in self?.list.previewSelection() }
+        grid.onBusyChanged = { [weak self] busy in
+            guard let s = self else { return }
+            if busy { s.thumbSpinner.startAnimation(nil) } else { s.thumbSpinner.stopAnimation(nil) }
+        }
         // 0.18.16: the photo bar wraps onto more rows in a narrow pane and gets the height it needs.
         photoBar.onHeightNeeded = { [weak self] h in
             guard let s = self, s.viewMode != "list" else { return }
@@ -103,7 +107,7 @@ extension BrowserPane {
         let paneID = "\(ObjectIdentifier(self).hashValue)"
         if viewMode == "photo" { ExifToolKeeper.paneEnteredPhotography(paneID) } else { ExifToolKeeper.paneLeftPhotography(paneID) }
         // Photography mode: the thumbnail area gets a clear blue outline.
-        photoOutline.isHidden = viewMode != "photo"
+        photoOutline.isHidden = true   // PhotoLab: no frame around the thumbnails (user, 2026-11-28)
         photoOutline.needsDisplay = true
         if focus { window?.makeFirstResponder(gridOn ? grid as NSView : list.table as NSView) }
         applySetsSetting()
@@ -122,7 +126,7 @@ extension BrowserPane {
     }
 
     func setViewMode(_ m: String) {
-        if viewMode == m { return }
+        if viewMode == m || isContactSheet { return }
         rememberScroll()
         viewMode = m
         Prefs.viewMode = m
@@ -156,7 +160,7 @@ extension BrowserPane {
 
     func refreshGrid() {
         guard viewMode != "list" else { return }
-        let all = list.rootEntries
+        let all = list.shownRootEntries   // PhotoLab: the filter (Cmd-F) applies to the thumbnails too
         // Sidecars pair with pictures in their own folder (search results and Include subfolders mix folders).
         let withSidecar: Set<String>
         if list.resultsMode {
@@ -188,7 +192,7 @@ extension BrowserPane {
             loadFactsIfNeeded(all)
             photoBar.updateFormats(all.filter { !$0.isFolderLike }.map { $0.name })
             for e in all {
-                if e.isFolderLike { shown.append(e); continue }
+                if e.isFolderLike { if !isContactSheet { shown.append(e) }; continue }   // contact sheets: pictures only
                 if hiddenTwins.contains(e.path) { continue }
                 // Contact sheets made by Find belong with the pictures.
                 if e.kind == .file && Paths.fileExtension(e.name).lowercased() == "pdf" && e.name.contains("Contact Sheet") {
@@ -272,7 +276,7 @@ extension BrowserPane {
     private var photoTargets: [FileEntry] {
         let sel = list.selectedEntries().filter { $0.kind == .file && PhotoFormats.isImage($0.name) }
         if !sel.isEmpty { return sel }
-        let source = viewMode == "list" ? list.rootEntries : grid.entries
+        let source = viewMode == "list" ? list.shownRootEntries : grid.entries
         return source.filter { $0.kind == .file && PhotoFormats.isImage($0.name) }
     }
 

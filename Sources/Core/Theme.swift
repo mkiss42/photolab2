@@ -67,7 +67,17 @@ struct Theme: Codable, Equatable {
                                     warning: "#FFD166", error: "#FF6B6B",
                                     fontFamily: "", fontSize: 14, density: 1, dark: true)
 
-    static let presets: [Theme] = [graphite, light, navy, highContrast]
+    /// PhotoLab: no style of its own - macOS's standard colours, light or dark as the system is set
+    /// (ThemeManager uses the system colours for a theme of this name; the values here are placeholders).
+    static let nativeName = "Native (macOS)"
+    static let native = Theme(name: nativeName,
+                              background: "#FFFFFF", sidebar: "#ECECEC", alternateRow: "#F5F5F5",
+                              text: "#000000", secondaryText: "#808080",
+                              accent: "#0A64D8", selection: "#B3D7FF", separator: "#DCDCDC",
+                              warning: "#C77C02", error: "#D70015",
+                              fontFamily: "", fontSize: 13, density: 0, dark: false)
+
+    static let presets: [Theme] = [graphite, light, navy, highContrast, native]
 
     /// Parse "#RRGGBB" into 0...1 components. nil if malformed.
     static func rgb(_ hex: String) -> (Double, Double, Double)? {

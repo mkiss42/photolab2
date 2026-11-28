@@ -36,7 +36,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSSpl
     var currentPath: String { return pane.currentPath }
     var focusView: NSView { return pane.focusView }
 
-    init(path: String) {
+    /// PhotoLab: a contact sheet window - Photography mode only, tabs, no sidebar, no navigation.
+    let isContactSheet: Bool
+
+    init(path: String, contactSheet: Bool = false) {
+        isContactSheet = contactSheet
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 640),
                          styleMask: [.titled, .closable, .miniaturizable, .resizable],
                          backing: .buffered, defer: false)
@@ -71,7 +75,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSSpl
         outer.pinEdges(to: content)
         sidebarPane.frame = NSRect(x: 0, y: 0, width: 190, height: 600)
         workArea.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
-        outer.addSubview(sidebarPane)
+        if !isContactSheet { outer.addSubview(sidebarPane) }
         outer.addSubview(workArea)
         sidebarPane.addSubview(sidebar.scroll)
         sidebar.scroll.pinEdges(to: sidebarPane)
@@ -103,6 +107,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSSpl
     func finishLayout() {
         window?.contentView?.layoutSubtreeIfNeeded()
         outer.adjustSubviews()
+        if isContactSheet { for p in panes { p.finishLayout() }; return }
         let sw = CGFloat(UserDefaults.standard.double(forKey: Prefs.Key.sidebarWidth))
         lastSidebarWidth = sw >= 120 ? sw : 190
         if UserDefaults.standard.bool(forKey: "sidebarCollapsed") {
@@ -159,9 +164,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSSpl
 
     // MARK: Sidebar (collapse by dragging, or Option-Cmd-S)
 
-    var sidebarCollapsed: Bool { return outer.isSubviewCollapsed(sidebarPane) || sidebarPane.frame.width < 1 }
+    var sidebarCollapsed: Bool { return isContactSheet || outer.isSubviewCollapsed(sidebarPane) || sidebarPane.frame.width < 1 }
 
     @objc func toggleSidebar(_ sender: Any?) {
+        if isContactSheet { NSSound.beep(); return }
         if sidebarCollapsed {
             outer.setPosition(lastSidebarWidth, ofDividerAt: 0)
             UserDefaults.standard.set(false, forKey: "sidebarCollapsed")
@@ -187,6 +193,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSSpl
         return start + minimumExtent(of: dividerIndex)
     }
 
+    /// PhotoLab (from PhotoLab 2): the sidebar divider snaps to 160 px within 10 px of it.
+    func splitView(_ splitView: NSSplitView, constrainSplitPosition proposedPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        if splitView === outer && !isContactSheet && proposedPosition > 1 && abs(proposedPosition - 160) <= 10 { return 160 }
+        return proposedPosition
+    }
+
     func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
         if splitView === outer {
             if splitView.bounds.width < 600 { return max(120, proposedMaximumPosition) }
@@ -205,7 +217,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSSpl
 
     func splitViewDidResizeSubviews(_ notification: Notification) {
         guard let sv = notification.object as? NSSplitView else { return }
-        if sv === outer {
+        if sv === outer && !isContactSheet {
             let w = sidebarPane.frame.width
             if w >= 120 {
                 lastSidebarWidth = w
@@ -421,7 +433,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSSpl
     /// Everything about this window that is put back at the next start (not the display or desktop:
     /// the app delegate adds those).
     func savedState() -> SavedWindow? {
-        guard let w = window else { return nil }
+        guard let w = window, !isContactSheet else { return nil }   // contact sheets keep only their size
         let vertical = paneSplit.isVertical
         let ps = panes.map { $0.savedState(size: Double(vertical ? $0.view.frame.width : $0.view.frame.height)) }
         let f = w.frame
@@ -593,11 +605,32 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSSpl
     }
 
     func windowDidMove(_ notification: Notification) {
+        if isContactSheet { saveContactSheetFrame(); return }
         (NSApp.delegate as? AppDelegate)?.saveWindowsSoon()
     }
 
     func windowDidEndLiveResize(_ notification: Notification) {
+        if isContactSheet { saveContactSheetFrame(); return }
         (NSApp.delegate as? AppDelegate)?.saveWindowsSoon()
+    }
+
+    // MARK: PhotoLab contact sheet window geometry (80% of the screen, centred, until moved or sized)
+
+    static let contactSheetFrameKey = "contactSheetFrame"
+
+    private func saveContactSheetFrame() {
+        guard let f = window?.frame else { return }
+        UserDefaults.standard.set(NSStringFromRect(f), forKey: BrowserWindowController.contactSheetFrameKey)
+    }
+
+    static func contactSheetFrame() -> NSRect {
+        if let s = UserDefaults.standard.string(forKey: contactSheetFrameKey) {
+            let r = NSRectFromString(s)
+            if r.width >= 400 && r.height >= 300 && NSScreen.screens.contains(where: { $0.visibleFrame.intersects(r) }) { return r }
+        }
+        let v = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+        let w = (v.width * 0.8).rounded(), h = (v.height * 0.8).rounded()
+        return NSRect(x: v.minX + (v.width - w) / 2, y: v.minY + (v.height - h) / 2, width: w, height: h)
     }
 
     func windowDidBecomeKey(_ notification: Notification) {

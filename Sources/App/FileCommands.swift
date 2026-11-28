@@ -219,6 +219,18 @@ extension BrowserPane {
         for f in folders { after = host?.addPane(path: f.path, after: after) ?? after }
     }
 
+    /// PhotoLab: folders in the contact sheet window (each in a tab); a file: its folder, file selected.
+    @objc func openInContactSheet(_ sender: Any?) {
+        guard let d = NSApp.delegate as? AppDelegate else { return }
+        let rows = isFTP ? [] : list.selectedRowEntries()
+        let folders = rows.filter { isPlainFolder($0) }
+        if !folders.isEmpty {
+            for (i, f) in folders.enumerated() { d.openContactSheet(f.path, newTab: i > 0) }
+            return
+        }
+        if let f = rows.first { d.openContactSheet(Paths.parent(f.path), select: [f.name], newTab: true) }
+    }
+
     @objc func openSelectedInNewWindow(_ sender: Any?) {
         let folders = selection.filter { isPlainFolder($0) }
         if folders.isEmpty {
@@ -999,6 +1011,11 @@ extension BrowserPane {
         let hasFolders = sel.contains(where: { isPlainFolder($0) })
 
         m.addItem(menuItem("Open", #selector(openSelected(_:))))
+        if hasFolders {
+            m.addItem(menuItem("Open in Contact Sheet", #selector(openInContactSheet(_:))))
+        } else if let f = one, f.kind == .file {
+            m.addItem(menuItem("Open Enclosing Folder in Contact Sheet", #selector(openInContactSheet(_:))))
+        }
         if hasFolders {
             m.addItem(menuItem("Open in New Tab", #selector(openSelectedInNewTab(_:))))
             m.addItem(menuItem("Open in New Pane", #selector(openSelectedInNewPane(_:))))
