@@ -13,6 +13,8 @@ struct PhotoFacts: Equatable {
     var lens: String? = nil
     var width: Int = 0
     var height: Int = 0
+    /// PhotoLab S6: the picture's own xmp:MetadataDate (seconds since 1970), if it has one.
+    var metadataDate: Double? = nil
     /// Where the rating came from: "sidecar" or "embedded".
     var ratingSource: String? = nil
 

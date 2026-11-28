@@ -296,6 +296,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: Windows
 
     @discardableResult
+    /// PhotoLab: the window behind `w` comes to the front (Esc in a contact sheet window, like Cmd-`).
+    func bringPreviousWindow(before w: NSWindow) {
+        let next = NSApp.orderedWindows.first { $0 !== w && $0.isVisible && !$0.isMiniaturized && $0.canBecomeMain
+            && controllers.contains(where: { c in c.window === $0 }) }
+        if let n = next { n.makeKeyAndOrderFront(nil) } else { NSSound.beep() }
+    }
+
     /// PhotoLab: the contact sheet window (the front one, or a new one at its remembered size: 80% of
     /// the screen, centred, the first time). `newTab`: in a new tab of it.
     func openContactSheet(_ folder: String, select: [String] = [], newTab: Bool) {

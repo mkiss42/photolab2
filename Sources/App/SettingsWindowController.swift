@@ -318,6 +318,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         if id == "keys" { keysSettings.refresh() }
         if let item = tabViewItem { sections.select(tabView.indexOfTabViewItem(item)) }
         restyle()
+        help.apply()   // PhotoLab: a section rebuilt its rows - explanations as the "?" says
     }
 
     func windowWillClose(_ notification: Notification) {

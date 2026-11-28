@@ -124,6 +124,11 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
     private var pathRowHeight: NSLayoutConstraint!
     private var pathBarTop: [NSLayoutConstraint] = []
     private var pathBarBottom: [NSLayoutConstraint] = []
+    /// PhotoLab contact sheet: where it is, read-only (selectable, so it can be copied), at the top or
+    /// the bottom as Settings put the path bar.
+    let csPathField = NSTextField(labelWithString: "")
+    private var csPathTop: [NSLayoutConstraint] = []
+    private var csPathBottom: [NSLayoutConstraint] = []
     private var freeSpaceText = ""
     private var observers: [NSObjectProtocol] = []
 
@@ -143,14 +148,25 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
         active = 0
         observe()
         applyTheme()
-        applyPathBarPosition()
         if isContactSheet {
             restoreViewMode("photo")
-            navRowHeight.constant = 0
-            navRow.isHidden = true
-            pathRowHeight.constant = 0
-            pathRow.isHidden = true
+            for v in navRow.subviews { v.isHidden = true }   // nav buttons, path bar, views, search, close
+            pathBar.isHidden = true
+            csPathField.isSelectable = true
+            csPathField.lineBreakMode = .byTruncatingMiddle
+            csPathField.font = ThemeManager.shared.smallFont
+            csPathField.textColor = ThemeManager.shared.secondaryText
+            csPathField.translatesAutoresizingMaskIntoConstraints = false
+            csPathField.toolTip = "Where this contact sheet is (select to copy)"
+            navRow.addSubview(csPathField)
+            csPathTop = [csPathField.leadingAnchor.constraint(equalTo: navRow.leadingAnchor, constant: 10),
+                         csPathField.trailingAnchor.constraint(equalTo: navRow.trailingAnchor, constant: -10),
+                         csPathField.centerYAnchor.constraint(equalTo: navRow.centerYAnchor)]
+            csPathBottom = [csPathField.leadingAnchor.constraint(equalTo: pathRow.leadingAnchor, constant: 10),
+                            csPathField.trailingAnchor.constraint(equalTo: pathRow.trailingAnchor, constant: -10),
+                            csPathField.centerYAnchor.constraint(equalTo: pathRow.centerYAnchor)]
         }
+        applyPathBarPosition()
         showTab(0, select: [])
     }
 
@@ -162,8 +178,17 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
     }
 
     func applyPathBarPosition() {
-        if isContactSheet { return }
         let bottom = BrowserPane.pathBarAtBottom
+        if isContactSheet {
+            NSLayoutConstraint.deactivate(bottom ? csPathTop : csPathBottom)
+            if bottom { pathRow.addSubview(csPathField) } else { navRow.addSubview(csPathField) }
+            NSLayoutConstraint.activate(bottom ? csPathBottom : csPathTop)
+            navRowHeight.constant = bottom ? 0 : 24
+            navRow.isHidden = bottom
+            pathRowHeight.constant = bottom ? 24 : 0
+            pathRow.isHidden = !bottom
+            return
+        }
         NSLayoutConstraint.deactivate(bottom ? pathBarTop : pathBarBottom)
         if bottom { pathRow.addSubview(pathBar) } else { navRow.addSubview(pathBar) }
         NSLayoutConstraint.activate(bottom ? pathBarBottom : pathBarTop)
@@ -607,6 +632,7 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
         list.load(t.path, selectPaths: select.isEmpty ? t.selection : select.map { Paths.join(t.path, $0) }, showHidden: Prefs.showHidden)
         showLoadingSoon()
         pathBar.setPath(t.path)
+        csPathField.stringValue = t.path
         if isFocused { host?.paneChangedFolder(self) }
         updateTabBar()
         updateNavButtons()
@@ -704,6 +730,7 @@ final class BrowserPane: NSViewController, FileTableActions, PathBarDelegate, Ta
         list.load(path, select: select, showHidden: Prefs.showHidden)
         showLoadingSoon()
         pathBar.setPath(path)
+        csPathField.stringValue = path
         Prefs.noteVisit(path)
         if isFocused { host?.paneChangedFolder(self) }
         updateNavButtons()

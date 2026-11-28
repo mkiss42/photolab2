@@ -145,6 +145,8 @@ struct XMPFields: Equatable {
     var rights: String?
     var description: String?
     var title: String?
+    /// PhotoLab S6: xmp:MetadataDate (seconds since 1970), when the sidecar has one.
+    var metadataDate: Double?
 
     var isEmpty: Bool {
         return rating == nil && label == nil && colorClass == nil && keywords.isEmpty && creator.isEmpty && rights == nil && description == nil && title == nil
@@ -179,6 +181,7 @@ enum XMPReader {
         f.rights = list(text, "dc:rights").first
         f.description = list(text, "dc:description").first
         f.title = list(text, "dc:title").first
+        f.metadataDate = simple(text, "xmp:MetadataDate").flatMap { MetaPlan.xmpDate($0) }
         return f
     }
 

@@ -1,5 +1,25 @@
 # Changes
 
+## 1.0.0-alpha.11 — contact sheet path, Esc goes back; Settings "?" fixed; metadata dates
+
+- Contact sheet window: shows where it is - a read-only path (select it to copy), at the top or
+  the bottom as Settings put the path bar.
+- Esc in the contact sheet window (with no preview open) brings the window behind it to the front,
+  like Cmd-`.
+- Settings "?": hiding the explanations again no longer hides checkbox labels (only the grey
+  explanation texts are ever hidden), and switching sections keeps them as "?" says.
+- Sets / RAW + sidecar (rule S6): when the picture and its sidecar both carry a metadata date
+  (xmp:MetadataDate), the newer one decides whose stars, colour class and label are shown - file
+  dates change when files are copied, metadata dates don't. Otherwise, as before, the newer file.
+  (The inspector and writing still go by file dates; next step.)
+- To-do added: FTP from PhotoLab 2, opened like any folder, with the read-only console at the bottom.
+
+Test checklist (3 minutes):
+[ ] 1  Contact sheet window: the path shows at the top; Settings > General > Path bar at the bottom:
+       it moves to the bottom. Select it, Cmd-C, paste somewhere: the path.
+[ ] 2  Esc in the contact sheet window: the main window comes to the front.
+[ ] 3  Settings: "?" on, "?" off: every checkbox still has its words. Switch sections: unchanged.
+
 ## 1.0.0-alpha.10 — the contact sheet window; filter; Settings search; Native look
 
 - **Contact sheet window**: Photography mode only, with tabs; no sidebar, no path bar, no

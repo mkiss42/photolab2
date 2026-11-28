@@ -318,6 +318,7 @@ enum PhotoFactsReader {
             }
             if let l = CGImageMetadataCopyStringValueWithPath(meta, nil, "xmp:Label" as CFString) { f.label = l as String }
             f.colorClass = ImageMetaColorClass.read(meta)
+            if let d = CGImageMetadataCopyStringValueWithPath(meta, nil, "xmp:MetadataDate" as CFString) { f.metadataDate = MetaPlan.xmpDate(d as String) }
         }
         let readable = f.camera != nil || (!PhotoFormats.isRaw(path) && f.width > 0)
         return (f, readable)

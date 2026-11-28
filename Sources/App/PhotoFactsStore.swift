@@ -57,8 +57,12 @@ final class PhotoFactsStore {
                 } else {
                     var (f, readable) = PhotoFactsReader.readNative(path: e.path)
                     // 0.18: the newer set wins whole - the sidecar's if it was changed after the picture.
-                    if let sc = sc, MetaPlan.current(imageModified: e.modified, sidecarModified: scStamp) == .sidecar,
-                        let x = XMPReader.read(path: sc) { f.use(sidecar: x) }
+                    // PhotoLab S6: metadata dates first when both sides have one (the sidecar is small: read once).
+                    if let sc = sc, let x = XMPReader.read(path: sc),
+                        MetaPlan.current(imageModified: e.modified, sidecarModified: scStamp,
+                                         imageMetadataDate: f.metadataDate, sidecarMetadataDate: x.metadataDate) == .sidecar {
+                        f.use(sidecar: x)
+                    }
                     if readable || ExifTool.command == nil {
                         s.remember(e.path, stamp, f)
                         batch[e.path] = f

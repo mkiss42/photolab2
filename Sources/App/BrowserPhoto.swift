@@ -42,7 +42,13 @@ extension BrowserPane {
         grid.onKeyI = keyI
         list.table.onKeyI = keyI
         grid.onOptionSpace = { [weak self] in self?.list.table.onOptionSpace?() }
-        grid.onEscape = { [weak self] in return self?.list.table.onEscape?() ?? false }
+        grid.onEscape = { [weak self] in
+            guard let s = self else { return false }
+            if s.list.table.onEscape?() == true { return true }
+            // PhotoLab: Esc in a contact sheet window goes back to the window before it (as Cmd-`).
+            if s.isContactSheet, let w = s.window { (NSApp.delegate as? AppDelegate)?.bringPreviousWindow(before: w); return true }
+            return false
+        }
         grid.onRename = { [weak self] in self?.tableRename() }
         grid.onTab = { [weak self] in
             guard let s = self, s.hasPartner else { return false }

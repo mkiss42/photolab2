@@ -58,6 +58,7 @@ Each item: verify Find's version first (keep it if it is as good), else port.
 | P12 | Brain, shared cache, ingest, AI, Goodbye Drill | PL2 plan / PL1 | later phases |
 | P13 | Split panes / combo window (tree + sheet + inspector + tools) | user | Find has split panes; combo window to discuss |
 | P15 | Activity light + activity window (only if cheap) | user | later |
+| P16 | FTP: PhotoLab 2's FTP logic (more reliable than Find's), opened in a pane / window like any folder, every FTP pane with PhotoLab 2's read-only console at the bottom | PL2 + user | todo |
 
 ## 5. File-safety rules where Find and PhotoLab 2 differ (decided one by one)
 
@@ -68,7 +69,7 @@ Each item: verify Find's version first (keep it if it is as good), else port.
 | S3 | Metadata write default | new version under a hidden name, read back and checked, then swapped; modes in Settings (default "fingerprint") | ExifTool -overwrite_original + cheap checks; verified mode opt-in (lab decision) | **decided 2026-11-27:** Find's fastest mode becomes the default if it measures as fast as -overwrite_original - to measure (todo) |
 | S4 | RAW rewritten with new metadata | previous version to the Trash as "NAME (before metadata edit).NEF" | (not built) | **decided 2026-11-27: no copy kept, ever** (user: "skip it always"). The new version is read back and checked, then the previous one is removed, RAWs like JPEGs. Done alpha.3 (T-PHOTO-28) |
 | S5 | Where metadata goes | RAW sidecar (always kept up to date), XMP inside RAWs, IPTC in every picture; on by default | RAW + JPG + sidecar, setting for sidecar-only (lab decision) | **the same** in both (Settings 1-3 in Find = the lab decision); nothing to change |
-| S6 | Conflicting values between set members | sidecar wins when newer than the file | newest MetadataDate/mtime wins, sidecar on ties, winner taken whole incl. empty fields (lab decision) | **decided 2026-11-27: the lab rule.** Find already takes the newer FILE whole (tie = sidecar); still to add: compare xmp:MetadataDate first when both sides have one (todo, with P6/P11) |
+| S6 | Conflicting values between set members | sidecar wins when newer than the file | newest MetadataDate/mtime wins, sidecar on ties, winner taken whole incl. empty fields (lab decision) | **decided 2026-11-27: the lab rule.** Done alpha.11: xmp:MetadataDate compared when both sides have one, else file dates; winner taken whole (T-PHOTO-50). Used for the stars and colours shown (photography mode); the inspector and writes still choose by file dates (todo) |
 
 ## 6. How we work
 

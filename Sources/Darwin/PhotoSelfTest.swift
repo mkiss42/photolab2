@@ -126,6 +126,17 @@ final class PhotoSelfTest {
               dngLabels == ["DNG:DSC_5.DNG", "NEF+JPG+XMP:DSC_5.NEF", "DNG+JPG:DSC_6.DNG"],
               dngLabels.sorted().joined(separator: " "), safety: true)
 
+        // 50 PhotoLab S6: metadata dates decide when both sides have one; else file dates.
+        let dA = MetaPlan.xmpDate("2026-11-27T10:30:00+01:00"), dB = MetaPlan.xmpDate("2026-11-27T09:30:00Z")
+        let dC = MetaPlan.xmpDate("2026:11:27 09:30:05")
+        let byDate = MetaPlan.current(imageModified: 200, sidecarModified: 100, imageMetadataDate: 10, sidecarMetadataDate: 20)
+        let byFile = MetaPlan.current(imageModified: 200, sidecarModified: 100, imageMetadataDate: nil, sidecarMetadataDate: 20)
+        let tie = MetaPlan.current(imageModified: 200, sidecarModified: 100, imageMetadataDate: 20, sidecarMetadataDate: 20)
+        check("T-PHOTO-50", "S6: newer MetadataDate wins over file dates (tie = sidecar); one side without a date: file dates; XMP dates parsed with zones",
+              byDate == .sidecar && byFile == .embedded && tie == .sidecar && dA != nil && dA == dB && dC.map { $0 - dB! } == 5
+                && MetaPlan.xmpDate("not a date") == nil,
+              "\(byDate) \(byFile) \(tie) \(String(describing: dA)) \(String(describing: dB)) \(String(describing: dC))")
+
         // 45 PhotoLab: xmp:Label follows the colour class (ColorClass is the master).
         var lc = MetaChange()
         lc.colorClass = 4

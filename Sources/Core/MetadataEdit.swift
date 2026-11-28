@@ -316,6 +316,47 @@ enum MetaPlan {
         return s >= imageModified ? .sidecar : .embedded
     }
 
+    /// PhotoLab S6 (lab rule, 2026-11-27): when BOTH sides carry xmp:MetadataDate, the newer metadata
+    /// date wins (a tie counts as the sidecar) - file dates change when files are copied, metadata dates
+    /// don't. Otherwise the file dates decide, as above. The winner is always taken whole.
+    static func current(imageModified: Double, sidecarModified: Double?, imageMetadataDate: Double?, sidecarMetadataDate: Double?) -> Source {
+        guard sidecarModified != nil else { return .embedded }
+        if let i = imageMetadataDate, let s = sidecarMetadataDate { return s >= i ? .sidecar : .embedded }
+        return current(imageModified: imageModified, sidecarModified: sidecarModified)
+    }
+
+    /// "2026-11-27T10:30:00+01:00", "2026-11-27T10:30:00.25Z", "2026-11-27T10:30", "2026:11:27 10:30:00"
+    /// -> seconds since 1970 (no zone = UTC). Nil if it isn't a date.
+    static func xmpDate(_ s0: String) -> Double? {
+        var s = s0.trimmingCharacters(in: .whitespaces)
+        if s.count >= 10 {
+            var u = Array(s)
+            if u[4] == ":" && u[7] == ":" { u[4] = "-"; u[7] = "-" }
+            if u.count > 10 && u[10] == " " { u[10] = "T" }
+            s = String(u)
+        }
+        var zone = 0
+        if s.hasSuffix("Z") { s = String(s.dropLast()) }
+        else if s.count > 19, let sign = s.index(s.endIndex, offsetBy: -6, limitedBy: s.startIndex),
+            s[sign] == "+" || s[sign] == "-" {
+            let z = String(s[s.index(after: sign)...]).split(separator: ":")
+            if z.count == 2, let h = Int(z[0]), let m = Int(z[1]) { zone = (h * 3600 + m * 60) * (s[sign] == "-" ? -1 : 1) }
+            s = String(s[..<sign])
+        }
+        if let dot = s.index(of: ".") { s = String(s[..<dot]) }
+        let parts = s.split(separator: "T")
+        let d = parts.first.map { $0.split(separator: "-").compactMap { Int($0) } } ?? []
+        guard d.count == 3, d[1] >= 1, d[1] <= 12, d[2] >= 1, d[2] <= 31 else { return nil }
+        let t = parts.count > 1 ? parts[1].split(separator: ":").compactMap { Int($0) } : []
+        var c = DateComponents()
+        c.year = d[0]; c.month = d[1]; c.day = d[2]
+        c.hour = t.count > 0 ? t[0] : 0; c.minute = t.count > 1 ? t[1] : 0; c.second = t.count > 2 ? t[2] : 0
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0)!
+        guard let date = cal.date(from: c) else { return nil }
+        return date.timeIntervalSince1970 - Double(zone)
+    }
+
     /// The file whose metadata is current for `image` (the picture or its sidecar).
     static func currentFile(for image: String, sidecarFor: (String) -> String? = { Sidecars.find(for: $0) }) -> (file: String, source: Source) {
         guard let sc = sidecarFor(image) else { return (image, .embedded) }

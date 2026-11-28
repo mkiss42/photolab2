@@ -20,6 +20,10 @@ final class SettingsHelp {
     /// Is this a long explanation (not a label, a value or a heading)?
     private static func isExplanation(_ t: NSTextField) -> Bool {
         if t.isEditable { return false }
+        // Explanations are in the secondary (grey) colour; a checkbox's or a popup's own words are not.
+        let secondary = t.identifier?.rawValue == "find.role.secondary"
+            || (t.textColor.map { $0.type == .catalog && $0.colorNameComponent == "secondaryLabelColor" } ?? false)
+        if !secondary { return false }
         let s = t.stringValue
         guard s.count >= 70 else { return false }
         let wraps = (t.cell?.wraps ?? false) || t.maximumNumberOfLines != 1
@@ -30,8 +34,10 @@ final class SettingsHelp {
     /// through one-item "indent" rows), else nothing.
     private static func target(for v: NSView) -> (hide: NSView, control: NSView?) {
         var item: NSView = v
-        if let row = v.superview as? NSStackView, row.orientation == .horizontal, row.arrangedSubviews.count <= 2,
-            row.arrangedSubviews.last === v {
+        // An indented note is a row of [spacer, text]; any other row (a checkbox with its words) is left alone.
+        if let row = v.superview as? NSStackView, row.orientation == .horizontal, row.arrangedSubviews.count == 2,
+            row.arrangedSubviews.last === v, let first = row.arrangedSubviews.first,
+            !(first is NSControl), first.subviews.isEmpty {
             item = row
         }
         guard let stack = item.superview as? NSStackView, let i = stack.arrangedSubviews.index(where: { $0 === item }), i > 0 else {
@@ -65,7 +71,12 @@ final class SettingsHelp {
     }
 
     func apply() {
-        for n in notes { n.view.isHidden = !SettingsHelp.shown }
+        for n in notes {
+            let hide = !SettingsHelp.shown
+            n.view.isHidden = hide
+            // A hidden note never hides the label next to it: it is the text alone (or its indent row).
+            if let t = n.view as? NSTextField { t.isHidden = hide }
+        }
     }
 
     // MARK: Search
