@@ -58,8 +58,8 @@ Each item: verify Find's version first (keep it if it is as good), else port.
 | P12 | Brain, shared cache, ingest, AI, Goodbye Drill | PL2 plan / PL1 | later phases |
 | P13 | Split panes / combo window (tree + sheet + inspector + tools) | user | Find has split panes; combo window to discuss |
 | P15 | Activity light + activity window (only if cheap) | user | done alpha.11 (status bar dot: orange = network, blue = local disk; event-driven from the I/O logs, max 4 updates/s, nothing runs when idle; tooltip = what PhotoLab is busy with). Activity window: later, if wanted |
-| P16 | FTP: PhotoLab 2's FTP logic (more reliable than Find's), opened in a pane / window like any folder, every FTP pane with PhotoLab 2's read-only console at the bottom | PL2 + user | todo |
-| P17 | Contact sheet cells like PhotoLab 2's: configurable metadata rows under the thumbnail, clickable stars, clearer colour classes / tags (PL2 ContactSheet.swift for reference) | PL2 + user | todo |
+| P16 | FTP: PhotoLab 1's FTP logic (ftp_client.py / ftp_tree.py - PhotoLab 2 had none) (more reliable than Find's), opened in a pane / window like any folder, every FTP pane with PhotoLab 2's read-only console at the bottom | PL2 + user | todo |
+| P17 | Contact sheet cells like PhotoLab 2's: configurable metadata rows under the thumbnail, clickable stars, clearer colour classes / tags (PL2 ContactSheet.swift for reference) | PL2 + user | alpha.13: PhotoLab 1's tile (contactsheet.py): name, up to 4 chosen rows (camera, lens, dimensions, size, date taken, exposure, modified), badges, clickable stars on the colour-class band. Todo if wanted: PL1's 4 action buttons, hover highlight |
 
 ## 5. File-safety rules where Find and PhotoLab 2 differ (decided one by one)
 

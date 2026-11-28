@@ -1,5 +1,23 @@
 # Changes
 
+## 1.0.0-alpha.13 — contact sheet cells like PhotoLab 1's
+
+- Photography mode / contact sheet window: under each picture the name (2 lines), then up to 4
+  rows you choose (Settings > Photography > Contact sheet rows: Camera, Lens, Dimensions, File size,
+  Date taken, Exposure, Date modified; default Camera + Date taken), a badge line (NEF+JPG, XMP),
+  and the star row.
+- The star row sits on the colour class's colour (the whole band - much easier to see than the
+  small square, which stays too). Click a star to rate that picture; click the same star again to
+  remove the rating. Rejected pictures show "X Rejected".
+- Plain thumbnail view: unchanged.
+
+Test checklist (3 minutes):
+[ ] 1  Photography mode: each picture shows camera and date under the name, then five stars.
+[ ] 2  Click the 4th star: 4 stars, written as usual (check in Photo Mechanic). Click it again: none.
+[ ] 3  Give a picture colour class 1: its star band turns red.
+[ ] 4  Settings > Photography > Contact sheet rows: tick Lens and Exposure: the cells grow by two
+       rows at once. A 5th box can't be ticked.
+
 ## 1.0.0-alpha.12 — fastest metadata writes by default; red light when a share hangs
 
 - Metadata (rule S3, your decision): the fastest, cheapest way is now the default - changed in place
