@@ -158,6 +158,7 @@ final class ThumbnailGrid: NSView {
     func shutdown() {
         if let o = tagObs { NotificationCenter.default.removeObserver(o); tagObs = nil }
         tagTimer?.invalidate(); tagTimer = nil
+        if let o = scrollObserver { NotificationCenter.default.removeObserver(o); scrollObserver = nil }
         queue.cancelAllOperations()
         onSelectionChanged = nil; onOpen = nil; onSpace = nil; onOptionSpace = nil; onEscape = nil
         onTab = nil; onFocus = nil; onOptionClick = nil; onRename = nil
@@ -282,72 +283,202 @@ final class ThumbnailGrid: NSView {
 
     override var isOpaque: Bool { return !glassBehind }
 
-    override func draw(_ dirtyRect: NSRect) {
-        let tm = ThemeManager.shared
-        if !glassBehind {
-            tm.background.setFill()
-            dirtyRect.fill()
+    // MARK: PhotoLab tiles (ported from PhotoLab 2's contact sheet)
+    // Each cell on screen (and half a screen around it) is a CALayer: its caption, badges and selection
+    // in one small ready-drawn bitmap, its picture as a second layer holding the thumbnail itself.
+    // Scrolling moves layers on the GPU - nothing is drawn; a thumbnail arriving only sets a layer's
+    // picture; a caption is drawn again only when something on it changes. The view draws nothing.
+
+    private final class Tile: CALayer {
+        let picture = CALayer()
+        var captionKey: NSString?
+        var pictureKey: String?
+        override init() {
+            super.init()
+            let none: [String: CAAction] = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull(),
+                                            "hidden": NSNull(), "opacity": NSNull(), "frame": NSNull(), "shadowOpacity": NSNull()]
+            actions = none
+            picture.actions = none
+            picture.contentsGravity = .resize
+            addSublayer(picture)
         }
-        if entries.isEmpty { return }
+        override init(layer: Any) { super.init(layer: layer) }
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    }
+
+    /// Band selection and drop highlight, above the tiles.
+    private final class Overlay: NSView {
+        weak var grid: ThumbnailGrid?
+        override var isFlipped: Bool { return true }
+        override func hitTest(_ point: NSPoint) -> NSView? { return nil }
+        override func draw(_ dirtyRect: NSRect) { grid?.drawOverlays() }
+    }
+
+    private var tiles: [Int: Tile] = [:]
+    private var spare: [Tile] = []
+    private var overlay: Overlay?
+    private var tilesScheduled = false
+    private var scrollObserver: NSObjectProtocol?
+
+    override var wantsUpdateLayer: Bool { return true }
+
+    override func updateLayer() {
+        layer?.backgroundColor = glassBehind ? NSColor.clear.cgColor : ThemeManager.shared.background.cgColor
+        overlay?.needsDisplay = true
+        updateTiles()
+    }
+
+    override func setNeedsDisplay(_ invalidRect: NSRect) {
+        super.setNeedsDisplay(invalidRect)
+        scheduleTiles()
+    }
+
+    override var needsDisplay: Bool {
+        didSet { if needsDisplay { scheduleTiles(); overlay?.needsDisplay = true } }
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        overlay?.frame = bounds
+        scheduleTiles()
+    }
+
+    private func setUpLayers() {
+        guard overlay == nil else { return }
+        wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
+        let o = Overlay(frame: bounds)
+        o.grid = self
+        o.autoresizingMask = [.width, .height]
+        addSubview(o)
+        overlay = o
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        if let o = scrollObserver { NotificationCenter.default.removeObserver(o); scrollObserver = nil }
+        guard let clip = superview as? NSClipView else { return }
+        clip.postsBoundsChangedNotifications = true
+        // Scrolling: tiles for what comes into view are made at once (no blank cells, no draw calls).
+        scrollObserver = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: clip, queue: .main) { [weak self] _ in
+            self?.updateTiles()
+        }
+    }
+
+    private func scheduleTiles() {
+        if tilesScheduled { return }
+        tilesScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let s = self else { return }
+            s.tilesScheduled = false
+            s.updateTiles()
+        }
+    }
+
+    private func updateTiles() {
+        setUpLayers()
+        guard let root = layer else { return }
+        let tm = ThemeManager.shared
         themeSig = "\(tm.text.hashValue),\(tm.background.hashValue),\(tm.selection.hashValue),\(tm.smallFont.pointSize),\(glassBehind)"
         let scale = window?.backingScaleFactor ?? 1
         let c = columns
-        let firstRow = max(0, Int((dirtyRect.minY - pad) / (cellHeight + pad)))
-        let lastRow = Int((dirtyRect.maxY - pad) / (cellHeight + pad))
-        // Pictures wanted: the ones in view first, then the rows ahead (Settings: prepare ahead).
-        var nowWanted = Set<String>()
         let vis = visibleRect
-        let visFirst = max(0, Int((vis.minY - pad) / (cellHeight + pad)))
-        let visLast = Int((vis.maxY - pad) / (cellHeight + pad))
-        let aheadRows = Int(ceil(vis.height / (cellHeight + pad))) * Prefs.thumbPrepareScreens
-        let cg = NSGraphicsContext.current?.cgContext
-        for row in firstRow...max(firstRow, lastRow) {
-            for col in 0..<c {
-                let i = row * c + col
-                if i >= entries.count { break }
-                let r = rect(of: i)
-                if !r.intersects(dirtyRect) { continue }
+        let rowH = cellHeight + pad
+        var nowWanted = Set<String>()
+        var keep = Set<Int>()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if !entries.isEmpty && vis.height > 0 {
+            let margin = vis.height / 2
+            let firstRow = max(0, Int((vis.minY - margin - pad) / rowH))
+            let lastRow = Int((vis.maxY + margin - pad) / rowH)
+            let visFirst = max(0, Int((vis.minY - pad) / rowH)), visLast = Int((vis.maxY - pad) / rowH)
+            let from = min(entries.count, firstRow * c), to = min(entries.count, (lastRow + 1) * c)
+            // Pictures in view are asked for first, then the half screens around them.
+            let order = (from..<to).sorted { a, b in
+                let ra = a / c, rb = b / c
+                let ia = ra >= visFirst && ra <= visLast, ib = rb >= visFirst && rb <= visLast
+                return ia != ib ? ia : a < b
+            }
+            for i in order {
+                keep.insert(i)
                 let e = entries[i]
                 let k = key(e)
-                let hasImage = ThumbnailGrid.cache.object(forKey: NSString(string: k)) != nil
-                if !hasImage && e.kind == .file && (PhotoFormats.isImage(e.name) || FastPreview.thumbnailable(e.name)) {
+                let thumb = ThumbnailGrid.cache.object(forKey: NSString(string: k))
+                if thumb == nil && e.kind == .file && (PhotoFormats.isImage(e.name) || FastPreview.thumbnailable(e.name)) {
                     nowWanted.insert(k)
                     request(e, key: k)
                 }
-                let ck = NSString(string: cellKey(i, e, thumbKey: k, hasImage: hasImage) + "|\(scale)")
-                var box = ThumbnailGrid.cellCache.object(forKey: ck)
-                if box == nil, let img = renderCell(i, size: r.size, scale: scale) {
-                    box = CGImageBox(img)
-                    ThumbnailGrid.cellCache.setObject(box!, forKey: ck, cost: img.width * img.height * 4)
+                let r = rect(of: i)
+                let t: Tile
+                if let old = tiles[i] { t = old } else {
+                    t = spare.popLast() ?? Tile()
+                    t.captionKey = nil; t.pictureKey = nil
+                    if t.superlayer !== root {
+                        if let ol = overlay?.layer { root.insertSublayer(t, below: ol) } else { root.addSublayer(t) }
+                    }
+                    t.isHidden = false
+                    tiles[i] = t
                 }
-                if let b = box, let ctx = cg {
-                    ctx.saveGState()
-                    ctx.translateBy(x: r.minX, y: r.maxY)
-                    ctx.scaleBy(x: 1, y: -1)
-                    ctx.interpolationQuality = .none
-                    ctx.draw(b.image, in: CGRect(x: 0, y: 0, width: r.width, height: r.height))
-                    ctx.restoreGState()
-                } else {
-                    drawCell(i, in: r)
+                if t.frame != r { t.frame = r }
+                if t.contentsScale != scale { t.contentsScale = scale; t.picture.contentsScale = scale }
+                // Caption, badges, selection: one bitmap, drawn again only when it changes.
+                let ck = NSString(string: cellKey(i, e, thumbKey: k, hasImage: false) + "|cap|\(scale)|\(r.width)x\(r.height)")
+                if t.captionKey != ck {
+                    var box = ThumbnailGrid.cellCache.object(forKey: ck)
+                    if box == nil, let img = renderCell(i, size: r.size, scale: scale) {
+                        box = CGImageBox(img)
+                        ThumbnailGrid.cellCache.setObject(box!, forKey: ck, cost: img.width * img.height * 4)
+                    }
+                    t.contents = box?.image
+                    t.captionKey = ck
+                }
+                // The picture (or the file's icon).
+                let box = NSRect(x: 8, y: 6, width: thumbSize, height: thumbSize)
+                let trash = Finish.depth > 0 && facts[e.path]?.colorClass == 8
+                let pk = (thumb != nil ? k : "icon|" + e.path) + "|\(thumbSize)|\(trash)|\(Finish.depth)"
+                if t.pictureKey != pk {
+                    if let img = thumb {
+                        t.picture.contents = img.cgImage(forProposedRect: nil, context: nil, hints: nil)
+                        t.picture.frame = fit(img.size, in: box)
+                        t.picture.opacity = trash ? Float(1 - 0.45 * Finish.depth) : 1
+                        if Finish.depth > 0 {
+                            t.picture.shadowColor = NSColor.black.cgColor
+                            t.picture.shadowOpacity = Float(min(0.85, 0.85 * Finish.depth))
+                            t.picture.shadowRadius = 6 * Finish.depth
+                            t.picture.shadowOffset = CGSize(width: 0, height: 4 * Finish.depth)
+                            t.picture.shadowPath = CGPath(rect: CGRect(origin: .zero, size: t.picture.frame.size), transform: nil)
+                        } else {
+                            t.picture.shadowOpacity = 0
+                        }
+                    } else {
+                        let icon = IconCache.shared.icon(for: e)
+                        let sz = min(box.width, box.height) * 0.6
+                        var ir = NSRect(x: 0, y: 0, width: sz, height: sz)
+                        t.picture.contents = icon.cgImage(forProposedRect: &ir, context: nil, hints: nil)
+                        t.picture.frame = NSRect(x: box.midX - sz / 2, y: box.midY - sz / 2, width: sz, height: sz)
+                        t.picture.opacity = 0.85
+                        t.picture.shadowOpacity = 0
+                    }
+                    t.pictureKey = pk
                 }
             }
         }
-        // Rows ahead, both ways: their pictures are prepared before they scroll into view.
-        if aheadRows > 0 {
-            let from = max(0, (visFirst - aheadRows) * c), to = min(entries.count, (visLast + 1 + aheadRows) * c)
-            if from < to {
-                for i in from..<to {
-                    let e = entries[i]
-                    guard e.kind == .file, PhotoFormats.isImage(e.name) || FastPreview.thumbnailable(e.name) else { continue }
-                    let k = key(e)
-                    if ThumbnailGrid.cache.object(forKey: NSString(string: k)) == nil { nowWanted.insert(k); request(e, key: k) }
-                }
-            }
+        for (i, t) in tiles where !keep.contains(i) {
+            t.isHidden = true
+            t.contents = nil
+            t.picture.contents = nil
+            spare.append(t)
+            tiles.removeValue(forKey: i)
         }
+        if spare.count > 200 {
+            for t in spare.dropFirst(200) { t.removeFromSuperlayer() }
+            spare = Array(spare.prefix(200))
+        }
+        CATransaction.commit()
         wantedLock.lock()
         wanted = nowWanted
         wantedLock.unlock()
-        drawOverlays()
     }
 
     /// One cell into a bitmap at the screen's pixel size (nil: drawn directly instead).
@@ -362,17 +493,13 @@ final class ThumbnailGrid: NSView {
         let g = NSGraphicsContext(cgContext: ctx, flipped: true)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = g
-        if !glassBehind {
-            ThemeManager.shared.background.setFill()
-            NSRect(origin: .zero, size: size).fill()
-        }
-        drawCell(i, in: NSRect(origin: .zero, size: size))
+        drawCell(i, in: NSRect(origin: .zero, size: size), picture: false)   // the picture is its own layer
         NSGraphicsContext.restoreGraphicsState()
         return ctx.makeImage()
     }
 
     /// Draws cell `i` with its top-left at `r.origin` (in the view, or in a cell bitmap).
-    private func drawCell(_ i: Int, in r0: NSRect) {
+    private func drawCell(_ i: Int, in r0: NSRect, picture: Bool = true) {
         let tm = ThemeManager.shared
         let e = entries[i]
         let r = r0
@@ -396,7 +523,9 @@ final class ThumbnailGrid: NSView {
             }
         }
         let box = NSRect(x: r.minX + 8, y: r.minY + 6, width: thumbSize, height: thumbSize)
-        if let img = ThumbnailGrid.cache.object(forKey: NSString(string: key(e))) {
+        if !picture {
+            // PhotoLab tiles: the picture layer goes here.
+        } else if let img = ThumbnailGrid.cache.object(forKey: NSString(string: key(e))) {
             // 0.16 Depth: a soft shadow under the picture; colour class 8 (Trash) faded.
             let shadow = Finish.thumbShadow(flipped: true)
             if let sh = shadow { NSGraphicsContext.saveGraphicsState(); sh.set() }
@@ -449,7 +578,7 @@ final class ThumbnailGrid: NSView {
     /// 0.18.10: "NEF+JPG" etc. for pictures whose JPEG twin is hidden in Photography Mode.
     var twinBadges: [String: String] = [:]
 
-    private func drawOverlays() {
+    fileprivate func drawOverlays() {
         let tm = ThemeManager.shared
         if let r = bandRect, r.width > 0 || r.height > 0 {
             tm.accent.withAlphaComponent(0.15).setFill()

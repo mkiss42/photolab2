@@ -120,9 +120,13 @@ enum ImageMeta {
 
     /// An ImageIO source reading through the file's shared reader (PhotoLab: every part of a file
     /// crosses the network once, whoever asks - thumbnail, facts, inspector, preview).
+    /// Not for RAWs: macOS's RAW support reads the WHOLE file through a reader (alpha.3 measured 34 MB per
+    /// file); given the file itself it reads only what it needs. RAW previews come from CameraPreviews.
     static func source(_ path: String, size: Int64? = nil, modified: Double? = nil) -> CGImageSource? {
-        if let r = FileReads.reader(path, size: size, modified: modified), let s = r.imageSource(hint: typeHint(path)) { return s }
+        if !PhotoFormats.isRaw(path), let r = FileReads.reader(path, size: size, modified: modified),
+            let s = r.imageSource(hint: typeHint(path)) { return s }
         let opts = [kCGImageSourceShouldCache as String: false] as CFDictionary
+        IOLog.smallRead(path, bytes: -1)   // macOS reads the file itself (I/O logs; size not known)
         return CGImageSourceCreateWithURL(NSURL(fileURLWithPath: path) as CFURL, opts)
     }
 
@@ -212,6 +216,7 @@ enum ImageMeta {
     static func finalSize(_ path: String, size: Int64? = nil, modified: Double? = nil) -> CGSize? {
         guard let r = FileReads.reader(path, size: size, modified: modified) else { return nil }
         if PhotoFormats.isRaw(path), let s = CameraPreviews.largestSize(r) { return CGSize(width: s.width, height: s.height) }
+        if PhotoFormats.isRaw(path) { return nil }
         guard let src = r.imageSource(hint: typeHint(path)),
             let props = CGImageSourceCopyPropertiesAtIndex(src, 0, [kCGImageSourceShouldCache: false] as CFDictionary) as? [String: Any],
             let w = (props["PixelWidth"] as? NSNumber)?.intValue, let h = (props["PixelHeight"] as? NSNumber)?.intValue, w > 0, h > 0 else { return nil }

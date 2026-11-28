@@ -410,18 +410,22 @@ final class TagWatcher {
     private var current = Set<String>()
     private let queue = DispatchQueue(label: "photolab.fsevents", qos: .utility)
 
-    /// Main thread. One folder per list (FSEvents covers its subfolders too).
+    /// Main thread. One folder per list (FSEvents covers its subfolders too). The stream is made on its
+    /// own queue: FSEventStreamCreate looks the folders up, which can wait on a slow share (alpha.3 stalls).
     func watch(owner: AnyObject, folder: String?) {
         folders[ObjectIdentifier(owner)] = folder
         let all = Set(folders.values)
-        if all != current { current = all; restart() }
+        if all != current {
+            current = all
+            queue.async { self.restart(all) }
+        }
     }
 
     fileprivate func changed(_ paths: [String]) {
         DispatchQueue.main.async { TagCache.shared.reread(paths) }
     }
 
-    private func restart() {
+    private func restart(_ current: Set<String>) {
         if let s = stream { FSEventStreamStop(s); FSEventStreamInvalidate(s); FSEventStreamRelease(s); stream = nil }
         guard !current.isEmpty else { return }
         var ctx = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(), retain: nil, release: nil, copyDescription: nil)
